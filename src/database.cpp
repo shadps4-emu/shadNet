@@ -336,3 +336,120 @@ std::optional<DbError> Database::CreateAccount(
 	return std::nullopt;  // success
 }
 
+std::optional<UserRecord> Database::CheckUser(const QString& npid, const QString& password, const QString& token, bool checkToken)
+{
+	QSqlQuery q(m_db);
+	q.prepare("SELECT user_id,hash,salt,online_name,avatar_url,email,email_check,"
+		"token,admin,stat_agent,banned FROM account WHERE username=? COLLATE NOCASE");
+	q.addBindValue(npid);
+	if (!Exec(q) || !q.next()) return std::nullopt; // Empty = no such user
+
+	UserRecord r;
+	r.userId = q.value(0).toLongLong();
+	r.hash = q.value(1).toByteArray();
+	r.salt = q.value(2).toByteArray();
+	r.onlineName = q.value(3).toString();
+	r.avatarUrl = q.value(4).toString();
+	r.email = q.value(5).toString();
+	r.emailCheck = q.value(6).toString();
+	r.token = q.value(7).toString();
+	r.admin = q.value(8).toBool();
+	r.statAgent = q.value(9).toBool();
+	r.banned = q.value(10).toBool();
+	r.username = npid;
+
+	QByteArray computed = HashPassword(password, r.salt);
+	if (computed != r.hash) return std::nullopt; // WrongPass
+
+	if (checkToken && r.token != token) return std::nullopt; // WrongToken
+
+	return r;
+}
+
+std::optional<int64_t> Database::GetUserId(const QString& npid)
+{
+	QSqlQuery q(m_db);
+	q.prepare("SELECT user_id FROM account WHERE username=? COLLATE NOCASE");
+	q.addBindValue(npid);
+	if (!Exec(q) || !q.next()) return std::nullopt;
+	return q.value(0).toLongLong();
+}
+
+std::optional<QString> Database::GetUsername(int64_t userId)
+{
+	QSqlQuery q(m_db);
+	q.prepare("SELECT username FROM account WHERE user_id=?");
+	q.addBindValue(userId);
+	if (!Exec(q) || !q.next()) return std::nullopt;
+	return q.value(0).toString();
+}
+
+QList<QPair<int64_t, QString>> Database::GetUsernamesFromIds(const QSet<int64_t>& ids)
+{
+	QList<QPair<int64_t, QString>> result;
+	if (ids.isEmpty()) return result;
+
+	// Build IN clause
+	QStringList placeholders;
+	for (int i = 0; i < ids.size(); ++i) placeholders << "?";
+	QSqlQuery q(m_db);
+	q.prepare(QString("SELECT user_id,username FROM account WHERE user_id IN (%1)")
+		.arg(placeholders.join(',')));
+	for (int64_t id : ids) q.addBindValue(id);
+	if (!Exec(q)) return result;
+	while (q.next())
+		result << qMakePair(q.value(0).toLongLong(), q.value(1).toString());
+	return result;
+}
+
+bool Database::UpdateLoginTime(int64_t userId)
+{
+	uint64_t now = static_cast<uint64_t>(QDateTime::currentSecsSinceEpoch());
+	QSqlQuery q(m_db);
+	q.prepare("UPDATE account_timestamp SET last_login=? WHERE user_id=?");
+	q.addBindValue(static_cast<qint64>(now)); q.addBindValue(userId);
+	return Exec(q);
+}
+
+bool Database::BanUser(int64_t userId, bool ban)
+{
+	QSqlQuery q(m_db);
+	q.prepare("UPDATE account SET banned=? WHERE user_id=?");
+	q.addBindValue(ban ? 1 : 0); q.addBindValue(userId);
+	return Exec(q);
+}
+
+bool Database::DeleteUser(int64_t userId)
+{
+	QSqlQuery q(m_db);
+	q.prepare("DELETE FROM account WHERE user_id=?");
+	q.addBindValue(userId);
+	return Exec(q);
+}
+
+bool Database::SetAdmin(int64_t userId, bool admin)
+{
+	QSqlQuery q(m_db);
+	q.prepare("UPDATE account SET admin=? WHERE user_id=?");
+	q.addBindValue(admin ? 1 : 0); q.addBindValue(userId);
+	return Exec(q);
+}
+
+int Database::TotalUsers()
+{
+	QSqlQuery q(m_db);
+	q.exec("SELECT COUNT(*) FROM account");
+	return q.next() ? q.value(0).toInt() : 0;
+}
+
+void Database::CleanNeverUsedAccounts()
+{
+	// Delete accounts that never logged in and are older than 30 days
+	uint64_t cutoff = static_cast<uint64_t>(QDateTime::currentSecsSinceEpoch()) - 30 * 86400;
+	QSqlQuery q(m_db);
+	q.prepare("DELETE FROM account WHERE user_id IN ("
+		"  SELECT user_id FROM account_timestamp WHERE creation < ? AND last_login IS NULL)");
+	q.addBindValue(static_cast<qint64>(cutoff));
+	Exec(q);
+}
+
