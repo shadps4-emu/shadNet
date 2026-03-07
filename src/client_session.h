@@ -1,5 +1,7 @@
 #pragma once
 #include "config.h"
+#include "protocol.h"
+#include "stream_extractor.h"
 #include <QObject>
 #include <QTcpSocket>
 #include <QSslSocket>
@@ -28,7 +30,7 @@ public:
 
 	void Start();
 	void CleanupOnDisconnect();
-
+	void SendPacket(const QByteArray& pkt);
 signals:
 	void Disconnected();
 
@@ -38,6 +40,7 @@ private slots:
 
 private:
 	void ProcessPacket(uint16_t command, uint64_t packetId, const QByteArray& payload);
+	ErrorType DispatchCommand(CommandType cmd, StreamExtractor& se, QByteArray& reply);
 
 	QTcpSocket* m_socket;
 	bool           m_isSsl = true;

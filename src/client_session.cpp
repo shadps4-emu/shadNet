@@ -77,10 +77,46 @@ void ClientSession::OnDisconnected()
 
 void ClientSession::ProcessPacket(uint16_t command, uint64_t packetId, const QByteArray& payload)
 {
-	//TODO
+	//TODO partially done
+
+	QByteArray reply;
+	reply.reserve(256);
+	reply.append(static_cast<char>(static_cast<uint8_t>(PacketType::Reply)));
+	appendU16LE(reply, command);
+	appendU32LE(reply, HEADER_SIZE); // placeholder, fixed up below
+	appendU64LE(reply, packetId);
+	reply.append(static_cast<char>(static_cast<uint8_t>(ErrorType::NoError))); // error byte placeholder
+
+	StreamExtractor se(payload);
+
+	auto cmdOpt = static_cast<CommandType>(command);
+
+	ErrorType result = DispatchCommand(cmdOpt, se, reply);
+	reply[static_cast<int>(HEADER_SIZE)] = static_cast<char>(static_cast<uint8_t>(result));
+	fixPacketSize(reply);
+	SendPacket(reply);
+
+	if (result == ErrorType::Malformed) {
+		qWarning() << "Malformed command" << command << "- disconnecting";
+		m_socket->disconnectFromHost();
+	}
+}
+
+ErrorType ClientSession::DispatchCommand(CommandType cmd, StreamExtractor& se, QByteArray& reply)
+{
+	qDebug() << "Command:" << static_cast<uint16_t>(cmd);
+	return ErrorType();
 }
 
 void ClientSession::CleanupOnDisconnect()
 {
 	//TODO
+}
+
+void ClientSession::SendPacket(const QByteArray& pkt)
+{
+	if (m_socket->state() == QAbstractSocket::ConnectedState) {
+		m_socket->write(pkt);
+		m_socket->flush();
+	}
 }

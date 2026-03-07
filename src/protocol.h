@@ -13,3 +13,18 @@ enum class PacketType : uint8_t {
 	Notification = 2,
 	ServerInfo = 3,
 };
+
+//Command IDs for Request packets
+enum class CommandType : uint16_t {
+	Login = 0,
+	Terminate = 1,
+	Create = 2,
+};
+
+//Error codes for Reply packets
+enum class ErrorType : uint8_t {
+	NoError = 0,
+	Malformed = 1,
+	Invalid = 2,
+	InvalidInput = 3,
+};
