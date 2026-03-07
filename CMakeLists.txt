@@ -10,13 +10,12 @@ find_package(Qt6 REQUIRED COMPONENTS Core Network Sql Concurrent)
 set(SOURCES
     src/main.cpp
     src/config.cpp
-)
-
-set(HEADERS
     src/config.h
+    src/server.cpp
+    src/server.h
 )
 
-add_executable(shadnet ${SOURCES} ${HEADERS})
+add_executable(shadnet ${SOURCES})
 
 target_link_libraries(shadnet PRIVATE
     Qt6::Core
