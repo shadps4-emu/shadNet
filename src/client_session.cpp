@@ -4,8 +4,11 @@
 
 ClientSession::ClientSession(QTcpSocket* socket, SharedState* shared, const QString& dbPath, bool isSsl, QObject* parent)
 	: QObject(parent), m_socket(socket), m_isSsl(isSsl), m_shared(shared)
+	, m_db(std::make_unique<Database>(
+		QString("sess_%1").arg(reinterpret_cast<quintptr>(this))))
 {
 	m_socket->setParent(this);
+	m_db->Open(dbPath);
 
 	connect(m_socket, &QTcpSocket::readyRead, this, &ClientSession::OnReadyRead);
 	connect(m_socket, &QTcpSocket::disconnected, this, &ClientSession::OnDisconnected);

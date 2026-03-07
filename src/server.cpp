@@ -1,5 +1,6 @@
 #include "server.h"
 #include <QThread>
+#include <QDir>
 
 ShadNetServer::ShadNetServer(QObject* parent)
 	: QObject(parent)
@@ -16,6 +17,10 @@ ShadNetServer::~ShadNetServer()
 bool ShadNetServer::Start(ConfigManager* config)
 {
 	m_config = config;
+	m_shared.config = config;
+
+	m_dbPath = "db/shadnet.db";
+	QDir().mkpath("db");
 
 	QHostAddress addr;
 	const QString host = config->GetHost();

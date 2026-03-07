@@ -12,10 +12,13 @@
 #include <QAtomicInt>
 #include <memory>
 #include <functional>
+#include <database.h>
 
 // Shared state visible to all sessions (thread-safe with locks)
 struct SharedState {
 	ConfigManager* config;
+	Database* db;           // Thread-per-session: each session has its own DB connection
+
 	// Connected clients: userId to (npid, channel write function)
 	mutable QReadWriteLock clientsLock;
 };
@@ -32,6 +35,8 @@ public:
 	void CleanupOnDisconnect();
 	void SendPacket(const QByteArray& pkt);
 	static bool IsValidNpid(const QString& npid);
+	Database& db() { return *m_db; }
+
 	//commands cmd_account.cpp
 	ErrorType CmdCreate(StreamExtractor& data, QByteArray& reply);
 
@@ -51,6 +56,7 @@ private:
 	SharedState* m_shared;
 	bool           m_authenticated = false;
 	QByteArray     m_readBuf;
+	std::unique_ptr<Database> m_db;
 
 };
 

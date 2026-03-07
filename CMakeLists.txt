@@ -17,6 +17,8 @@ set(SOURCES
     src/client_session.h
     src/protocol.h
     src/stream_extractor.h
+    src/database.cpp
+    src/database.h
     src/cmd_account.cpp
 )
 
