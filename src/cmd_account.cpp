@@ -20,15 +20,15 @@ ErrorType ClientSession::CmdCreate(StreamExtractor& data, QByteArray& reply)
 		if (m_shared->config->IsBannedDomain(domain))
 			return ErrorType::CreationBannedEmailProvider;
 	}
-	/* //TODO add database support
-	auto err = m_db->createAccount(npid, password, onlineName, avatarUrl, email);
+
+	auto err = m_db->CreateAccount(npid, password, onlineName, avatarUrl, email);
 	if (err) {
 		switch (*err) {
 		case DbError::ExistingUsername: return ErrorType::CreationExistingUsername;
 		case DbError::ExistingEmail:    return ErrorType::CreationExistingEmail;
 		default:                        return ErrorType::CreationError;
 		}
-	}*/
+	}
 	qInfo() << "Account created:" << npid;
 	return ErrorType::NoError;
 }
