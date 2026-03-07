@@ -31,6 +31,10 @@ public:
 	void Start();
 	void CleanupOnDisconnect();
 	void SendPacket(const QByteArray& pkt);
+	static bool IsValidNpid(const QString& npid);
+	//commands cmd_account.cpp
+	ErrorType CmdCreate(StreamExtractor& data, QByteArray& reply);
+
 signals:
 	void Disconnected();
 
@@ -49,3 +53,12 @@ private:
 	QByteArray     m_readBuf;
 
 };
+
+inline bool ClientSession::IsValidNpid(const QString& npid)
+{
+	if (npid.size() < 3 || npid.size() > 16) return false;
+	for (const QChar& c : npid)
+		if (!c.isLetterOrNumber() && c != '-' && c != '_') return false;
+	if (npid == "DeletedUser") return false;
+	return true;
+}

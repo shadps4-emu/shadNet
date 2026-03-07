@@ -105,7 +105,12 @@ void ClientSession::ProcessPacket(uint16_t command, uint64_t packetId, const QBy
 ErrorType ClientSession::DispatchCommand(CommandType cmd, StreamExtractor& se, QByteArray& reply)
 {
 	qDebug() << "Command:" << static_cast<uint16_t>(cmd);
-	return ErrorType();
+	switch (cmd) {
+	case CommandType::Create:                      return CmdCreate(se, reply);
+	default:
+		qWarning() << "Unknown command" << static_cast<uint16_t>(cmd);
+		return ErrorType::Invalid;
+	}
 }
 
 void ClientSession::CleanupOnDisconnect()

@@ -17,6 +17,7 @@ set(SOURCES
     src/client_session.h
     src/protocol.h
     src/stream_extractor.h
+    src/cmd_account.cpp
 )
 
 add_executable(shadnet ${SOURCES})
