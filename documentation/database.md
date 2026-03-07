@@ -60,16 +60,20 @@ Tracks account lifecycle timestamps. Separate table to avoid locking `account` o
 
 ```sql
 CREATE TABLE IF NOT EXISTS account_timestamp (
-    user_id    INTEGER NOT NULL PRIMARY KEY,
-    creation   INTEGER NOT NULL,
-    last_login INTEGER
+    user_id         UNSIGNED BIGINT  NOT NULL PRIMARY KEY,
+    creation        UNSIGNED INTEGER NOT NULL,
+    last_login      UNSIGNED INTEGER,
+    token_last_sent UNSIGNED INTEGER,
+    reset_emit      UNSIGNED INTEGER
 );
 ```
 
 | Column | Type | Notes |
 |---|---|---|
-| `user_id` | INTEGER | Foreign key to `account.user_id` |
-| `creation` | INTEGER | Unix seconds — set once at account creation |
-| `last_login` | INTEGER | Unix seconds — updated on each successful login; NULL until first login |
+| `user_id` | UNSIGNED BIGINT | Foreign key to `account.user_id` |
+| `creation` | UNSIGNED INTEGER | Unix seconds — set once at account creation |
+| `last_login` | UNSIGNED INTEGER | Unix seconds — updated on each successful login; NULL until first login |
+| `token_last_sent` | UNSIGNED INTEGER | Unix seconds — timestamp of the last email validation token dispatch; used to enforce rate limiting on `SendToken` |
+| `reset_emit` | UNSIGNED INTEGER | Unix seconds — timestamp of the last password-reset token email; used to enforce rate limiting on `SendResetToken` |
 
 ---
