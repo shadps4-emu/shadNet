@@ -1,4 +1,5 @@
 #include "server.h"
+#include <QThread>
 
 ShadNetServer::ShadNetServer(QObject* parent)
 	: QObject(parent)
@@ -40,7 +41,16 @@ void ShadNetServer::Stop()
 
 void ShadNetServer::SpawnSession(QTcpSocket* socket, bool isSsl)
 {
-	//TODO
+	QThread* thread = new QThread;
+	ClientSession* session = new ClientSession(socket, &m_shared, m_dbPath, isSsl);
+	session->moveToThread(thread);
+
+	connect(thread, &QThread::started, session, &ClientSession::Start);
+	connect(session, &ClientSession::Disconnected, thread, &QThread::quit);
+	connect(session, &ClientSession::Disconnected, session, &QObject::deleteLater);
+	connect(thread, &QThread::finished, thread, &QObject::deleteLater);
+
+	thread->start();
 }
 
 void ShadNetServer::OnNewUnsecuredConnection()

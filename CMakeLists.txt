@@ -13,6 +13,10 @@ set(SOURCES
     src/config.h
     src/server.cpp
     src/server.h
+    src/client_session.cpp
+    src/client_session.h
+    src/protocol.h
+    src/stream_extractor.h
 )
 
 add_executable(shadnet ${SOURCES})

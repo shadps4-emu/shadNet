@@ -1,5 +1,6 @@
 #pragma once
 #include "config.h"
+#include "client_session.h"
 #include <QObject>
 #include <QTcpServer>
 #include <QSslConfiguration>
@@ -25,6 +26,7 @@ private:
 
 	ConfigManager* m_config = nullptr;
 	QTcpServer* m_unsecuredServer = nullptr;   // plain TCP connections
+	SharedState      m_shared;
 
 	QString           m_dbPath;
 };
