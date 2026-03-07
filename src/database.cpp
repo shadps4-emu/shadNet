@@ -98,9 +98,45 @@ bool Database::Exec(QSqlQuery& q)
 
 bool Database::Migrate()
 {
-	return false;//TODO table creation and migration logic goes here
-}
+	Exec("CREATE TABLE IF NOT EXISTS migration("
+		"  migration_id UNSIGNED INTEGER PRIMARY KEY,"
+		"  description  TEXT NOT NULL)");
 
+	// Migration 1: core tables
+	QStringList stmts1 = {
+		"CREATE TABLE IF NOT EXISTS account("
+		"  user_id     INTEGER PRIMARY KEY AUTOINCREMENT,"
+		"  username    TEXT NOT NULL,"
+		"  hash        BLOB NOT NULL,"
+		"  salt        BLOB NOT NULL,"
+		"  online_name TEXT NOT NULL,"
+		"  avatar_url  TEXT NOT NULL,"
+		"  email       TEXT NOT NULL,"
+		"  email_check TEXT NOT NULL UNIQUE,"
+		"  token       TEXT NOT NULL,"
+		"  reset_token TEXT,"
+		"  admin       BOOL NOT NULL,"
+		"  stat_agent  BOOL NOT NULL,"
+		"  banned      BOOL NOT NULL,"
+		"  UNIQUE(username COLLATE NOCASE))",
+
+		"CREATE TABLE IF NOT EXISTS account_timestamp("
+		"  user_id          UNSIGNED BIGINT NOT NULL PRIMARY KEY,"
+		"  creation         UNSIGNED INTEGER NOT NULL,"
+		"  last_login       UNSIGNED INTEGER,"
+		"  token_last_sent  UNSIGNED INTEGER,"
+		"  reset_emit       UNSIGNED INTEGER)",
+	};
+
+	for (const QString& s : stmts1) Exec(s);
+
+	QSqlQuery ins(m_db);
+	ins.prepare("INSERT OR IGNORE INTO migration VALUES(1,'Initial setup')");
+	Exec(ins);
+
+	qInfo() << "Database migrations complete";
+	return true;
+}
 
 
 std::optional<DbError> Database::CreateAccount(const QString& npid, const QString& password, const QString& onlineName, const QString& avatarUrl, const QString& email)
