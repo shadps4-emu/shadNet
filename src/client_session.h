@@ -21,6 +21,23 @@ struct SharedState {
 
 	// Connected clients: userId to (npid, channel write function)
 	mutable QReadWriteLock clientsLock;
+	struct ClientEntry {
+		QString npid;
+		std::function<void(QByteArray)> send;
+	};
+	QHash<int64_t, ClientEntry> clients;
+};
+
+//Per-connection session info
+struct ClientInfo {
+	int64_t  userId = 0;
+	QString  npid;
+	QString  onlineName;
+	QString  avatarUrl;
+	QString  token;
+	bool     admin = false;
+	bool     statAgent = false;
+	bool     banned = false;
 };
 
 class ClientSession : public QObject {
@@ -39,6 +56,7 @@ public:
 
 	//commands cmd_account.cpp
 	ErrorType CmdCreate(StreamExtractor& data, QByteArray& reply);
+	ErrorType CmdLogin(StreamExtractor& data, QByteArray& reply);
 
 signals:
 	void Disconnected();
@@ -57,6 +75,7 @@ private:
 	bool           m_authenticated = false;
 	QByteArray     m_readBuf;
 	std::unique_ptr<Database> m_db;
+	ClientInfo                 m_info;
 
 };
 

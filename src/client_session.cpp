@@ -109,6 +109,7 @@ ErrorType ClientSession::DispatchCommand(CommandType cmd, StreamExtractor& se, Q
 {
 	qDebug() << "Command:" << static_cast<uint16_t>(cmd);
 	switch (cmd) {
+	case CommandType::Login:                       return CmdLogin(se, reply);
 	case CommandType::Create:                      return CmdCreate(se, reply);
 	default:
 		qWarning() << "Unknown command" << static_cast<uint16_t>(cmd);
