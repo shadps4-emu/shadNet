@@ -1,4 +1,4 @@
-# RPCN Auth — Wire Protocol Reference
+# ShadNet Wire Protocol Reference
 
 Complete specification of the binary protocol spoken between clients and the shadnet server. All multi-byte integers are **little-endian**. All strings are **null-terminated UTF-8**.
 
