@@ -84,6 +84,43 @@ String notation below uses `str\0` to mean a null-terminated UTF-8 string. An em
 
 ---
 
+### Login (0)
+
+Authenticate an existing account. On success the session transitions to authenticated state.
+
+**Request payload:**
+```
+npid\0       — NP ID (username)
+password\0   — Password in plaintext (hashed server-side)
+token\0      — Email validation token; send empty string if EmailValidated = false
+```
+
+**Reply payload on success (`NoError`):**
+```
+onlineName\0         — Display name
+avatarUrl\0          — Avatar URL (may be empty string)
+userId    (u64 LE)   — Server-assigned user ID
+friends   (u32 LE)   — Friend count      TODO
+req_sent  (u32 LE)   — Requests sent     TODO
+req_recv  (u32 LE)   — Requests received TODO 
+blocked   (u32 LE)   — Blocked users     TODO
+```
+
+All four list-count fields are always present even when zero. The client reads them unconditionally and will fail to parse the reply if any are missing.
+
+**Reply payload on failure:** error byte only, no additional data.
+
+**Error codes:**
+
+| Error | Cause |
+|---|---|
+| `LoginInvalidPassword` | NP ID not found, or password does not match |
+| `LoginInvalidToken` | `EmailValidated = true` and token is empty or wrong |
+| `LoginAlreadyLoggedIn` | Another session for this `userId` is already connected |
+| `LoginError` | Account exists but is banned |
+| `Malformed` | Payload could not be parsed |
+
+---
 ### Create (2)
 
 Register a new account. The server sends the reply then **always** closes the connection, regardless of success or failure.
