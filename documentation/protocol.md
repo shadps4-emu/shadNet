@@ -185,3 +185,20 @@ Byte stream:
 73 65 63 72 65 74 00       ← password = "secret\0"
 00                         ← token   = "\0" (empty — no email validation)
 ```
+
+### Annotated Login reply example (success)
+
+```
+01                         ← PacketType::Reply
+00 00                      ← CommandType::Login (0)
+35 00 00 00                ← size = 53 bytes total
+01 00 00 00 00 00 00 00    ← packetId = 1 (echoed)
+00                         ← ErrorType::NoError
+47 65 6F 72 67 65 4D 00    ← onlineName = "GeorgeM\0"
+00                         ← avatarUrl  = "\0" (empty)
+01 00 00 00 00 00 00 00    ← userId     = 1 (u64 LE)
+00 00 00 00                ← friends    = 0 (u32 LE)
+00 00 00 00                ← req_sent   = 0
+00 00 00 00                ← req_recv   = 0
+00 00 00 00                ← blocked    = 0
+```
