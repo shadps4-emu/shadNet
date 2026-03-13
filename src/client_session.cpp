@@ -68,14 +68,11 @@ void ClientSession::OnReadyRead() {
 }
 
 void ClientSession::OnDisconnected() {
-    // TODO
     CleanupOnDisconnect();
     emit Disconnected();
 }
 
 void ClientSession::ProcessPacket(uint16_t command, uint64_t packetId, const QByteArray& payload) {
-    // TODO partially done
-
     QByteArray reply;
     reply.reserve(256);
     reply.append(static_cast<char>(static_cast<uint8_t>(PacketType::Reply)));
@@ -129,6 +126,8 @@ ErrorType ClientSession::DispatchCommand(CommandType cmd, StreamExtractor& se, Q
         return CmdLogin(se, reply);
     case CommandType::Create:
         return CmdCreate(se, reply);
+    case CommandType::Delete:
+        return CmdDelete(se);
     default:
         qWarning() << "Unknown command" << static_cast<uint16_t>(cmd);
         return ErrorType::Invalid;

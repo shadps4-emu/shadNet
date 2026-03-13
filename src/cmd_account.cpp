@@ -39,7 +39,6 @@ ErrorType ClientSession::CmdCreate(StreamExtractor& data, QByteArray& reply) {
 
 ErrorType ClientSession::CmdLogin(StreamExtractor& data, QByteArray& reply) {
     // TODO missing friends relations
-
     QString npid = data.getString(false);
     QString password = data.getString(false);
     QString token = data.getString(true);
@@ -105,5 +104,42 @@ ErrorType ClientSession::CmdLogin(StreamExtractor& data, QByteArray& reply) {
     }
 
     qInfo() << "Authenticated:" << npid;
+    return ErrorType::NoError;
+}
+
+ErrorType ClientSession::CmdDelete(StreamExtractor& data) {
+    QString npid = data.getString(false);
+    QString password = data.getString(false);
+    if (data.error())
+        return ErrorType::Malformed;
+
+    // Verify credentials — no token check needed for deletion.
+    auto userOpt = m_db->CheckUser(npid, password, "", false);
+    if (!userOpt) {
+        qWarning() << "CmdDelete: bad credentials for" << npid;
+        return ErrorType::LoginInvalidPassword;
+    }
+
+    // Only allow deleting own account unless caller is an admin.
+    if (userOpt->userId != m_info.userId && !m_info.admin) {
+        qWarning() << "CmdDelete: unauthorized attempt by" << m_info.npid << "to delete" << npid;
+        return ErrorType::Unauthorized;
+    }
+
+    if (!m_db->DeleteUser(userOpt->userId)) {
+        qCritical() << "CmdDelete: DB error deleting" << npid;
+        return ErrorType::DbFail;
+    }
+
+    qInfo() << "Account deleted:" << npid;
+
+    // If the deleted account is the current session, log it out of the clients map.
+    if (userOpt->userId == m_info.userId) {
+        QWriteLocker lk(&m_shared->clientsLock);
+        m_shared->clients.remove(m_info.userId);
+        m_authenticated = false;
+    }
+
+    QMetaObject::invokeMethod(m_socket, "disconnectFromHost", Qt::QueuedConnection);
     return ErrorType::NoError;
 }

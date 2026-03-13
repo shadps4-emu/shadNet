@@ -18,7 +18,6 @@
 struct SharedState {
     ConfigManager* config;
     Database* db; // Thread-per-session: each session has its own DB connection
-
     // Connected clients: userId to (npid, channel write function)
     mutable QReadWriteLock clientsLock;
     struct ClientEntry {
@@ -58,7 +57,7 @@ public:
     // commands cmd_account.cpp
     ErrorType CmdCreate(StreamExtractor& data, QByteArray& reply);
     ErrorType CmdLogin(StreamExtractor& data, QByteArray& reply);
-
+    ErrorType CmdDelete(StreamExtractor& data);
 signals:
     void Disconnected();
 

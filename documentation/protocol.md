@@ -182,6 +182,34 @@ Complete table of all `ErrorType` values. The error byte is always at offset 15 
 
 ---
 
+### Delete (3)
+
+Permanently delete an account. Requires login.
+
+**Request payload:**
+```
+npid\0       — NP ID of the account to delete
+password\0   — Password of that account (re-verified before deletion)
+```
+
+**Reply payload:** error byte only.
+
+The password is always verified against the target account, regardless of who is making the request. A user may only delete their own account; a session with `admin = true` may delete any account.
+
+After a successful delete the server removes the target user from the active clients map (if they are currently logged in) and closes the connection of the requesting session, since the session is now invalid.
+
+**Error codes:**
+
+| Error | Cause |
+|---|---|
+| `NoError` | Account deleted; server closes connection |
+| `LoginInvalidPassword` | Password verification failed, or NP ID not found |
+| `Unauthorized` | Attempting to delete a different account without admin rights |
+| `DbFail` | Database error during deletion |
+| `Malformed` | Payload could not be parsed |
+
+---
+
 ## Encoding Reference
 
 ### Integers
