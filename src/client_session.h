@@ -1,89 +1,91 @@
 #pragma once
+#include <functional>
+#include <memory>
+#include <QAtomicInt>
+#include <QByteArray>
+#include <QHash>
+#include <QObject>
+#include <QReadWriteLock>
+#include <QSet>
+#include <QSslSocket>
+#include <QTcpSocket>
+#include <database.h>
 #include "config.h"
 #include "protocol.h"
 #include "stream_extractor.h"
-#include <QObject>
-#include <QTcpSocket>
-#include <QSslSocket>
-#include <QByteArray>
-#include <QHash>
-#include <QSet>
-#include <QReadWriteLock>
-#include <QAtomicInt>
-#include <memory>
-#include <functional>
-#include <database.h>
 
 // Shared state visible to all sessions (thread-safe with locks)
 struct SharedState {
-	ConfigManager* config;
-	Database* db;           // Thread-per-session: each session has its own DB connection
+    ConfigManager* config;
+    Database* db; // Thread-per-session: each session has its own DB connection
 
-	// Connected clients: userId to (npid, channel write function)
-	mutable QReadWriteLock clientsLock;
-	struct ClientEntry {
-		QString npid;
-		std::function<void(QByteArray)> send;
-	};
-	QHash<int64_t, ClientEntry> clients;
+    // Connected clients: userId to (npid, channel write function)
+    mutable QReadWriteLock clientsLock;
+    struct ClientEntry {
+        QString npid;
+        std::function<void(QByteArray)> send;
+    };
+    QHash<int64_t, ClientEntry> clients;
 };
 
-//Per-connection session info
+// Per-connection session info
 struct ClientInfo {
-	int64_t  userId = 0;
-	QString  npid;
-	QString  onlineName;
-	QString  avatarUrl;
-	QString  token;
-	bool     admin = false;
-	bool     statAgent = false;
-	bool     banned = false;
+    int64_t userId = 0;
+    QString npid;
+    QString onlineName;
+    QString avatarUrl;
+    QString token;
+    bool admin = false;
+    bool statAgent = false;
+    bool banned = false;
 };
 
 class ClientSession : public QObject {
-	Q_OBJECT
+    Q_OBJECT
 public:
-	explicit ClientSession(QTcpSocket* socket, SharedState* shared,
-		const QString& dbPath, bool isSsl = true,
-		QObject* parent = nullptr);
-	~ClientSession();
+    explicit ClientSession(QTcpSocket* socket, SharedState* shared, const QString& dbPath,
+                           bool isSsl = true, QObject* parent = nullptr);
+    ~ClientSession();
 
-	void Start();
-	void CleanupOnDisconnect();
-	void SendPacket(const QByteArray& pkt);
-	static bool IsValidNpid(const QString& npid);
-	Database& db() { return *m_db; }
+    void Start();
+    void CleanupOnDisconnect();
+    void SendPacket(const QByteArray& pkt);
+    static bool IsValidNpid(const QString& npid);
+    Database& db() {
+        return *m_db;
+    }
 
-	//commands cmd_account.cpp
-	ErrorType CmdCreate(StreamExtractor& data, QByteArray& reply);
-	ErrorType CmdLogin(StreamExtractor& data, QByteArray& reply);
+    // commands cmd_account.cpp
+    ErrorType CmdCreate(StreamExtractor& data, QByteArray& reply);
+    ErrorType CmdLogin(StreamExtractor& data, QByteArray& reply);
 
 signals:
-	void Disconnected();
+    void Disconnected();
 
 private slots:
-	void OnReadyRead();
-	void OnDisconnected();
+    void OnReadyRead();
+    void OnDisconnected();
 
 private:
-	void ProcessPacket(uint16_t command, uint64_t packetId, const QByteArray& payload);
-	ErrorType DispatchCommand(CommandType cmd, StreamExtractor& se, QByteArray& reply);
+    void ProcessPacket(uint16_t command, uint64_t packetId, const QByteArray& payload);
+    ErrorType DispatchCommand(CommandType cmd, StreamExtractor& se, QByteArray& reply);
 
-	QTcpSocket* m_socket;
-	bool           m_isSsl = true;
-	SharedState* m_shared;
-	bool           m_authenticated = false;
-	QByteArray     m_readBuf;
-	std::unique_ptr<Database> m_db;
-	ClientInfo                 m_info;
-
+    QTcpSocket* m_socket;
+    bool m_isSsl = true;
+    SharedState* m_shared;
+    bool m_authenticated = false;
+    QByteArray m_readBuf;
+    std::unique_ptr<Database> m_db;
+    ClientInfo m_info;
 };
 
-inline bool ClientSession::IsValidNpid(const QString& npid)
-{
-	if (npid.size() < 3 || npid.size() > 16) return false;
-	for (const QChar& c : npid)
-		if (!c.isLetterOrNumber() && c != '-' && c != '_') return false;
-	if (npid == "DeletedUser") return false;
-	return true;
+inline bool ClientSession::IsValidNpid(const QString& npid) {
+    if (npid.size() < 3 || npid.size() > 16)
+        return false;
+    for (const QChar& c : npid)
+        if (!c.isLetterOrNumber() && c != '-' && c != '_')
+            return false;
+    if (npid == "DeletedUser")
+        return false;
+    return true;
 }
