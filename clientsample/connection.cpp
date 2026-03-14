@@ -6,9 +6,10 @@
 #  include <winsock2.h>
 #  include <ws2tcpip.h>
 #  pragma comment(lib, "ws2_32.lib")
+// Map POSIX close -> closesocket, and handle WSAEWOULDBLOCK
 #  define SOCK_CLOSE(s)   closesocket(s)
 #  define SOCK_WOULD_BLOCK (WSAGetLastError() == WSAEWOULDBLOCK)
-#else                                   
+#else                                  
 #  include <sys/socket.h>
 #  include <arpa/inet.h>
 #  include <unistd.h>
@@ -61,6 +62,7 @@ bool ShadNetConnection::connect(const char* host, uint16_t port)
 		return false;
 	}
 
+	// The server sends it immediately on connection; verify protocol version.
 	uint8_t hdr[HEADER_SIZE];
 	if (!recvAll(hdr, static_cast<int>(HEADER_SIZE))) {
 		m_lastError = "Timeout waiting for ServerInfo";
@@ -97,6 +99,7 @@ bool ShadNetConnection::connect(const char* host, uint16_t port)
 		}
 	}
 
+	// Switch socket to non-blocking for the update() poll loop
 #ifdef _WIN32
 	u_long mode = 1;
 	ioctlsocket(m_sock, FIONBIO, &mode);
@@ -134,6 +137,8 @@ bool ShadNetConnection::recvAll(uint8_t* buf, int n)
 	return true;
 }
 
+// ── send — blocking send of all bytes ────────────────────────────────────────
+
 bool ShadNetConnection::send(const std::vector<uint8_t>& data)
 {
 	int total = static_cast<int>(data.size());
@@ -155,6 +160,8 @@ void ShadNetConnection::update()
 	if (m_sock == INVALID_SOCK) return;
 
 	uint8_t buf[4096];
+	bool serverClosed = false;
+
 	while (true) {
 		int r = static_cast<int>(
 			::recv(m_sock, reinterpret_cast<char*>(buf), sizeof(buf), 0));
@@ -163,20 +170,26 @@ void ShadNetConnection::update()
 			m_readBuf.insert(m_readBuf.end(), buf, buf + r);
 		}
 		else if (r == 0) {
-			// Server closed connection
-			disconnect();
-			return;
+			// Server closed its end — do NOT disconnect yet.
+			// Break out and parse whatever we already buffered first.
+			serverClosed = true;
+			break;
 		}
 		else {
-			// No more data right now (non-blocking)
-			if (SOCK_WOULD_BLOCK) break;
-			// Any other error — stop reading
+			if (SOCK_WOULD_BLOCK) break;   // no more data right now
+			serverClosed = true;           // socket error — still drain buffer
 			break;
 		}
 	}
 
+	// Always parse buffered bytes BEFORE tearing down the socket.
 	parse();
+
+	if (serverClosed)
+		disconnect();
 }
+
+// ── parse ─────────────────────────────────────────────────────────────────────
 
 void ShadNetConnection::parse()
 {
@@ -187,12 +200,13 @@ void ShadNetConnection::parse()
 		uint32_t totalSize = fromLE32(data + 3);
 
 		if (totalSize < HEADER_SIZE) {
+			// Corrupt packet — drop everything
 			m_readBuf.clear();
 			return;
 		}
 
 		if (m_readBuf.size() < totalSize)
-			return;
+			return;  // wait for more bytes
 
 		Packet pkt;
 		pkt.type = static_cast<PacketType>(data[0]);

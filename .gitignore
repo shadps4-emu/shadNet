@@ -1,2 +1,4 @@
 /.vs/*
 /out/*
+/clientsample/.vs/*
+/clientsample/out/*

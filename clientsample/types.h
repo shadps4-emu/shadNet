@@ -23,6 +23,23 @@ namespace shadnet
 		Create = 2,
 		Delete = 3,
 		SendToken = 4,
+		SendResetToken = 5,
+		ResetPassword = 6,
+		ResetState = 7,
+		AddFriend = 8,
+		RemoveFriend = 9,
+		AddBlock = 10,
+		RemoveBlock = 11,
+	};
+
+	// Notification type IDs — carried in Notification packets (type=2).
+	// The server pushes these with no corresponding reply from the client.
+	enum class NotificationType : uint16_t
+	{
+		FriendQuery = 5,   // Someone sent you a friend request
+		FriendNew = 6,   // Mutual friendship formed
+		FriendLost = 7,   // Someone removed you
+		FriendStatus = 8,   // A friend came online / went offline
 	};
 
 	// Error codes returned in the reply payload byte [0]
@@ -45,6 +62,8 @@ namespace shadnet
 		Unauthorized = 23,
 		DbFail = 24,
 		NotFound = 26,
+		Blocked = 27,
+		AlreadyFriend = 28,
 		Unsupported = 33,
 	};
 
@@ -69,6 +88,8 @@ namespace shadnet
 		case ErrorType::Unauthorized:             return "Unauthorized";
 		case ErrorType::DbFail:                   return "DbFail";
 		case ErrorType::NotFound:                 return "NotFound";
+		case ErrorType::Blocked:                  return "Blocked";
+		case ErrorType::AlreadyFriend:            return "AlreadyFriend";
 		case ErrorType::Unsupported:              return "Unsupported";
 		default:                                  return "Unknown";
 		}
