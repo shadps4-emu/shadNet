@@ -24,6 +24,20 @@ enum class CommandType : uint16_t {
     SendResetToken = 5,
     ResetPassword = 6,
     ResetState = 7,
+    AddFriend = 8,
+    RemoveFriend = 9,
+    AddBlock = 10,
+    RemoveBlock = 11,
+};
+
+// Notification type IDs (u16 LE in Notification packet header).
+// These are pushed by the server with no corresponding reply.
+enum class NotificationType : uint16_t {
+    // (0-4: room notifications, not used in auth-only mode)
+    FriendQuery = 5,  // Someone sent you a friend request
+    FriendNew = 6,    // Mutual friendship formed (request accepted)
+    FriendLost = 7,   // Someone removed you from their friend list
+    FriendStatus = 8, // A friend came online or went offline
 };
 
 // Error codes for Reply packets

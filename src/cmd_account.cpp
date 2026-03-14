@@ -1,5 +1,20 @@
+#include <QDateTime>
 #include <QDebug>
 #include "client_session.h"
+
+// ── Presence dump helpers ─────────────────────────────────────────────────────
+// Each friend entry in the login reply carries an online flag followed by a
+// fixed-layout presence blob.  Offline/unknown friends get an empty blob.
+// Layout: ComId(12) + title\0 + status\0 + comment\0 + data_len(u32) + data
+static void appendEmptyPresence(QByteArray& buf) {
+    // Empty ComId: 9 null bytes + '_' + '0' + '0'  (matches RPCS3 expectation)
+    static const char emptyComId[12] = {0, 0, 0, 0, 0, 0, 0, 0, 0, '_', '0', '0'};
+    buf.append(emptyComId, 12);
+    buf.append('\0');    // title
+    buf.append('\0');    // status
+    buf.append('\0');    // comment
+    appendU32LE(buf, 0); // data length
+}
 
 ErrorType ClientSession::CmdCreate(StreamExtractor& data, QByteArray& reply) {
     Q_UNUSED(reply);
@@ -22,6 +37,10 @@ ErrorType ClientSession::CmdCreate(StreamExtractor& data, QByteArray& reply) {
             return ErrorType::CreationBannedEmailProvider;
     }
 
+    if (avatarUrl.isEmpty()) {
+        // Set default avatar URL
+        avatarUrl = "https://shadps4.net/avatar/default_01.png";
+    }
     auto err = m_db->CreateAccount(npid, password, onlineName, avatarUrl, email);
     if (err) {
         switch (*err) {
@@ -38,7 +57,6 @@ ErrorType ClientSession::CmdCreate(StreamExtractor& data, QByteArray& reply) {
 }
 
 ErrorType ClientSession::CmdLogin(StreamExtractor& data, QByteArray& reply) {
-    // TODO missing friends relations
     QString npid = data.getString(false);
     QString password = data.getString(false);
     QString token = data.getString(true);
@@ -79,19 +97,48 @@ ErrorType ClientSession::CmdLogin(StreamExtractor& data, QByteArray& reply) {
     m_info.banned = user.banned;
     m_authenticated = true;
 
-    // Build reply: onlineName, avatarUrl, userId, friends, friend_requests, requests_received,
-    // blocked
+    // Load relationships before registering in the clients map so we can
+    // check which friends are already online.
+    UserRelationships rels = m_db->GetRelationships(user.userId);
+
+    // Build reply: onlineName, avatarUrl, userId, then four relationship lists.
     appendCStr(reply, user.onlineName);
     appendCStr(reply, user.avatarUrl);
     appendU64LE(reply, static_cast<uint64_t>(user.userId));
 
-    // dummy TODO
-    appendU32LE(reply, 0); // friends
-    appendU32LE(reply, 0); // requests sent
-    appendU32LE(reply, 0); // requests received
-    appendU32LE(reply, 0); // blocked
+    // ── Friends list ──────────────────────────────────────────────────────────
+    // count(u32)  then for each: npid\0 + online(u8) + presence(19 bytes)
+    // Presence is always written — empty blob when offline or no presence set.
+    {
+        QReadLocker lk(&m_shared->clientsLock);
+        appendU32LE(reply, static_cast<uint32_t>(rels.friends.size()));
+        for (const auto& [friendId, friendNpid] : rels.friends) {
+            appendCStr(reply, friendNpid);
+            bool online = m_shared->clients.contains(friendId);
+            reply.append(static_cast<char>(online ? 1 : 0));
+            appendEmptyPresence(reply); // presence detail not implemented yet
+        }
+    }
 
-    // Register in global clients map
+    // ── Pending request lists (npid\0 only, no presence) ─────────────────────
+    appendU32LE(reply, static_cast<uint32_t>(rels.friendRequestsSent.size()));
+    for (const auto& [id, npid] : rels.friendRequestsSent)
+        appendCStr(reply, npid);
+
+    appendU32LE(reply, static_cast<uint32_t>(rels.friendRequestsReceived.size()));
+    for (const auto& [id, npid] : rels.friendRequestsReceived)
+        appendCStr(reply, npid);
+
+    // ── Blocked list ──────────────────────────────────────────────────────────
+    appendU32LE(reply, static_cast<uint32_t>(rels.blocked.size()));
+    for (const auto& [id, npid] : rels.blocked)
+        appendCStr(reply, npid);
+
+    // Collect online friends' send functions before we release any lock, so
+    // we can notify them after registration without a nested lock acquisition.
+    QVector<std::pair<std::function<void(QByteArray)>, QString>> onlineFriendSenders;
+
+    // Register in global clients map and populate the in-memory friends map.
     {
         QWriteLocker lk(&m_shared->clientsLock);
         SharedState::ClientEntry entry;
@@ -100,7 +147,32 @@ ErrorType ClientSession::CmdLogin(StreamExtractor& data, QByteArray& reply) {
             QMetaObject::invokeMethod(
                 this, [this, pkt]() { SendPacket(pkt); }, Qt::QueuedConnection);
         };
+        for (const auto& [friendId, friendNpid] : rels.friends) {
+            entry.friends.insert(friendId, friendNpid);
+            // If the friend is online, add ourselves to their map too.
+            auto it = m_shared->clients.find(friendId);
+            if (it != m_shared->clients.end()) {
+                it->friends.insert(user.userId, npid);
+                onlineFriendSenders.append({it->send, friendNpid});
+            }
+        }
         m_shared->clients[user.userId] = std::move(entry);
+    }
+
+    // Notify online friends that we just came online.
+    // Payload: online(u8=1) + timestamp(u64 LE ns) + npid\0
+    {
+        QByteArray payload;
+        payload.append('\x01');
+        uint64_t ts = static_cast<uint64_t>(QDateTime::currentDateTimeUtc().toMSecsSinceEpoch()) *
+                      1'000'000ULL;
+        appendU64LE(payload, ts);
+        appendCStr(payload, npid);
+        QByteArray pkt = ClientSession::BuildNotification(NotificationType::FriendStatus, payload);
+        for (const auto& [send, friendNpid] : onlineFriendSenders) {
+            Q_UNUSED(friendNpid);
+            send(pkt);
+        }
     }
 
     qInfo() << "Authenticated:" << npid;

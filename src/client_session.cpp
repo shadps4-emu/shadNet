@@ -1,3 +1,4 @@
+#include <QDateTime>
 #include "client_session.h"
 #include "protocol.h"
 #include "stream_extractor.h"
@@ -128,6 +129,14 @@ ErrorType ClientSession::DispatchCommand(CommandType cmd, StreamExtractor& se, Q
         return CmdCreate(se, reply);
     case CommandType::Delete:
         return CmdDelete(se);
+    case CommandType::AddFriend:
+        return CmdAddFriend(se);
+    case CommandType::RemoveFriend:
+        return CmdRemoveFriend(se);
+    case CommandType::AddBlock:
+        return CmdAddBlock(se);
+    case CommandType::RemoveBlock:
+        return CmdRemoveBlock(se);
     default:
         qWarning() << "Unknown command" << static_cast<uint16_t>(cmd);
         return ErrorType::Invalid;
@@ -135,13 +144,70 @@ ErrorType ClientSession::DispatchCommand(CommandType cmd, StreamExtractor& se, Q
 }
 
 void ClientSession::CleanupOnDisconnect() {
-    if (m_authenticated) {
-        QWriteLocker lk(&m_shared->clientsLock);
-        m_shared->clients.remove(m_info.userId);
-        qInfo() << "Client disconnected:" << m_info.npid;
-    } else {
+    if (!m_authenticated) {
         qInfo() << "Unauthenticated client disconnected";
+        return;
     }
+
+    // Collect send functions for every online friend before releasing the lock,
+    // then remove ourselves from the map.
+    QVector<std::function<void(QByteArray)>> friendSenders;
+    {
+        QWriteLocker lk(&m_shared->clientsLock);
+        auto self = m_shared->clients.find(m_info.userId);
+        if (self != m_shared->clients.end()) {
+            for (auto it = self->friends.begin(); it != self->friends.end(); ++it) {
+                auto friendEntry = m_shared->clients.find(it.key());
+                if (friendEntry != m_shared->clients.end())
+                    friendSenders.append(friendEntry->send);
+            }
+            m_shared->clients.erase(self);
+        }
+    }
+
+    // Build FriendStatus offline notification: online(u8=0) + timestamp(u64 LE) + npid\0
+    QByteArray payload;
+    payload.append('\x00'); // offline
+    uint64_t ts =
+        static_cast<uint64_t>(QDateTime::currentDateTimeUtc().toMSecsSinceEpoch()) * 1'000'000ULL;
+    appendU64LE(payload, ts);
+    appendCStr(payload, m_info.npid);
+    QByteArray pkt = BuildNotification(NotificationType::FriendStatus, payload);
+    for (const auto& send : friendSenders)
+        send(pkt);
+
+    qInfo() << "Client disconnected:" << m_info.npid;
+}
+
+// ── Notification helpers ──────────────────────────────────────────────────────
+
+QByteArray ClientSession::BuildNotification(NotificationType type, const QByteArray& payload) {
+    QByteArray pkt;
+    pkt.append(static_cast<char>(static_cast<uint8_t>(PacketType::Notification)));
+    appendU16LE(pkt, static_cast<uint16_t>(type));
+    appendU32LE(pkt, static_cast<uint32_t>(HEADER_SIZE + payload.size()));
+    appendU64LE(pkt, 0); // packet_id unused for notifications
+    pkt.append(payload);
+    return pkt;
+}
+
+// Send a notification to another online user.
+void ClientSession::SendNotification(NotificationType type, const QByteArray& payload,
+                                     int64_t targetUserId) {
+    std::function<void(QByteArray)> sender;
+    {
+        QReadLocker lk(&m_shared->clientsLock);
+        auto it = m_shared->clients.find(targetUserId);
+        if (it == m_shared->clients.end())
+            return;
+        sender = it->send;
+    }
+    sender(BuildNotification(type, payload));
+}
+
+// Send a notification to this session's own socket.
+void ClientSession::SendSelfNotification(NotificationType type, const QByteArray& payload) {
+    SendPacket(BuildNotification(type, payload));
 }
 
 void ClientSession::SendPacket(const QByteArray& pkt) {

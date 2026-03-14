@@ -125,6 +125,21 @@ bool Database::Migrate() {
         "  last_login       UNSIGNED INTEGER,"
         "  token_last_sent  UNSIGNED INTEGER,"
         "  reset_emit       UNSIGNED INTEGER)",
+
+        // Friendship table.
+        // user_id_1 < user_id_2 is enforced by CHECK so there is exactly one row
+        // per pair regardless of who initiated. status_user_1 and status_user_2
+        // each hold a bitmask of FriendStatus flags for their respective user.
+        "CREATE TABLE IF NOT EXISTS friendship("
+        "  user_id_1     INTEGER NOT NULL REFERENCES account(user_id) ON DELETE CASCADE,"
+        "  user_id_2     INTEGER NOT NULL REFERENCES account(user_id) ON DELETE CASCADE,"
+        "  status_user_1 INTEGER NOT NULL DEFAULT 0,"
+        "  status_user_2 INTEGER NOT NULL DEFAULT 0,"
+        "  PRIMARY KEY(user_id_1, user_id_2),"
+        "  CHECK(user_id_1 < user_id_2))",
+
+        "CREATE INDEX IF NOT EXISTS friendship_user1 ON friendship(user_id_1)",
+        "CREATE INDEX IF NOT EXISTS friendship_user2 ON friendship(user_id_2)",
     };
 
     for (const QString& s : stmts1)
@@ -455,4 +470,119 @@ void Database::CleanNeverUsedAccounts() {
               "  SELECT user_id FROM account_timestamp WHERE creation < ? AND last_login IS NULL)");
     q.addBindValue(static_cast<qint64>(cutoff));
     Exec(q);
+}
+
+// Friendship DB methods
+
+// The friendship table always stores rows with user_id_1 < user_id_2.
+// This helper returns the canonical (lower, higher) order and a flag
+// indicating whether the caller is user_id_2 (i.e. the IDs were swapped).
+static std::tuple<int64_t, int64_t, bool> orderedIds(int64_t a, int64_t b) {
+    if (a < b)
+        return {a, b, false};
+    return {b, a, true};
+}
+
+std::pair<Database::RelResult, Database::RelStatus> Database::GetRelStatus(int64_t callerId,
+                                                                           int64_t otherId) {
+    auto [id1, id2, swapped] = orderedIds(callerId, otherId);
+    QSqlQuery q(m_db);
+    q.prepare("SELECT status_user_1, status_user_2 FROM friendship "
+              "WHERE user_id_1=? AND user_id_2=?");
+    q.addBindValue(static_cast<qlonglong>(id1));
+    q.addBindValue(static_cast<qlonglong>(id2));
+    if (!Exec(q))
+        return {RelResult::Error, {}};
+    if (!q.next())
+        return {RelResult::Empty, {}};
+
+    RelStatus s;
+    uint8_t s1 = static_cast<uint8_t>(q.value(0).toInt());
+    uint8_t s2 = static_cast<uint8_t>(q.value(1).toInt());
+    s.caller = swapped ? s2 : s1;
+    s.other = swapped ? s1 : s2;
+    return {RelResult::Ok, s};
+}
+
+bool Database::SetRelStatus(int64_t callerId, int64_t otherId, uint8_t statusCaller,
+                            uint8_t statusOther) {
+    auto [id1, id2, swapped] = orderedIds(callerId, otherId);
+    uint8_t s1 = swapped ? statusOther : statusCaller;
+    uint8_t s2 = swapped ? statusCaller : statusOther;
+
+    QSqlQuery q(m_db);
+    q.prepare("INSERT INTO friendship(user_id_1, user_id_2, status_user_1, status_user_2) "
+              "VALUES(?,?,?,?) "
+              "ON CONFLICT(user_id_1, user_id_2) DO UPDATE SET "
+              "status_user_1=excluded.status_user_1, status_user_2=excluded.status_user_2");
+    q.addBindValue(static_cast<qlonglong>(id1));
+    q.addBindValue(static_cast<qlonglong>(id2));
+    q.addBindValue(s1);
+    q.addBindValue(s2);
+    return Exec(q);
+}
+
+bool Database::DeleteRel(int64_t callerId, int64_t otherId) {
+    auto [id1, id2, swapped] = orderedIds(callerId, otherId);
+    Q_UNUSED(swapped);
+    QSqlQuery q(m_db);
+    q.prepare("DELETE FROM friendship WHERE user_id_1=? AND user_id_2=?");
+    q.addBindValue(static_cast<qlonglong>(id1));
+    q.addBindValue(static_cast<qlonglong>(id2));
+    return Exec(q);
+}
+
+UserRelationships Database::GetRelationships(int64_t userId) {
+    UserRelationships result;
+
+    QSqlQuery q(m_db);
+    q.prepare("SELECT user_id_1, user_id_2, status_user_1, status_user_2 "
+              "FROM friendship WHERE user_id_1=? OR user_id_2=?");
+    q.addBindValue(static_cast<qlonglong>(userId));
+    q.addBindValue(static_cast<qlonglong>(userId));
+    if (!Exec(q))
+        return result;
+
+    constexpr uint8_t F = static_cast<uint8_t>(FriendStatus::Friend);
+    constexpr uint8_t B = static_cast<uint8_t>(FriendStatus::Blocked);
+
+    while (q.next()) {
+        int64_t uid1 = q.value(0).toLongLong();
+        int64_t uid2 = q.value(1).toLongLong();
+        uint8_t su1 = static_cast<uint8_t>(q.value(2).toInt());
+        uint8_t su2 = static_cast<uint8_t>(q.value(3).toInt());
+
+        // Rotate so statusMe / statusOther are from our perspective.
+        int64_t otherId;
+        uint8_t statusMe, statusOther;
+        if (uid1 == userId) {
+            otherId = uid2;
+            statusMe = su1;
+            statusOther = su2;
+        } else {
+            otherId = uid1;
+            statusMe = su2;
+            statusOther = su1;
+        }
+
+        // Resolve the other user's npid.
+        auto npidOpt = GetUsername(otherId);
+        if (!npidOpt)
+            continue;
+        auto pair = qMakePair(otherId, *npidOpt);
+
+        if ((statusMe & F) && (statusOther & F)) {
+            result.friends.append(pair);
+        } else if ((statusMe & F) && !(statusOther & F)) {
+            result.friendRequestsSent.append(pair);
+        } else if (!(statusMe & F) && (statusOther & F)) {
+            result.friendRequestsReceived.append(pair);
+        }
+        // Blocked: we blocked them
+        if (statusMe & B) {
+            result.blocked.append(pair);
+        }
+    }
+
+    return result;
 }

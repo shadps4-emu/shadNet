@@ -12,6 +12,23 @@
 #include <QStringList>
 #include "protocol.h"
 
+// ── Friendship ────────────────────────────────────────────────────────────────
+// Status flags stored per-user per-row in the friendship table.
+// The Friend bit represents "this user has either sent or confirmed a request".
+// When both sides have Friend=1 the relationship is a confirmed mutual friendship.
+// When only one side has Friend=1 there is an open outgoing request from that side.
+enum class FriendStatus : uint8_t {
+    Friend = (1 << 0),
+    Blocked = (1 << 1),
+};
+
+struct UserRelationships {
+    QList<QPair<int64_t, QString>> friends;                // mutual (both Friend bits set)
+    QList<QPair<int64_t, QString>> friendRequestsSent;     // we sent, they haven't replied
+    QList<QPair<int64_t, QString>> friendRequestsReceived; // they sent, we haven't replied
+    QList<QPair<int64_t, QString>> blocked;                // we blocked them
+};
+
 struct UserRecord {
     int64_t userId = 0;
     QString username;
@@ -62,6 +79,18 @@ public:
     bool SetAdmin(int64_t userId, bool admin);
     int TotalUsers();
     void CleanNeverUsedAccounts();
+
+    // Friendship
+    // Returns (status_caller, status_other). Empty = no row exists yet.
+    enum class RelResult { Ok, Empty, Error };
+    struct RelStatus {
+        uint8_t caller = 0;
+        uint8_t other = 0;
+    };
+    std::pair<RelResult, RelStatus> GetRelStatus(int64_t callerId, int64_t otherId);
+    bool SetRelStatus(int64_t callerId, int64_t otherId, uint8_t statusCaller, uint8_t statusOther);
+    bool DeleteRel(int64_t callerId, int64_t otherId);
+    UserRelationships GetRelationships(int64_t userId);
 
     QString lastError() const {
         return m_lastError;

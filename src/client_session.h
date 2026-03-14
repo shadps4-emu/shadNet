@@ -23,6 +23,9 @@ struct SharedState {
     struct ClientEntry {
         QString npid;
         std::function<void(QByteArray)> send;
+        // Online friends for this session: userId → npid.
+        // Protected by clientsLock (same lock as the outer clients map).
+        QHash<int64_t, QString> friends;
     };
     QHash<int64_t, ClientEntry> clients;
 };
@@ -58,6 +61,13 @@ public:
     ErrorType CmdCreate(StreamExtractor& data, QByteArray& reply);
     ErrorType CmdLogin(StreamExtractor& data, QByteArray& reply);
     ErrorType CmdDelete(StreamExtractor& data);
+
+    // commands cmd_friend.cpp
+    ErrorType CmdAddFriend(StreamExtractor& data);
+    ErrorType CmdRemoveFriend(StreamExtractor& data);
+    ErrorType CmdAddBlock(StreamExtractor& data);
+    ErrorType CmdRemoveBlock(StreamExtractor& data);
+
 signals:
     void Disconnected();
 
@@ -68,6 +78,11 @@ private slots:
 private:
     void ProcessPacket(uint16_t command, uint64_t packetId, const QByteArray& payload);
     ErrorType DispatchCommand(CommandType cmd, StreamExtractor& se, QByteArray& reply);
+
+    // Notification helpers
+    void SendNotification(NotificationType type, const QByteArray& payload, int64_t targetUserId);
+    void SendSelfNotification(NotificationType type, const QByteArray& payload);
+    static QByteArray BuildNotification(NotificationType type, const QByteArray& payload);
 
     QTcpSocket* m_socket;
     bool m_isSsl = true;
