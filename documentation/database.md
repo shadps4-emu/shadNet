@@ -77,3 +77,50 @@ CREATE TABLE IF NOT EXISTS account_timestamp (
 | `reset_emit` | UNSIGNED INTEGER | Unix seconds — timestamp of the last password-reset token email; used to enforce rate limiting on `SendResetToken` |
 
 ---
+
+### friendship
+
+One row per pair of users that have any relationship — a pending request, a confirmed friendship, or a block. The row is deleted entirely when no flags remain on either side.
+
+```sql
+CREATE TABLE IF NOT EXISTS friendship (
+    user_id_1     INTEGER NOT NULL REFERENCES account(user_id) ON DELETE CASCADE,
+    user_id_2     INTEGER NOT NULL REFERENCES account(user_id) ON DELETE CASCADE,
+    status_user_1 INTEGER NOT NULL DEFAULT 0,
+    status_user_2 INTEGER NOT NULL DEFAULT 0,
+    PRIMARY KEY(user_id_1, user_id_2),
+    CHECK(user_id_1 < user_id_2)
+);
+
+CREATE INDEX IF NOT EXISTS friendship_user1 ON friendship(user_id_1);
+CREATE INDEX IF NOT EXISTS friendship_user2 ON friendship(user_id_2);
+```
+
+| Column | Type | Notes |
+|---|---|---|
+| `user_id_1` | INTEGER | The lower of the two user IDs — enforced by the `CHECK` constraint |
+| `user_id_2` | INTEGER | The higher of the two user IDs |
+| `status_user_1` | INTEGER | Bitmask of `FriendStatus` flags from `user_id_1`'s perspective |
+| `status_user_2` | INTEGER | Bitmask of `FriendStatus` flags from `user_id_2`'s perspective |
+
+**`FriendStatus` bitmask:**
+
+| Flag | Value | Meaning |
+|---|---|---|
+| `Friend` | `0x01` | This user has sent or accepted a friend request |
+| `Blocked` | `0x02` | This user has blocked the other |
+
+**Relationship states** (interpreting the two status columns from one user's perspective):
+
+| My flags | Other's flags | State |
+|---|---|---|
+| `Friend=1` | `Friend=0` | I sent a request — pending acceptance |
+| `Friend=0` | `Friend=1` | They sent me a request — pending my acceptance |
+| `Friend=1` | `Friend=1` | Mutual friendship |
+| `Blocked=1` | any | I have blocked them |
+
+A single row can represent both a block and a pending/confirmed friendship simultaneously (e.g. one user blocks the other after accepting a request), though the `AddFriend` command rejects any row where either side has `Blocked` set.
+
+The `CHECK(user_id_1 < user_id_2)` constraint means there is always exactly one row per pair regardless of who initiated. The DB layer (`GetRelStatus`, `SetRelStatus`) handles the column-order swap transparently so callers never need to think about which column belongs to which user.
+
+---
