@@ -21,6 +21,9 @@ set(SOURCES
     src/database.h
     src/cmd_account.cpp
     src/cmd_friend.cpp
+    src/score_types.h
+    src/score_db.h
+    src/score_db.cpp
 )
 
 add_executable(shadnet ${SOURCES})
