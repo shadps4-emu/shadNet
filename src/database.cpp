@@ -140,6 +140,30 @@ bool Database::Migrate() {
 
         "CREATE INDEX IF NOT EXISTS friendship_user1 ON friendship(user_id_1)",
         "CREATE INDEX IF NOT EXISTS friendship_user2 ON friendship(user_id_2)",
+
+        // Score leaderboard configuration it has one row per (comId, boardId) pair.
+        "CREATE TABLE IF NOT EXISTS score_table("
+        "  communication_id  TEXT    NOT NULL,"
+        "  board_id          INTEGER NOT NULL,"
+        "  rank_limit        INTEGER NOT NULL DEFAULT 100,"
+        "  update_mode       INTEGER NOT NULL DEFAULT 0,"
+        "  sort_mode         INTEGER NOT NULL DEFAULT 0,"
+        "  upload_num_limit  INTEGER NOT NULL DEFAULT 10,"
+        "  upload_size_limit INTEGER NOT NULL DEFAULT 6000000,"
+        "  PRIMARY KEY(communication_id, board_id))",
+
+        // Score rows it has one per (comId, boardId, userId, characterId).
+        "CREATE TABLE IF NOT EXISTS score("
+        "  communication_id TEXT    NOT NULL,"
+        "  board_id         INTEGER NOT NULL,"
+        "  user_id          INTEGER NOT NULL,"
+        "  character_id     INTEGER NOT NULL,"
+        "  score            INTEGER NOT NULL,"
+        "  comment          TEXT,"
+        "  game_info        BLOB,"
+        "  data_id          INTEGER,"
+        "  timestamp        INTEGER NOT NULL,"
+        "  PRIMARY KEY(communication_id, board_id, user_id, character_id))",
     };
 
     for (const QString& s : stmts1)

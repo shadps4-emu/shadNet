@@ -63,6 +63,9 @@ public:
     bool Open(const QString& path = "db/rpcn.db");
     bool Migrate();
     bool IsOpen() const;
+    QSqlDatabase Conn() const {
+        return m_db;
+    }
 
     // Account
     std::optional<DbError> CreateAccount(const QString& npid, const QString& password,
