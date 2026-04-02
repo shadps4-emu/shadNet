@@ -24,6 +24,8 @@ set(SOURCES
     src/score_types.h
     src/score_db.h
     src/score_db.cpp
+    src/score_cache.cpp
+    src/score_cache.h
 )
 
 add_executable(shadnet ${SOURCES})

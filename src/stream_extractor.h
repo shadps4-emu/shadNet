@@ -49,6 +49,17 @@ public:
         return s;
     }
 
+    // Read exactly n raw bytes,needed for fixed-size fields like ComId (12 bytes).
+    QByteArray getBytes(int n) {
+        if (m_pos + n > m_data.size()) {
+            m_error = true;
+            return {};
+        }
+        QByteArray out(m_data.constData() + m_pos, n);
+        m_pos += n;
+        return out;
+    }
+
     QByteArray getRawData() {
         uint32_t size = get<uint32_t>();
         if (m_error)
