@@ -80,15 +80,15 @@ bool ShadNetServer::InitScoreSystem() {
         LoadScoreboardsCfg("scoreboards.cfg");
 
         // Pre-populate the in-memory cache from every board row in the DB.
-        const auto boards = sdb.allBoards();
+        const auto boards = sdb.AllBoards();
         for (const auto& [key, cfg] : boards) {
-            auto scores = sdb.scoresForBoard(key.first, key.second, cfg);
+            auto scores = sdb.ScoresForBoard(key.first, key.second, cfg);
             m_scoreCache->LoadTable(key.first, key.second, cfg, scores);
         }
         qInfo() << "Score cache loaded:" << boards.size() << "board(s)";
 
         // Delete .sdt files whose data_id is no longer referenced.
-        const auto dbIds = sdb.allDataIds();
+        const auto dbIds = sdb.AllDataIds();
         QSet<uint64_t> validSet(dbIds.begin(), dbIds.end());
         m_scoreFiles->CleanOrphans(validSet);
 
@@ -168,7 +168,7 @@ bool ShadNetServer::LoadScoreboardsCfg(const QString& path) {
                 uint32_t tid = ts2.trimmed().toUInt(&ok);
                 if (!ok)
                     return false;
-                sdb.setBoard(comId, tid, cfg);
+                sdb.SetBoard(comId, tid, cfg);
             }
             return true;
         };
