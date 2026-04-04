@@ -12,12 +12,16 @@
 #include <database.h>
 #include "config.h"
 #include "protocol.h"
+#include "score_cache.h"
+#include "score_db.h"
+#include "score_files.h"
 #include "stream_extractor.h"
 
 // Shared state visible to all sessions (thread-safe with locks)
 struct SharedState {
     ConfigManager* config;
-    Database* db; // Thread-per-session: each session has its own DB connection
+    ScoreCache* scoreCache = nullptr;
+    ScoreFiles* scoreFiles = nullptr;
     // Connected clients: userId to (npid, channel write function)
     mutable QReadWriteLock clientsLock;
     struct ClientEntry {
@@ -67,6 +71,15 @@ public:
     ErrorType CmdRemoveFriend(StreamExtractor& data);
     ErrorType CmdAddBlock(StreamExtractor& data);
     ErrorType CmdRemoveBlock(StreamExtractor& data);
+
+    // commands cmd_score.cpp
+    ErrorType CmdGetBoardInfos(StreamExtractor& data, QByteArray& reply);
+    ErrorType CmdRecordScore(StreamExtractor& data, QByteArray& reply);
+    ErrorType CmdRecordScoreData(StreamExtractor& data);
+    ErrorType CmdGetScoreData(StreamExtractor& data, QByteArray& reply);
+    ErrorType CmdGetScoreRange(StreamExtractor& data, QByteArray& reply);
+    ErrorType CmdGetScoreFriends(StreamExtractor& data, QByteArray& reply);
+    ErrorType CmdGetScoreNpid(StreamExtractor& data, QByteArray& reply);
 
 signals:
     void Disconnected();
