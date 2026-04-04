@@ -28,7 +28,7 @@ enum class CommandType : uint16_t {
     RemoveFriend = 9,
     AddBlock = 10,
     RemoveBlock = 11,
-    // (12–29: room/lobby/ticket commands not implemented here)
+    // (12â€“29: room/lobby/ticket commands not implemented here)
     GetBoardInfos = 30,
     RecordScore = 31,
     RecordScoreData = 32,
