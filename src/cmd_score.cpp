@@ -1,10 +1,10 @@
 #include <QDebug>
 #include <QSqlDatabase>
 #include "client_session.h"
-#include "proto_utils.h"
 #include "score_db.h"
+#include "score_messages.pb.h"
 
-// Helper: open a ScoreDb on this session's connection.
+// Wrap this session's DB connection for score operations.
 static ScoreDb scoreDb(Database* db) {
     return ScoreDb(db->Conn());
 }
@@ -14,37 +14,224 @@ static QString comIdStr(const QByteArray& id) {
     return QString::fromLatin1(id.constData(), id.size());
 }
 
+// Read a u32-LE-prefixed protobuf blob from the stream and parse it.
+// Returns false and sets data.error() on failure.
+template <typename T>
+static bool decodeProto(T& msg, StreamExtractor& data) {
+    QByteArray blob = data.getRawData();
+    if (data.error())
+        return false;
+    return msg.ParseFromArray(blob.constData(), blob.size());
+}
+
+// Serialise a protobuf message and append it as a u32-LE-prefixed blob to reply.
+template <typename T>
+static void appendProto(QByteArray& reply, const T& msg) {
+    std::string s = msg.SerializeAsString();
+    appendBlob(reply, QByteArray(s.data(), static_cast<int>(s.size())));
+}
+
+// GetBoardInfos
+// Request:  ComId(12) + boardId(u32 LE)
+// Reply:    u32 LE size + BoardInfo protobuf blob
 ErrorType ClientSession::CmdGetBoardInfos(StreamExtractor& data, QByteArray& reply) {
-    // todo
+    QByteArray comId = data.getBytes(12);
+    uint32_t boardId = data.get<uint32_t>();
+    if (data.error())
+        return ErrorType::Malformed;
+
+    auto sdb = scoreDb(m_db.get());
+    auto cfg = sdb.GetBoard(comIdStr(comId), boardId, false);
+    if (!cfg)
+        return ErrorType::NotFound;
+
+    score::BoardInfo bi;
+    bi.set_ranklimit(cfg->rankLimit);
+    bi.set_updatemode(cfg->updateMode);
+    bi.set_sortmode(cfg->sortMode);
+    bi.set_uploadnumlimit(cfg->uploadNumLimit);
+    bi.set_uploadsizelimit(cfg->uploadSizeLimit);
+    appendProto(reply, bi);
     return ErrorType::NoError;
 }
 
+// RecordScore
+//  Request:  ComId(12) + RecordScoreRequest blob
+//  Reply:    rank (u32 LE)
 ErrorType ClientSession::CmdRecordScore(StreamExtractor& data, QByteArray& reply) {
-    // todo
+    QByteArray comId = data.getBytes(12);
+    score::RecordScoreRequest req;
+    if (!decodeProto(req, data) || data.error())
+        return ErrorType::Malformed;
+
+    QString cid = comIdStr(comId);
+    auto sdb = scoreDb(m_db.get());
+    auto cfg = sdb.GetBoard(cid, req.boardid(), true);
+    if (!cfg)
+        return ErrorType::DbFail;
+
+    ScoreEntry entry;
+    entry.userId = m_info.userId;
+    entry.characterId = req.pcid();
+    entry.score = req.score();
+    entry.comment = QString::fromStdString(req.comment());
+    entry.gameInfo = QByteArray(req.data().data(), static_cast<int>(req.data().size()));
+    entry.timestamp = ShadNetTimestamp();
+    entry.npid = m_info.npid;
+    entry.onlineName = m_info.onlineName;
+
+    auto dbErr = sdb.RecordScore(cid, req.boardid(), *cfg, entry);
+    if (dbErr) {
+        if (*dbErr == ScoreDbError::NotBest)
+            return ErrorType::ScoreNotBest;
+        return ErrorType::DbFail;
+    }
+
+    uint32_t rank = m_shared->scoreCache->InsertScore(cid, req.boardid(), *cfg, entry);
+    appendU32LE(reply, rank);
+    qInfo() << "RecordScore:" << m_info.npid << "board" << req.boardid() << "rank" << rank;
     return ErrorType::NoError;
 }
 
+// RecordScoreData
+// Request:  ComId(12) + RecordScoreGameDataRequest blob + raw data blob
+// Reply:    error byte only
 ErrorType ClientSession::CmdRecordScoreData(StreamExtractor& data) {
-    // todo
+    QByteArray comId = data.getBytes(12);
+    score::RecordScoreGameDataRequest req;
+    if (!decodeProto(req, data) || data.error())
+        return ErrorType::Malformed;
+    QByteArray rawData = data.getRawData();
+    if (data.error())
+        return ErrorType::Malformed;
+
+    QString cid = comIdStr(comId);
+
+    auto cacheErr = m_shared->scoreCache->ContainsScoreWithNoData(cid, req.boardid(), m_info.userId,
+                                                                  req.pcid(), req.score());
+    if (cacheErr) {
+        switch (*cacheErr) {
+        case ScoreCacheError::NotFound:
+            return ErrorType::NotFound;
+        case ScoreCacheError::Invalid:
+            return ErrorType::ScoreInvalid;
+        case ScoreCacheError::HasData:
+            return ErrorType::ScoreHasData;
+        }
+    }
+
+    uint64_t fileId = m_shared->scoreFiles->Create(rawData);
+    if (fileId == 0)
+        return ErrorType::DbFail;
+
+    if (m_shared->scoreCache->SetGameData(cid, req.boardid(), m_info.userId, req.pcid(), fileId)) {
+        m_shared->scoreFiles->Remove(fileId);
+        return ErrorType::NotFound;
+    }
+
+    auto sdb = scoreDb(m_db.get());
+    sdb.SetScoreDataId(cid, req.boardid(), m_info.userId, req.pcid(), req.score(), fileId);
     return ErrorType::NoError;
 }
 
+// GetScoreData
+// Request:  ComId(12) + GetScoreGameDataRequest blob
+// Reply:    u32 LE size + raw data bytes
 ErrorType ClientSession::CmdGetScoreData(StreamExtractor& data, QByteArray& reply) {
-    // todo
+    QByteArray comId = data.getBytes(12);
+    score::GetScoreGameDataRequest req;
+    if (!decodeProto(req, data) || data.error())
+        return ErrorType::Malformed;
+    if (req.npid().empty())
+        return ErrorType::Malformed;
+
+    QString cid = comIdStr(comId);
+    auto sdb = scoreDb(m_db.get());
+    auto uidOpt = sdb.UserIdForNpid(QString::fromStdString(req.npid()));
+    if (!uidOpt)
+        return ErrorType::NotFound;
+
+    auto [ok, fileId] =
+        m_shared->scoreCache->GetGameDataId(cid, req.boardid(), *uidOpt, req.pcid());
+    if (!ok)
+        return ErrorType::NotFound;
+
+    auto fileData = m_shared->scoreFiles->Read(fileId);
+    if (!fileData)
+        return ErrorType::NotFound;
+
+    appendBlob(reply, *fileData);
     return ErrorType::NoError;
 }
 
+// GetScoreRange
+// Request:  ComId(12) + GetScoreRangeRequest blob
+// Reply:    u32 LE size + GetScoreResponse protobuf blob
 ErrorType ClientSession::CmdGetScoreRange(StreamExtractor& data, QByteArray& reply) {
-    // todo
+    QByteArray comId = data.getBytes(12);
+    score::GetScoreRangeRequest req;
+    if (!decodeProto(req, data) || data.error())
+        return ErrorType::Malformed;
+
+    auto resp =
+        m_shared->scoreCache->GetScoreRange(comIdStr(comId), req.boardid(), req.startrank(),
+                                            req.numranks(), req.withcomment(), req.withgameinfo());
+    appendProto(reply, resp);
     return ErrorType::NoError;
 }
 
+// GetScoreFriends
+// Request:  ComId(12) + GetScoreFriendsRequest blob
+// Reply:    u32 LE size + GetScoreResponse protobuf blob
 ErrorType ClientSession::CmdGetScoreFriends(StreamExtractor& data, QByteArray& reply) {
-    // todo
+    QByteArray comId = data.getBytes(12);
+    score::GetScoreFriendsRequest req;
+    if (!decodeProto(req, data) || data.error())
+        return ErrorType::Malformed;
+
+    QVector<QPair<int64_t, int32_t>> ids;
+    if (req.includeself())
+        ids.append({m_info.userId, 0});
+
+    {
+        QReadLocker lk(&m_shared->clientsLock);
+        auto self = m_shared->clients.find(m_info.userId);
+        if (self != m_shared->clients.end()) {
+            for (auto it = self->friends.begin(); it != self->friends.end(); ++it) {
+                if (req.max() > 0 && static_cast<uint32_t>(ids.size()) >= req.max())
+                    break;
+                ids.append({it.key(), 0});
+            }
+        }
+    }
+
+    auto resp = m_shared->scoreCache->GetScoreByIds(comIdStr(comId), req.boardid(), ids,
+                                                    req.withcomment(), req.withgameinfo());
+    appendProto(reply, resp);
     return ErrorType::NoError;
 }
 
+// GetScoreNpid
+// Request:  ComId(12) + GetScoreNpIdRequest blob
+// Reply:    u32 LE size + GetScoreResponse protobuf blob
 ErrorType ClientSession::CmdGetScoreNpid(StreamExtractor& data, QByteArray& reply) {
-    // todo
+    QByteArray comId = data.getBytes(12);
+    score::GetScoreNpIdRequest req;
+    if (!decodeProto(req, data) || data.error())
+        return ErrorType::Malformed;
+
+    QString cid = comIdStr(comId);
+    auto sdb = scoreDb(m_db.get());
+
+    QVector<QPair<int64_t, int32_t>> ids;
+    ids.reserve(req.npids_size());
+    for (const auto& e : req.npids()) {
+        auto uid = sdb.UserIdForNpid(QString::fromStdString(e.npid()));
+        ids.append({uid.value_or(0), e.pcid()});
+    }
+
+    auto resp = m_shared->scoreCache->GetScoreByIds(cid, req.boardid(), ids, req.withcomment(),
+                                                    req.withgameinfo());
+    appendProto(reply, resp);
     return ErrorType::NoError;
 }
