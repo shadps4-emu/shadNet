@@ -56,6 +56,7 @@ set(SOURCES
     src/score_db.cpp
     src/score_cache.cpp
     src/score_cache.h
+    src/proto_utils.h
     "${PROTO_OUT}/score_messages.pb.cc"
 )
 
