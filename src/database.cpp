@@ -354,7 +354,7 @@ std::optional<DbError> Database::CreateAccount(const QString& npid, const QStrin
             return DbError::Internal;
         }
 
-        q2.addBindValue(newId);
+        q2.addBindValue(static_cast<qlonglong>(newId));
         q2.addBindValue(now);
 
         if (!q2.exec()) {
@@ -421,7 +421,7 @@ std::optional<int64_t> Database::GetUserId(const QString& npid) {
 std::optional<QString> Database::GetUsername(int64_t userId) {
     QSqlQuery q(m_db);
     q.prepare("SELECT username FROM account WHERE user_id=?");
-    q.addBindValue(userId);
+    q.addBindValue(static_cast<qlonglong>(userId));
     if (!Exec(q) || !q.next())
         return std::nullopt;
     return q.value(0).toString();
@@ -440,7 +440,7 @@ QList<QPair<int64_t, QString>> Database::GetUsernamesFromIds(const QSet<int64_t>
     q.prepare(QString("SELECT user_id,username FROM account WHERE user_id IN (%1)")
                   .arg(placeholders.join(',')));
     for (int64_t id : ids)
-        q.addBindValue(id);
+        q.addBindValue(static_cast<qlonglong>(id));
     if (!Exec(q))
         return result;
     while (q.next())
@@ -453,7 +453,7 @@ bool Database::UpdateLoginTime(int64_t userId) {
     QSqlQuery q(m_db);
     q.prepare("UPDATE account_timestamp SET last_login=? WHERE user_id=?");
     q.addBindValue(static_cast<qint64>(now));
-    q.addBindValue(userId);
+    q.addBindValue(static_cast<qlonglong>(userId));
     return Exec(q);
 }
 
@@ -461,14 +461,14 @@ bool Database::BanUser(int64_t userId, bool ban) {
     QSqlQuery q(m_db);
     q.prepare("UPDATE account SET banned=? WHERE user_id=?");
     q.addBindValue(ban ? 1 : 0);
-    q.addBindValue(userId);
+    q.addBindValue(static_cast<qlonglong>(userId));
     return Exec(q);
 }
 
 bool Database::DeleteUser(int64_t userId) {
     QSqlQuery q(m_db);
     q.prepare("DELETE FROM account WHERE user_id=?");
-    q.addBindValue(userId);
+    q.addBindValue(static_cast<qlonglong>(userId));
     return Exec(q);
 }
 
@@ -476,7 +476,7 @@ bool Database::SetAdmin(int64_t userId, bool admin) {
     QSqlQuery q(m_db);
     q.prepare("UPDATE account SET admin=? WHERE user_id=?");
     q.addBindValue(admin ? 1 : 0);
-    q.addBindValue(userId);
+    q.addBindValue(static_cast<qlonglong>(userId));
     return Exec(q);
 }
 
