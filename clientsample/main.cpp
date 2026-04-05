@@ -119,6 +119,8 @@ int main(int argc, char* argv[])
 	client.onRecordScoreData = [&](shadnet::ErrorType) { actionDone = true; };
 	client.onGetScoreData = [&](shadnet::ErrorType, const std::vector<uint8_t>&) { actionDone = true; };
 	client.onScoreRange = [&](const shadnet::ScoreRangeResult&) { actionDone = true; };
+	client.onScoreNpid = [&](const shadnet::ScoreRangeResult&) { actionDone = true; };
+	client.onScoreFriends = [&](const shadnet::ScoreRangeResult&) { actionDone = true; };
 
 	// Step 1 — login
 	client.login(npid, password, "");
@@ -151,6 +153,7 @@ int main(int argc, char* argv[])
 			static_cast<uint32_t>(atoi(argv[9])));
 	}
 	else if (strcmp(command, "score-get-npid") == 0) {
+		if (argc < 9) { printf("score-get-npid: <comId> <boardId> <target_npid> [pcId]\n"); client.disconnect(); return 1; }
 		int32_t pcId = (argc >= 10) ? static_cast<int32_t>(atoi(argv[9])) : 0;
 		client.getScoreNpid(argv[6],
 			static_cast<uint32_t>(atoi(argv[7])),

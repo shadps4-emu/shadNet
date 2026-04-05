@@ -2,38 +2,38 @@ syntax = "proto3";
 
 package score;
 
-// Board configuration
+option optimize_for = LITE_RUNTIME;
+
+//Board configuration
 
 message BoardInfo {
     uint32 rankLimit       = 1;
-    uint32 updateMode      = 2;  // 0=NORMAL_UPDATE, 1=FORCE_UPDATE
-    uint32 sortMode        = 3;  // 0=DESCENDING, 1=ASCENDING
+    uint32 updateMode      = 2;   // 0=NORMAL_UPDATE, 1=FORCE_UPDATE
+    uint32 sortMode        = 3;   // 0=DESCENDING, 1=ASCENDING
     uint32 uploadNumLimit  = 4;
     uint32 uploadSizeLimit = 5;
 }
 
-// Score submission
+//Requests
 
 message RecordScoreRequest {
     uint32 boardId  = 1;
     int32  pcId     = 2;
     int64  score    = 3;
     string comment  = 4;
-    bytes  data     = 5;  // optional inline game-info blob (not the large file)
+    bytes  data     = 5;   // optional inline game-info blob
 }
 
 message RecordScoreGameDataRequest {
-    uint32 boardId = 1;
-    int32  pcId    = 2;
-    int64  score   = 3;  // must match the score from the preceding RecordScore
+    uint32 boardId  = 1;
+    int32  pcId     = 2;
+    int64  score    = 3;
 }
 
-// Score retrieval
-
 message GetScoreGameDataRequest {
-    uint32 boardId = 1;
-    string npId    = 2;
-    int32  pcId    = 3;
+    uint32 boardId  = 1;
+    string npId     = 2;
+    int32  pcId     = 3;
 }
 
 message GetScoreRangeRequest {
@@ -51,7 +51,7 @@ message ScoreNpIdPcId {
 
 message GetScoreNpIdRequest {
     uint32             boardId      = 1;
-    repeated ScoreNpIdPcId npids    = 2;
+    repeated ScoreNpIdPcId npids   = 2;
     bool               withComment  = 3;
     bool               withGameInfo = 4;
 }
@@ -64,16 +64,16 @@ message GetScoreFriendsRequest {
     bool   withGameInfo = 5;
 }
 
-// Score response
+//Response
 
 message ScoreRankData {
-    string   npId        = 1;
-    string   onlineName  = 2;
-    int32    pcId        = 3;
-    uint32   rank        = 4;
-    int64    score       = 5;
-    bool     hasGameData = 6;
-    uint64   recordDate  = 7;
+    string npId        = 1;
+    string onlineName  = 2;
+    int32  pcId        = 3;
+    uint32 rank        = 4;
+    int64  score       = 5;
+    bool   hasGameData = 6;
+    uint64 recordDate  = 7;
 }
 
 message ScoreInfo {

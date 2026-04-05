@@ -384,9 +384,9 @@ void ShadNetClient::handlePacket(const Packet& pkt)
 	case CommandType::RecordScore:     handleRecordScoreReply(pkt.payload);     break;
 	case CommandType::RecordScoreData: handleRecordScoreDataReply(pkt.payload); break;
 	case CommandType::GetScoreData:    handleGetScoreDataReply(pkt.payload);    break;
-	case CommandType::GetScoreRange:
-	case CommandType::GetScoreFriends:
-	case CommandType::GetScoreNpid:    handleScoreRangeReply(pkt.payload);      break;
+	case CommandType::GetScoreRange:   handleScoreRangeReply(pkt.payload, onScoreRange);   break;
+	case CommandType::GetScoreFriends: handleScoreRangeReply(pkt.payload, onScoreFriends); break;
+	case CommandType::GetScoreNpid:    handleScoreRangeReply(pkt.payload, onScoreNpid);    break;
 	default:
 		printf("[recv] Unhandled reply command=%u\n", pkt.command);             break;
 	}
@@ -458,20 +458,22 @@ void ShadNetClient::handleGetScoreDataReply(const std::vector<uint8_t>& payload)
 	if (onGetScoreData) onGetScoreData(err, data);
 }
 
-void ShadNetClient::handleScoreRangeReply(const std::vector<uint8_t>& payload)
+void ShadNetClient::handleScoreRangeReply(
+	const std::vector<uint8_t>& payload,
+	std::function<void(const ScoreRangeResult&)>& cb)
 {
 	ScoreRangeResult result;
-	if (payload.empty()) { if (onScoreRange) onScoreRange(result); return; }
+	if (payload.empty()) { if (cb) cb(result); return; }
 	result.error = static_cast<ErrorType>(payload[0]);
 	if (result.error != ErrorType::NoError) {
 		printf("[score-range] FAILED: %s\n", errorName(result.error));
-		if (onScoreRange) onScoreRange(result); return;
+		if (cb) cb(result); return;
 	}
 
 	score::GetScoreResponse pb;
 	if (!pb.ParseFromString(extractBlob(payload, 1))) {
 		printf("[score-range] Failed to parse GetScoreResponse\n");
-		if (onScoreRange) onScoreRange(result); return;
+		if (cb) cb(result); return;
 	}
 
 	result.lastSortDate = pb.lastsortdate();
@@ -508,5 +510,5 @@ void ShadNetClient::handleScoreRangeReply(const std::vector<uint8_t>& payload)
 			printf("       comment: %s\n", e.comment.c_str());
 	}
 	if (result.entries.empty()) printf("  (no scores)\n");
-	if (onScoreRange) onScoreRange(result);
+	if (cb) cb(result);
 }

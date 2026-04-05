@@ -141,7 +141,9 @@ namespace shadnet
 		std::function<void(const RecordScoreResult&)>               onRecordScore;
 		std::function<void(ErrorType)>                              onRecordScoreData;
 		std::function<void(ErrorType, const std::vector<uint8_t>&)> onGetScoreData;
-		std::function<void(const ScoreRangeResult&)>                onScoreRange;
+		std::function<void(const ScoreRangeResult&)> onScoreRange;
+		std::function<void(const ScoreRangeResult&)> onScoreNpid;
+		std::function<void(const ScoreRangeResult&)> onScoreFriends;
 
 		std::function<void(const NotifyFriendQuery&)>  onFriendQuery;
 		std::function<void(const NotifyFriendNew&)>    onFriendNew;
@@ -168,7 +170,8 @@ namespace shadnet
 		void handleRecordScoreReply(const std::vector<uint8_t>& payload);
 		void handleRecordScoreDataReply(const std::vector<uint8_t>& payload);
 		void handleGetScoreDataReply(const std::vector<uint8_t>& payload);
-		void handleScoreRangeReply(const std::vector<uint8_t>& payload);
+		void handleScoreRangeReply(const std::vector<uint8_t>& payload,
+			std::function<void(const ScoreRangeResult&)>& cb);
 
 		std::string m_pendingFriendNpid;
 		CommandType m_pendingFriendCmd = CommandType::AddFriend;
