@@ -70,18 +70,36 @@ jobs:
     outputs:
       version: ${{ steps.resolve.outputs.version }}
     steps:
-    - name: Resolve latest available Qt6
+    - name: Resolve latest installable Qt6
       id: resolve
       run: |
         pip install aqtinstall --quiet
-        # List all available Qt6 versions for windows/desktop, sort, take the newest
-        VER=$(python -m aqt list-qt windows desktop \
-              | tr ' ' '\n' \
-              | grep '^6\.' \
-              | sort -V \
-              | tail -1)
-        echo "Resolved Qt6: $VER"
-        echo "version=$VER" >> $GITHUB_OUTPUT
+ 
+        # All known Qt6 versions, newest first
+        VERSIONS=$(python -m aqt list-qt windows desktop \
+                   | tr ' ' '\n' \
+                   | grep '^6\.' \
+                   | sort -rV)
+ 
+        SELECTED=""
+        for VER in $VERSIONS; do
+          echo "Checking Qt $VER..."
+          # --arch queries the per-version Updates.xml; non-zero exit = not ready yet
+          if python -m aqt list-qt windows desktop --arch "$VER" 2>/dev/null \
+             | grep -q 'win64_msvc2022_64'; then
+            SELECTED="$VER"
+            break
+          fi
+          echo "  Qt $VER not yet available on mirrors, trying older version."
+        done
+ 
+        if [ -z "$SELECTED" ]; then
+          echo "ERROR: no installable Qt6 version found."
+          exit 1
+        fi
+ 
+        echo "Selected Qt6: $SELECTED"
+        echo "version=$SELECTED" >> $GITHUB_OUTPUT
 
   get-info:
     runs-on: ubuntu-24.04
