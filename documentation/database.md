@@ -184,3 +184,15 @@ CREATE TABLE IF NOT EXISTS score (
 | `game_info` | BLOB | Optional small inline game data blob submitted with the score (not the large game data file); NULL if omitted |
 | `data_id` | INTEGER | ID of the associated score-data file in `score_data/`; NULL until `RecordScoreData` is called |
 | `timestamp` | INTEGER | PSN timestamp in microseconds since the Common Era epoch (0001-01-01), set at the time of submission |
+
+**Score lifecycle:**
+
+`RecordScore` inserts or replaces a row depending on `update_mode`. With `NORMAL_UPDATE` the `WHERE excluded.score >= score` (or `<= score` for ASCENDING) clause means the INSERT only takes effect if the new score is better — if not, `numRowsAffected()` returns 0 and the server returns `ScoreNotBest`.
+
+After a successful `RecordScore`, the client may optionally call `RecordScoreData` to attach a binary blob (replay data, ghost car data, etc.). This writes a file to the `score_data/` directory and sets `data_id` to the file's numeric ID. The `data_id` column stays NULL until that second call is made. `GetScoreData` reads the file back given a player's NP ID.
+
+**Score-data files:**
+
+Large per-score blobs are stored on disk as `score_data/<20-digit-id>.sdt` rather than in SQLite. This avoids bloating the database with multi-megabyte BLOBs. The `data_id` column is the link between a score row and its file. On server startup, any `.sdt` files whose IDs are not referenced by any `data_id` column are deleted as orphans.
+
+---
