@@ -232,6 +232,11 @@ Complete table of all `ErrorType` values. The error byte is always at offset 15 
 | `24` | `DbFail` | Database query failed |
 | `25` | `EmailFail` | Failed to send email |
 | `26` | `NotFound` | Requested resource does not exist |
+| `27` | `Blocked` | Operation blocked because a block exists on one or both sides |
+| `28` | `AlreadyFriend` | Friend request already sent, or already friends |
+| `29` | `ScoreNotBest` | Score rejected — a better score is already recorded for this user/character |
+| `30` | `ScoreInvalid` | `RecordScoreData` called with a score value that does not match the stored score |
+| `31` | `ScoreHasData` | `RecordScoreData` called on a score entry that already has game data attached |
 | `33` | `Unsupported` | Command recognised but not implemented |
 
 ---
@@ -354,6 +359,247 @@ Sending to yourself returns `InvalidInput`.
 
 ---
 
+## NPScore Commands
+
+All NPScore commands require login. Every request payload begins with a raw 12-byte **Communication ID** (`comId`) followed by a **protobuf-3 blob** length-prefixed with a `u32 LE` size field. The server reads the ComId with `getBytes(12)` and the protobuf blob with `getRawData()`.
+
+**Protobuf encoding:** all numeric fields use standard varint (wire type 0), strings and bytes use length-delimited (wire type 2). Fields at their default value (0 / empty) are omitted. See proto field numbers in each command's description.
+
+**Reply blobs** that carry data are also `u32 LE` size + bytes, matching `appendBlob()` on the server.
+
+---
+
+### GetBoardInfos (30)
+
+Query the configuration of a leaderboard. Requires login.
+
+**Request payload:**
+```
+comId    (12 bytes)  — Communication ID
+boardId  (u32 LE)    — Board number  [NOT protobuf — raw little-endian u32]
+```
+
+**Reply payload on success:**
+```
+size     (u32 LE)    — Length of following protobuf blob
+BoardInfo {
+  field 1  rankLimit       (uint32)
+  field 2  updateMode      (uint32)   0=NORMAL_UPDATE, 1=FORCE_UPDATE
+  field 3  sortMode        (uint32)   0=DESCENDING, 1=ASCENDING
+  field 4  uploadNumLimit  (uint32)
+  field 5  uploadSizeLimit (uint32)
+}
+```
+
+**Error codes:**
+
+| Error | Cause |
+|---|---|
+| `NoError` | Board info returned |
+| `NotFound` | No board with this comId/boardId exists |
+| `Malformed` | Payload could not be parsed |
+
+---
+
+### RecordScore (31)
+
+Submit a score to a leaderboard. Requires login.
+
+**Request payload:**
+```
+comId    (12 bytes)
+size     (u32 LE)    — Length of following protobuf blob
+RecordScoreRequest {
+  field 1  boardId  (uint32)
+  field 2  pcId     (int32)    character/slot index; 0 for single-character games
+  field 3  score    (int64)
+  field 4  comment  (string)   optional
+  field 5  data     (bytes)    optional inline game info blob (not the large game-data file)
+}
+```
+
+**Reply payload on success:**
+```
+rank (u32 LE)   — 1-based position achieved; rankLimit+1 means the score did not make the board
+```
+
+With `update_mode = NORMAL_UPDATE` the server only stores the score if it is better than the existing one. If not, `ScoreNotBest` is returned and no rank is written.
+
+**Error codes:**
+
+| Error | Cause |
+|---|---|
+| `NoError` | Score recorded; rank follows |
+| `ScoreNotBest` | NORMAL_UPDATE rejected — a better score already exists |
+| `DbFail` | Database error |
+| `Malformed` | Payload could not be parsed |
+
+---
+
+### RecordScoreData (32)
+
+Attach a binary game-data blob to the most recently recorded score. Must be called immediately after a successful `RecordScore`. Requires login.
+
+**Request payload:**
+```
+comId    (12 bytes)
+size     (u32 LE)    — Length of following protobuf blob
+RecordScoreGameDataRequest {
+  field 1  boardId  (uint32)
+  field 2  pcId     (int32)
+  field 3  score    (int64)   must match the score value from the preceding RecordScore
+}
+size     (u32 LE)    — Length of following raw data blob
+data     (raw bytes) — Arbitrary binary data (replay, ghost car, etc.)
+```
+
+**Reply payload:** error byte only.
+
+The server validates that the (boardId, userId, pcId, score) combination exists in the cache and has no data attached yet. The blob is written to `score_data/<id>.sdt` on disk and the `data_id` column in the `score` table is updated.
+
+**Error codes:**
+
+| Error | Cause |
+|---|---|
+| `NoError` | Data stored |
+| `NotFound` | No matching score entry in cache |
+| `ScoreInvalid` | Score value does not match the stored entry |
+| `ScoreHasData` | This score already has game data attached |
+| `DbFail` | File or database error |
+| `Malformed` | Payload could not be parsed |
+
+---
+
+### GetScoreData (33)
+
+Download the game-data blob for a specific player's score. Requires login.
+
+**Request payload:**
+```
+comId    (12 bytes)
+size     (u32 LE)
+GetScoreGameDataRequest {
+  field 1  boardId  (uint32)
+  field 2  npId     (string)  NP ID of the player whose data to retrieve
+  field 3  pcId     (int32)
+}
+```
+
+**Reply payload on success:**
+```
+size  (u32 LE)    — Length of following raw data blob
+data  (raw bytes) — The binary blob previously stored by RecordScoreData
+```
+
+**Error codes:**
+
+| Error | Cause |
+|---|---|
+| `NoError` | Data blob follows |
+| `NotFound` | Player has no score on this board, or no game data is attached |
+| `Malformed` | Payload could not be parsed (npId empty counts as Malformed) |
+
+---
+
+### GetScoreRange (34)
+
+Retrieve a range of leaderboard entries by rank position. Requires login.
+
+**Request payload:**
+```
+comId    (12 bytes)
+size     (u32 LE)
+GetScoreRangeRequest {
+  field 1  boardId      (uint32)
+  field 2  startRank    (uint32)  1-based
+  field 3  numRanks     (uint32)  how many entries to return
+  field 4  withComment  (bool)    include comment strings in reply
+  field 5  withGameInfo (bool)    include inline game-info blobs in reply
+}
+```
+
+**Reply payload on success:**
+```
+size  (u32 LE)
+GetScoreResponse {
+  field 1 (repeated)  ScoreRankData {
+    field 1  npId        (string)
+    field 2  onlineName  (string)
+    field 3  pcId        (int32)
+    field 4  rank        (uint32)   1-based
+    field 5  score       (int64)
+    field 6  hasGameData (bool)
+    field 7  recordDate  (uint64)   PSN timestamp (microseconds since CE epoch)
+  }
+  field 2 (repeated)  comment      (string)   only present when withComment=true
+  field 3 (repeated)  ScoreInfo {
+    field 1  data        (bytes)
+  }                                            only present when withGameInfo=true
+  field 4  lastSortDate (uint64)   timestamp of the last score insertion on this board
+  field 5  totalRecord  (uint32)   total number of entries on the board
+}
+```
+
+Returns an empty rank array (count=0) rather than an error when the board has no scores. `lastSortDate` and `totalRecord` are always present.
+
+**Error codes:**
+
+| Error | Cause |
+|---|---|
+| `NoError` | Reply follows (may be empty) |
+| `Malformed` | Payload could not be parsed |
+
+---
+
+### GetScoreFriends (35)
+
+Retrieve scores for the caller's online friends (and optionally the caller). Requires login.
+
+**Request payload:**
+```
+comId    (12 bytes)
+size     (u32 LE)
+GetScoreFriendsRequest {
+  field 1  boardId      (uint32)
+  field 2  includeSelf  (bool)
+  field 3  max          (uint32)  maximum number of friend entries to return
+  field 4  withComment  (bool)
+  field 5  withGameInfo (bool)
+}
+```
+
+**Reply payload:** same `GetScoreResponse` format as `GetScoreRange`. One entry per friend (or self) in the result; entries for friends with no score on this board are returned as zero/default values.
+
+**Error codes:** same as `GetScoreRange`.
+
+---
+
+### GetScoreNpid (36)
+
+Retrieve scores for an explicit list of NP IDs. Requires login.
+
+**Request payload:**
+```
+comId    (12 bytes)
+size     (u32 LE)
+GetScoreNpIdRequest {
+  field 1  boardId      (uint32)
+  field 2 (repeated)   ScoreNpIdPcId {
+    field 1  npid  (string)
+    field 2  pcId  (int32)
+  }
+  field 3  withComment  (bool)
+  field 4  withGameInfo (bool)
+}
+```
+
+**Reply payload:** same `GetScoreResponse` format. One entry per `ScoreNpIdPcId` in the request, in the same order. Entries for NP IDs with no score on this board are returned as zero/default values.
+
+**Error codes:** same as `GetScoreRange`.
+
+---
+
+
 ### RemoveBlock (11)
 
 Unblock a previously blocked user. Requires login.
@@ -442,32 +688,6 @@ npid\0              — NP ID of the user whose status changed
 ```
 
 The CE epoch is `Unix epoch + 62,135,596,800 seconds`. Convert to Unix time by subtracting `62135596800000000` microseconds.
-
-Complete table of all `ErrorType` values. The error byte is always at offset 15 of every Reply packet.
-
-| Value | Name | Description |
-|---|---|---|
-| `0` | `NoError` | Success |
-| `1` | `Malformed` | Packet payload could not be parsed (missing or truncated fields) |
-| `2` | `Invalid` | Command not valid in current state |
-| `3` | `InvalidInput` | A field failed format or content validation |
-| `4` | `TooSoon` | Rate limit — the same operation was performed too recently |
-| `5` | `LoginError` | Generic login failure (account banned, or internal error) |
-| `6` | `LoginAlreadyLoggedIn` | A session for this account is already active |
-| `7` | `LoginInvalidUsername` | *(unused — folded into `LoginInvalidPassword`)* |
-| `8` | `LoginInvalidPassword` | NP ID not found, or password hash mismatch |
-| `9` | `LoginInvalidToken` | Email validation token missing or incorrect |
-| `10` | `CreationError` | Database insert failed during account creation |
-| `11` | `CreationExistingUsername` | NP ID already registered |
-| `12` | `CreationBannedEmailProvider` | Email domain is banned |
-| `13` | `CreationExistingEmail` | Email address already registered |
-| `23` | `Unauthorized` | Command requires authentication, or insufficient privileges |
-| `24` | `DbFail` | Database query failed |
-| `25` | `EmailFail` | Failed to send email |
-| `26` | `NotFound` | Requested resource does not exist |
-| `27` | `Blocked` | Operation blocked because a block exists on one or both sides |
-| `28` | `AlreadyFriend` | Friend request already sent, or already friends |
-| `33` | `Unsupported` | Command recognised but not implemented |
 
 ---
 
