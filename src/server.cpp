@@ -109,7 +109,7 @@ bool ShadNetServer::InitScoreSystem() {
 bool ShadNetServer::LoadScoreboardsCfg(const QString& path) {
     QFile f(path);
     if (!f.exists()) {
-        qInfo() << "No scoreboards.cfg found — boards will be created on first access";
+        qInfo() << "No scoreboards.cfg found,boards will be created on first access";
         return true;
     }
     if (!f.open(QIODevice::ReadOnly | QIODevice::Text)) {

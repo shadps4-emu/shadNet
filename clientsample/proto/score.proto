@@ -2,7 +2,7 @@ syntax = "proto3";
 
 package score;
 
-// ── Board configuration ───────────────────────────────────────────────────────
+// Board configuration
 
 message BoardInfo {
     uint32 rankLimit       = 1;
@@ -12,7 +12,7 @@ message BoardInfo {
     uint32 uploadSizeLimit = 5;
 }
 
-// ── Score submission ──────────────────────────────────────────────────────────
+// Score submission
 
 message RecordScoreRequest {
     uint32 boardId  = 1;
@@ -28,7 +28,7 @@ message RecordScoreGameDataRequest {
     int64  score   = 3;  // must match the score from the preceding RecordScore
 }
 
-// ── Score retrieval ───────────────────────────────────────────────────────────
+// Score retrieval
 
 message GetScoreGameDataRequest {
     uint32 boardId = 1;
@@ -64,7 +64,7 @@ message GetScoreFriendsRequest {
     bool   withGameInfo = 5;
 }
 
-// ── Score response ────────────────────────────────────────────────────────────
+// Score response
 
 message ScoreRankData {
     string   npId        = 1;
