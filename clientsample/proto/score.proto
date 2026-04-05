@@ -1,0 +1,89 @@
+syntax = "proto3";
+
+package score;
+
+// ── Board configuration ───────────────────────────────────────────────────────
+
+message BoardInfo {
+    uint32 rankLimit       = 1;
+    uint32 updateMode      = 2;  // 0=NORMAL_UPDATE, 1=FORCE_UPDATE
+    uint32 sortMode        = 3;  // 0=DESCENDING, 1=ASCENDING
+    uint32 uploadNumLimit  = 4;
+    uint32 uploadSizeLimit = 5;
+}
+
+// ── Score submission ──────────────────────────────────────────────────────────
+
+message RecordScoreRequest {
+    uint32 boardId  = 1;
+    int32  pcId     = 2;
+    int64  score    = 3;
+    string comment  = 4;
+    bytes  data     = 5;  // optional inline game-info blob (not the large file)
+}
+
+message RecordScoreGameDataRequest {
+    uint32 boardId = 1;
+    int32  pcId    = 2;
+    int64  score   = 3;  // must match the score from the preceding RecordScore
+}
+
+// ── Score retrieval ───────────────────────────────────────────────────────────
+
+message GetScoreGameDataRequest {
+    uint32 boardId = 1;
+    string npId    = 2;
+    int32  pcId    = 3;
+}
+
+message GetScoreRangeRequest {
+    uint32 boardId      = 1;
+    uint32 startRank    = 2;
+    uint32 numRanks     = 3;
+    bool   withComment  = 4;
+    bool   withGameInfo = 5;
+}
+
+message ScoreNpIdPcId {
+    string npid = 1;
+    int32  pcId = 2;
+}
+
+message GetScoreNpIdRequest {
+    uint32             boardId      = 1;
+    repeated ScoreNpIdPcId npids    = 2;
+    bool               withComment  = 3;
+    bool               withGameInfo = 4;
+}
+
+message GetScoreFriendsRequest {
+    uint32 boardId      = 1;
+    bool   includeSelf  = 2;
+    uint32 max          = 3;
+    bool   withComment  = 4;
+    bool   withGameInfo = 5;
+}
+
+// ── Score response ────────────────────────────────────────────────────────────
+
+message ScoreRankData {
+    string   npId        = 1;
+    string   onlineName  = 2;
+    int32    pcId        = 3;
+    uint32   rank        = 4;
+    int64    score       = 5;
+    bool     hasGameData = 6;
+    uint64   recordDate  = 7;
+}
+
+message ScoreInfo {
+    bytes data = 1;
+}
+
+message GetScoreResponse {
+    repeated ScoreRankData rankArray    = 1;
+    repeated string        commentArray = 2;
+    repeated ScoreInfo     infoArray    = 3;
+    uint64                 lastSortDate = 4;
+    uint32                 totalRecord  = 5;
+}
