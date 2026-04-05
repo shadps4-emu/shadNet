@@ -4,6 +4,15 @@ project(shadnet-sample VERSION 1.0 LANGUAGES CXX)
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
+if(MSVC)
+    cmake_policy(SET CMP0091 NEW)  # Enable runtime library selection
+    # Use static runtime for consistency with your protobuf/abseil
+    set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
+    
+    # Fix exception handling and UTF-8 warnings
+    add_compile_options(/EHsc /utf-8)
+endif()
+
 if(NOT TARGET libprotobuf)
     add_subdirectory("${CMAKE_CURRENT_SOURCE_DIR}/../externals" externals)
 endif()
