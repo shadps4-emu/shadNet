@@ -29,8 +29,10 @@ ScoreTableCache& ScoreCache::GetOrCreate(const QString& comId, uint32_t boardId,
 
 static score::ScoreRankData ToRankData(const ScoreEntry& e, int index) {
     score::ScoreRankData r;
-    r.set_npid(e.npid.toStdString());
-    r.set_onlinename(e.onlineName.toStdString());
+    const QByteArray npidU8 = e.npid.toUtf8();
+    r.set_npid(npidU8.constData(), static_cast<size_t>(npidU8.size()));
+    const QByteArray nameU8 = e.onlineName.toUtf8();
+    r.set_onlinename(nameU8.constData(), static_cast<size_t>(nameU8.size()));
     r.set_pcid(e.characterId);
     r.set_rank(static_cast<uint32_t>(index + 1));
     r.set_score(e.score);
@@ -101,8 +103,11 @@ uint32_t ScoreCache::InsertScore(const QString& comId, uint32_t boardId,
 static void AppendEntry(score::GetScoreResponse& resp, const ScoreEntry& e, int idx,
                         bool withComment, bool withGameInfo) {
     *resp.add_rankarray() = ToRankData(e, idx);
-    if (withComment)
-        resp.add_commentarray(e.comment.toStdString());
+    if (withComment) {
+        const QByteArray commentU8 = e.comment.toUtf8();
+        resp.add_commentarray()->assign(commentU8.constData(),
+                                        static_cast<size_t>(commentU8.size()));
+    }
     if (withGameInfo) {
         auto* info = resp.add_infoarray();
         info->set_data(e.gameInfo.constData(), static_cast<size_t>(e.gameInfo.size()));

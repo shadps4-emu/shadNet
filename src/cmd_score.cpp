@@ -74,7 +74,7 @@ ErrorType ClientSession::CmdRecordScore(StreamExtractor& data, QByteArray& reply
     entry.userId = m_info.userId;
     entry.characterId = req.pcid();
     entry.score = req.score();
-    entry.comment = QString::fromStdString(req.comment());
+    entry.comment = QString::fromUtf8(req.comment().c_str(), static_cast<int>(req.comment().size()));
     entry.gameInfo = QByteArray(req.data().data(), static_cast<int>(req.data().size()));
     entry.timestamp = ShadNetTimestamp();
     entry.npid = m_info.npid;
@@ -147,7 +147,7 @@ ErrorType ClientSession::CmdGetScoreData(StreamExtractor& data, QByteArray& repl
 
     QString cid = comIdStr(comId);
     auto sdb = scoreDb(m_db.get());
-    auto uidOpt = sdb.UserIdForNpid(QString::fromStdString(req.npid()));
+    auto uidOpt = sdb.UserIdForNpid(QString::fromUtf8(req.npid().c_str(), static_cast<int>(req.npid().size())));
     if (!uidOpt)
         return ErrorType::NotFound;
 
@@ -226,7 +226,7 @@ ErrorType ClientSession::CmdGetScoreNpid(StreamExtractor& data, QByteArray& repl
     QVector<QPair<int64_t, int32_t>> ids;
     ids.reserve(req.npids_size());
     for (const auto& e : req.npids()) {
-        auto uid = sdb.UserIdForNpid(QString::fromStdString(e.npid()));
+        auto uid = sdb.UserIdForNpid(QString::fromUtf8(e.npid().c_str(), static_cast<int>(e.npid().size())));
         ids.append({uid.value_or(0), e.pcid()});
     }
 
