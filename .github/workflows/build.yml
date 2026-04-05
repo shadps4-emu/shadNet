@@ -46,13 +46,15 @@ jobs:
 
     - name: Check formatting
       env:
-        COMMIT_RANGE: ${{ github.event.pull_request.base.sha }}..${{ github.event.pull_request.head.sha }}
+        EVENT_NAME: ${{ github.event_name }}
+        BASE_SHA:   ${{ github.event.pull_request.base.sha }}
+        HEAD_SHA:   ${{ github.event.pull_request.head.sha }}
       run: |
-        if [ -n "$COMMIT_RANGE" ]; then
-          # PRs: only files changed in the PR
-          FILES=$(git diff --name-only "$COMMIT_RANGE" | grep -E '\.(cpp|h)$' || true)
+        if [ "$EVENT_NAME" = "pull_request" ] && [ -n "$BASE_SHA" ] && [ -n "$HEAD_SHA" ]; then
+          # PRs: only files touched in the PR
+          FILES=$(git diff --name-only "${BASE_SHA}..${HEAD_SHA}" | grep -E '\.(cpp|h)$' || true)
         else
-          # Pushes: all C++ files under src/ and clientsample/
+          # Pushes / workflow_dispatch: all C++ files under src/ and clientsample/
           FILES=$(find src clientsample -name '*.cpp' -o -name '*.h')
         fi
 
@@ -62,6 +64,24 @@ jobs:
         fi
 
         echo "$FILES" | xargs clang-format-19 --dry-run --Werror
+
+  get-qt-version:
+    runs-on: ubuntu-24.04
+    outputs:
+      version: ${{ steps.resolve.outputs.version }}
+    steps:
+    - name: Resolve latest available Qt6
+      id: resolve
+      run: |
+        pip install aqtinstall --quiet
+        # List all available Qt6 versions for windows/desktop, sort, take the newest
+        VER=$(python -m aqt list-qt windows desktop \
+              | tr ' ' '\n' \
+              | grep '^6\.' \
+              | sort -V \
+              | tail -1)
+        echo "Resolved Qt6: $VER"
+        echo "version=$VER" >> $GITHUB_OUTPUT
 
   get-info:
     runs-on: ubuntu-24.04
@@ -74,22 +94,22 @@ jobs:
     - name: Get date and git hash
       id: vars
       run: |
-        echo "date=$(date +'%Y-%m-%d')"                 >> $GITHUB_OUTPUT
-        echo "shorthash=$(git rev-parse --short HEAD)"  >> $GITHUB_OUTPUT
-        echo "fullhash=$(git rev-parse HEAD)"            >> $GITHUB_OUTPUT
+        echo "date=$(date +'%Y-%m-%d')"                >> $GITHUB_OUTPUT
+        echo "shorthash=$(git rev-parse --short HEAD)" >> $GITHUB_OUTPUT
+        echo "fullhash=$(git rev-parse HEAD)"           >> $GITHUB_OUTPUT
 
   windows:
     runs-on: windows-2025
-    needs: get-info
+    needs: [get-info, get-qt-version]
     steps:
     - uses: actions/checkout@v4
       with:
         submodules: recursive
 
-    - name: Install latest Qt6
+    - name: Install Qt6 ${{ needs.get-qt-version.outputs.version }}
       uses: jurplel/install-qt-action@v4
       with:
-        version: '6.*'           # Resolves to the latest available Qt6 release
+        version: ${{ needs.get-qt-version.outputs.version }}
         host: 'windows'
         target: 'desktop'
         arch: 'win64_msvc2022_64'
@@ -148,7 +168,7 @@ jobs:
 
   linux:
     runs-on: ubuntu-24.04
-    needs: get-info
+    needs: [get-info, get-qt-version]
     steps:
     - uses: actions/checkout@v4
       with:
@@ -167,10 +187,10 @@ jobs:
           clang-19 \
           qt6-base-dev libqt6sql6-sqlite
 
-    - name: Install latest Qt6
+    - name: Install Qt6 ${{ needs.get-qt-version.outputs.version }}
       uses: jurplel/install-qt-action@v4
       with:
-        version: '6.*'           # Resolves to the latest available Qt6 release
+        version: ${{ needs.get-qt-version.outputs.version }}
         host: 'linux'
         target: 'desktop'
         cache: true
