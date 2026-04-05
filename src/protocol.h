@@ -28,6 +28,14 @@ enum class CommandType : uint16_t {
     RemoveFriend = 9,
     AddBlock = 10,
     RemoveBlock = 11,
+    // (12–29: room/lobby/ticket commands not implemented here)
+    GetBoardInfos = 30,
+    RecordScore = 31,
+    RecordScoreData = 32,
+    GetScoreData = 33,
+    GetScoreRange = 34,
+    GetScoreFriends = 35,
+    GetScoreNpid = 36,
 };
 
 // Notification type IDs (u16 LE in Notification packet header).

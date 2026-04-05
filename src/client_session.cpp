@@ -137,6 +137,20 @@ ErrorType ClientSession::DispatchCommand(CommandType cmd, StreamExtractor& se, Q
         return CmdAddBlock(se);
     case CommandType::RemoveBlock:
         return CmdRemoveBlock(se);
+    case CommandType::GetBoardInfos:
+        return CmdGetBoardInfos(se, reply);
+    case CommandType::RecordScore:
+        return CmdRecordScore(se, reply);
+    case CommandType::RecordScoreData:
+        return CmdRecordScoreData(se);
+    case CommandType::GetScoreData:
+        return CmdGetScoreData(se, reply);
+    case CommandType::GetScoreRange:
+        return CmdGetScoreRange(se, reply);
+    case CommandType::GetScoreFriends:
+        return CmdGetScoreFriends(se, reply);
+    case CommandType::GetScoreNpid:
+        return CmdGetScoreNpid(se, reply);
     default:
         qWarning() << "Unknown command" << static_cast<uint16_t>(cmd);
         return ErrorType::Invalid;

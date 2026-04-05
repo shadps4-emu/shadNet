@@ -8,6 +8,8 @@
 #include <QTcpServer>
 #include "client_session.h"
 #include "config.h"
+#include "score_cache.h"
+#include "score_files.h"
 
 class ShadNetServer : public QObject {
     Q_OBJECT
@@ -23,10 +25,14 @@ private slots:
 
 private:
     void SpawnSession(QTcpSocket* socket, bool isSsl);
+    bool InitScoreSystem();
+    bool LoadScoreboardsCfg(const QString& path);
 
     ConfigManager* m_config = nullptr;
     QTcpServer* m_unsecuredServer = nullptr; // plain TCP connections
     SharedState m_shared;
-
     QString m_dbPath;
+
+    std::unique_ptr<ScoreCache> m_scoreCache;
+    std::unique_ptr<ScoreFiles> m_scoreFiles;
 };

@@ -7,13 +7,9 @@
 
 namespace shadnet
 {
-	// ── Result types ──────────────────────────────────────────────────────────
+	//Result types
 
-	struct FriendEntry
-	{
-		std::string npid;
-		bool        online = false;
-	};
+	struct FriendEntry { std::string npid; bool online = false; };
 
 	struct LoginResult
 	{
@@ -21,29 +17,66 @@ namespace shadnet
 		std::string onlineName;
 		std::string avatarUrl;
 		uint64_t    userId = 0;
-
-		// Populated on success.
 		std::vector<FriendEntry> friends;
 		std::vector<std::string> friendRequestsSent;
 		std::vector<std::string> friendRequestsReceived;
 		std::vector<std::string> blocked;
 	};
 
-	// Generic single-error result used by all friend commands.
 	struct FriendResult
 	{
 		CommandType cmd;
 		ErrorType   error = ErrorType::Malformed;
-		std::string targetNpid; // the npid we operated on
+		std::string targetNpid;
 	};
 
-	// Notification structs pushed by the server unsolicited.
+	// NPScore result types
+
+	struct BoardInfo
+	{
+		ErrorType error = ErrorType::Malformed;
+		uint32_t  rankLimit = 0;
+		uint32_t  updateMode = 0;   // 0=NORMAL_UPDATE, 1=FORCE_UPDATE
+		uint32_t  sortMode = 0;   // 0=DESCENDING, 1=ASCENDING
+		uint32_t  uploadNumLimit = 0;
+		uint32_t  uploadSizeLimit = 0;
+	};
+
+	struct ScoreRankEntry
+	{
+		std::string          npid;
+		std::string          onlineName;
+		int32_t              pcId = 0;
+		uint32_t             rank = 0;
+		int64_t              score = 0;
+		bool                 hasGameData = false;
+		uint64_t             recordDate = 0;
+		std::string          comment;    // only when withComment=true
+		std::vector<uint8_t> gameInfo;   // only when withGameInfo=true
+	};
+
+	struct ScoreRangeResult
+	{
+		ErrorType                   error = ErrorType::Malformed;
+		std::vector<ScoreRankEntry> entries;
+		uint64_t                    lastSortDate = 0;
+		uint32_t                    totalRecord = 0;
+	};
+
+	struct RecordScoreResult
+	{
+		ErrorType error = ErrorType::Malformed;
+		uint32_t  rank = 0;   // 1-based; rankLimit+1 = didn't make the board
+	};
+
+	// Notification structs
+
 	struct NotifyFriendQuery { std::string fromNpid; };
 	struct NotifyFriendNew { std::string npid; bool online; };
 	struct NotifyFriendLost { std::string npid; };
 	struct NotifyFriendStatus { std::string npid; bool online; uint64_t timestamp; };
 
-	// ── Client ────────────────────────────────────────────────────────────────
+	// ── Client──────
 
 	class ShadNetClient
 	{
@@ -52,7 +85,7 @@ namespace shadnet
 		void disconnect();
 		void update();
 
-		// ── Account commands ──────────────────────────────────────────────────
+		// Account commands
 		void login(const std::string& npid,
 			const std::string& password,
 			const std::string& token = {});
@@ -63,16 +96,54 @@ namespace shadnet
 			const std::string& avatarUrl,
 			const std::string& email);
 
-		// ── Friend commands (require prior successful login) ───────────────────
+		// Friend commands
 		void addFriend(const std::string& targetNpid);
 		void removeFriend(const std::string& targetNpid);
 		void addBlock(const std::string& targetNpid);
 		void removeBlock(const std::string& targetNpid);
 
-		// ── Callbacks ─────────────────────────────────────────────────────────
+		// NPScore commands 
+		// comId: 12-char Communication ID, e.g. "NPWR12345_00".
+
+		void getBoardInfos(const std::string& comId, uint32_t boardId);
+
+		void recordScore(const std::string& comId, uint32_t boardId,
+			int32_t pcId, int64_t score,
+			const std::string& comment = {},
+			const std::vector<uint8_t>& gameInfo = {});
+
+		void recordScoreData(const std::string& comId, uint32_t boardId,
+			int32_t pcId, int64_t score,
+			const std::vector<uint8_t>& data);
+
+		void getScoreData(const std::string& comId, uint32_t boardId,
+			const std::string& npid, int32_t pcId);
+
+		void getScoreRange(const std::string& comId, uint32_t boardId,
+			uint32_t startRank, uint32_t numRanks,
+			bool withComment = false, bool withGameInfo = false);
+
+		struct NpIdPcId { std::string npid; int32_t pcId = 0; };
+		void getScoreNpid(const std::string& comId, uint32_t boardId,
+			const std::vector<NpIdPcId>& targets,
+			bool withComment = false, bool withGameInfo = false);
+
+		void getScoreFriends(const std::string& comId, uint32_t boardId,
+			bool includeSelf = true, uint32_t max = 100,
+			bool withComment = false, bool withGameInfo = false);
+
+		// Callbacks
 		std::function<void(const LoginResult&)>  onLoginResult;
 		std::function<void(ErrorType)>           onCreateResult;
 		std::function<void(const FriendResult&)> onFriendResult;
+
+		std::function<void(const BoardInfo&)>                       onBoardInfos;
+		std::function<void(const RecordScoreResult&)>               onRecordScore;
+		std::function<void(ErrorType)>                              onRecordScoreData;
+		std::function<void(ErrorType, const std::vector<uint8_t>&)> onGetScoreData;
+		std::function<void(const ScoreRangeResult&)> onScoreRange;
+		std::function<void(const ScoreRangeResult&)> onScoreNpid;
+		std::function<void(const ScoreRangeResult&)> onScoreFriends;
 
 		std::function<void(const NotifyFriendQuery&)>  onFriendQuery;
 		std::function<void(const NotifyFriendNew&)>    onFriendNew;
@@ -95,8 +166,13 @@ namespace shadnet
 		void handleFriendReply(CommandType cmd, const std::vector<uint8_t>& payload);
 		void handleNotification(const Packet& pkt);
 
-		// Tracks the in-flight friend command so the reply handler can echo
-		// the target npid back through onFriendResult.
+		void handleBoardInfosReply(const std::vector<uint8_t>& payload);
+		void handleRecordScoreReply(const std::vector<uint8_t>& payload);
+		void handleRecordScoreDataReply(const std::vector<uint8_t>& payload);
+		void handleGetScoreDataReply(const std::vector<uint8_t>& payload);
+		void handleScoreRangeReply(const std::vector<uint8_t>& payload,
+			std::function<void(const ScoreRangeResult&)>& cb);
+
 		std::string m_pendingFriendNpid;
 		CommandType m_pendingFriendCmd = CommandType::AddFriend;
 	};

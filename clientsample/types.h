@@ -14,8 +14,6 @@ namespace shadnet
 		ServerInfo = 3
 	};
 
-	// Command codes must match the server exactly:
-	//   Login=0  Terminate=1  Create=2  Delete=3  SendToken=4 ...
 	enum class CommandType : uint16_t
 	{
 		Login = 0,
@@ -30,19 +28,24 @@ namespace shadnet
 		RemoveFriend = 9,
 		AddBlock = 10,
 		RemoveBlock = 11,
+		// (12–29: room/lobby commands not implemented here)
+		GetBoardInfos = 30,
+		RecordScore = 31,
+		RecordScoreData = 32,
+		GetScoreData = 33,
+		GetScoreRange = 34,
+		GetScoreFriends = 35,
+		GetScoreNpid = 36,
 	};
 
-	// Notification type IDs — carried in Notification packets (type=2).
-	// The server pushes these with no corresponding reply from the client.
 	enum class NotificationType : uint16_t
 	{
-		FriendQuery = 5,   // Someone sent you a friend request
-		FriendNew = 6,   // Mutual friendship formed
-		FriendLost = 7,   // Someone removed you
-		FriendStatus = 8,   // A friend came online / went offline
+		FriendQuery = 5,
+		FriendNew = 6,
+		FriendLost = 7,
+		FriendStatus = 8,
 	};
 
-	// Error codes returned in the reply payload byte [0]
 	enum class ErrorType : uint8_t
 	{
 		NoError = 0,
@@ -64,6 +67,9 @@ namespace shadnet
 		NotFound = 26,
 		Blocked = 27,
 		AlreadyFriend = 28,
+		ScoreNotBest = 29,
+		ScoreInvalid = 30,
+		ScoreHasData = 31,
 		Unsupported = 33,
 	};
 
@@ -90,6 +96,9 @@ namespace shadnet
 		case ErrorType::NotFound:                 return "NotFound";
 		case ErrorType::Blocked:                  return "Blocked";
 		case ErrorType::AlreadyFriend:            return "AlreadyFriend";
+		case ErrorType::ScoreNotBest:             return "ScoreNotBest";
+		case ErrorType::ScoreInvalid:             return "ScoreInvalid";
+		case ErrorType::ScoreHasData:             return "ScoreHasData";
 		case ErrorType::Unsupported:              return "Unsupported";
 		default:                                  return "Unknown";
 		}
@@ -103,12 +112,13 @@ namespace shadnet
 	inline uint32_t toLE32(uint32_t v)
 	{
 		uint32_t r; uint8_t* p = reinterpret_cast<uint8_t*>(&r);
-		p[0] = v & 0xFF; p[1] = (v >> 8) & 0xFF; p[2] = (v >> 16) & 0xFF; p[3] = (v >> 24) & 0xFF; return r;
+		p[0] = v & 0xFF; p[1] = (v >> 8) & 0xFF;
+		p[2] = (v >> 16) & 0xFF; p[3] = (v >> 24) & 0xFF; return r;
 	}
 	inline uint64_t toLE64(uint64_t v)
 	{
 		uint64_t r; uint8_t* p = reinterpret_cast<uint8_t*>(&r);
-		for (int i = 0; i < 8; ++i) { p[i] = (v >> (8 * i)) & 0xFF; } return r;
+		for (int i = 0; i < 8; ++i) p[i] = (v >> (8 * i)) & 0xFF; return r;
 	}
 	inline uint16_t fromLE16(const uint8_t* p)
 	{
