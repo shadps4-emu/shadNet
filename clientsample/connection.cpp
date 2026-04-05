@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: Copyright 2019-2026 rpcsn Project
+// SPDX-FileCopyrightText: Copyright 2026 shadNet Project
+// SPDX-License-Identifier: GPL-2.0-or-later
 #include <cstdio>
 #include <cstring>
 #include "connection.h"
