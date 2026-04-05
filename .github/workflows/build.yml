@@ -1,0 +1,277 @@
+# SPDX-FileCopyrightText: 2024 shadNet Project
+# SPDX-License-Identifier: GPL-2.0-or-later
+
+name: Build and Release
+
+on:
+  push:
+    paths-ignore:
+      - "**/*.md"
+
+  pull_request:
+    paths-ignore:
+      - "**/*.md"
+
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.event_name }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'push' }}
+
+env:
+  BUILD_TYPE: Release
+
+jobs:
+  reuse:
+    runs-on: ubuntu-24.04
+    continue-on-error: true
+    steps:
+    - uses: actions/checkout@v4
+    - uses: fsfe/reuse-action@v5
+
+  clang-format:
+    runs-on: ubuntu-24.04
+    continue-on-error: true
+    steps:
+    - uses: actions/checkout@v4
+      with:
+        fetch-depth: 0
+
+    - name: Install clang-format-19
+      run: |
+        wget -qO - https://apt.llvm.org/llvm-snapshot.gpg.key | sudo apt-key add -
+        sudo add-apt-repository 'deb http://apt.llvm.org/noble/ llvm-toolchain-noble-19 main'
+        sudo apt-get update
+        sudo apt-get install -y clang-format-19
+
+    - name: Check formatting
+      env:
+        COMMIT_RANGE: ${{ github.event.pull_request.base.sha }}..${{ github.event.pull_request.head.sha }}
+      run: |
+        if [ -n "$COMMIT_RANGE" ]; then
+          # PRs: only files changed in the PR
+          FILES=$(git diff --name-only "$COMMIT_RANGE" | grep -E '\.(cpp|h)$' || true)
+        else
+          # Pushes: all C++ files under src/ and clientsample/
+          FILES=$(find src clientsample -name '*.cpp' -o -name '*.h')
+        fi
+
+        if [ -z "$FILES" ]; then
+          echo "No C++ files to check."
+          exit 0
+        fi
+
+        echo "$FILES" | xargs clang-format-19 --dry-run --Werror
+
+  get-info:
+    runs-on: ubuntu-24.04
+    outputs:
+      date:      ${{ steps.vars.outputs.date }}
+      shorthash: ${{ steps.vars.outputs.shorthash }}
+      fullhash:  ${{ steps.vars.outputs.fullhash }}
+    steps:
+    - uses: actions/checkout@v4
+    - name: Get date and git hash
+      id: vars
+      run: |
+        echo "date=$(date +'%Y-%m-%d')"                 >> $GITHUB_OUTPUT
+        echo "shorthash=$(git rev-parse --short HEAD)"  >> $GITHUB_OUTPUT
+        echo "fullhash=$(git rev-parse HEAD)"            >> $GITHUB_OUTPUT
+
+  windows:
+    runs-on: windows-2025
+    needs: get-info
+    steps:
+    - uses: actions/checkout@v4
+      with:
+        submodules: recursive
+
+    - name: Install latest Qt6
+      uses: jurplel/install-qt-action@v4
+      with:
+        version: '6.*'           # Resolves to the latest available Qt6 release
+        host: 'windows'
+        target: 'desktop'
+        arch: 'win64_msvc2022_64'
+        cache: true
+
+    - name: Setup Visual Studio shell
+      uses: egor-tensin/vs-shell@v2
+      with:
+        arch: x64
+
+    - name: Cache CMake configuration
+      uses: actions/cache@v4
+      env:
+        cache-name: ${{ runner.os }}-cmake-config
+      with:
+        path: ${{ github.workspace }}/build
+        key: ${{ env.cache-name }}-${{ hashFiles('**/CMakeLists.txt', 'cmake/**') }}
+        restore-keys: ${{ env.cache-name }}-
+
+    - name: Cache CMake build
+      uses: hendrikmuhs/ccache-action@v1.2.21
+      env:
+        cache-name: ${{ runner.os }}-cmake-build
+      with:
+        append-timestamp: false
+        key: ${{ env.cache-name }}-${{ hashFiles('**/CMakeLists.txt', 'cmake/**') }}
+
+    - name: Configure CMake
+      run: >
+        cmake --fresh -G Ninja
+        -B ${{ github.workspace }}/build
+        -DCMAKE_BUILD_TYPE=${{ env.BUILD_TYPE }}
+        -DCMAKE_INTERPROCEDURAL_OPTIMIZATION_RELEASE=ON
+        -DCMAKE_C_COMPILER=clang-cl
+        -DCMAKE_CXX_COMPILER=clang-cl
+        -DCMAKE_C_COMPILER_LAUNCHER=ccache
+        -DCMAKE_CXX_COMPILER_LAUNCHER=ccache
+      shell: bash
+
+    - name: Build
+      run: cmake --build ${{ github.workspace }}/build --config ${{ env.BUILD_TYPE }} --parallel $env:NUMBER_OF_PROCESSORS
+
+    - name: Stage release
+      shell: pwsh
+      run: |
+        New-Item -ItemType Directory -Force staging
+        Copy-Item ${{ github.workspace }}/build/shadnet.exe staging/
+        # Copies Qt6 DLLs, sqldrivers/qsqlite.dll, and VC runtime alongside the exe
+        windeployqt6 --release --no-translations staging/shadnet.exe
+
+    - name: Upload Windows artifact
+      uses: actions/upload-artifact@v4
+      with:
+        name: shadnet-win64-${{ needs.get-info.outputs.date }}-${{ needs.get-info.outputs.shorthash }}
+        path: staging/
+
+  linux:
+    runs-on: ubuntu-24.04
+    needs: get-info
+    steps:
+    - uses: actions/checkout@v4
+      with:
+        submodules: recursive
+
+    - name: Add LLVM repository
+      run: |
+        wget -qO - https://apt.llvm.org/llvm-snapshot.gpg.key | sudo apt-key add -
+        sudo add-apt-repository 'deb http://apt.llvm.org/noble/ llvm-toolchain-noble-19 main'
+
+    - name: Install dependencies
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y \
+          ninja-build mold \
+          clang-19 \
+          qt6-base-dev libqt6sql6-sqlite
+
+    - name: Install latest Qt6
+      uses: jurplel/install-qt-action@v4
+      with:
+        version: '6.*'           # Resolves to the latest available Qt6 release
+        host: 'linux'
+        target: 'desktop'
+        cache: true
+
+    - name: Cache CMake configuration
+      uses: actions/cache@v4
+      env:
+        cache-name: ${{ runner.os }}-cmake-config
+      with:
+        path: ${{ github.workspace }}/build
+        key: ${{ env.cache-name }}-${{ hashFiles('**/CMakeLists.txt', 'cmake/**') }}
+        restore-keys: ${{ env.cache-name }}-
+
+    - name: Cache CMake build
+      uses: hendrikmuhs/ccache-action@v1.2.21
+      env:
+        cache-name: ${{ runner.os }}-cmake-build
+      with:
+        append-timestamp: false
+        key: ${{ env.cache-name }}-${{ hashFiles('**/CMakeLists.txt', 'cmake/**') }}
+
+    - name: Configure CMake
+      run: >
+        cmake --fresh -G Ninja
+        -B ${{ github.workspace }}/build
+        -DCMAKE_BUILD_TYPE=${{ env.BUILD_TYPE }}
+        -DCMAKE_INTERPROCEDURAL_OPTIMIZATION_RELEASE=ON
+        -DCMAKE_C_COMPILER=clang-19
+        -DCMAKE_CXX_COMPILER=clang++-19
+        -DCMAKE_EXE_LINKER_FLAGS="-fuse-ld=mold"
+        -DCMAKE_C_COMPILER_LAUNCHER=ccache
+        -DCMAKE_CXX_COMPILER_LAUNCHER=ccache
+
+    - name: Build
+      run: cmake --build ${{ github.workspace }}/build --config ${{ env.BUILD_TYPE }} --parallel $(nproc)
+
+    - name: Package
+      run: tar czf shadnet-linux64.tar.gz -C ${{ github.workspace }}/build shadnet
+
+    - name: Upload Linux artifact
+      uses: actions/upload-artifact@v4
+      with:
+        name: shadnet-linux64-${{ needs.get-info.outputs.date }}-${{ needs.get-info.outputs.shorthash }}
+        path: shadnet-linux64.tar.gz
+
+  pre-release:
+    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+    needs: [get-info, windows, linux]
+    runs-on: ubuntu-latest
+    steps:
+    - name: Download all artifacts
+      uses: actions/download-artifact@v4
+      with:
+        path: ./artifacts
+
+    - name: Compress artifacts
+      run: |
+        cd ./artifacts
+        for dir in */; do
+          dir_name=${dir%/}
+          echo "Zipping $dir_name"
+          (cd "$dir_name" && zip -r "../${dir_name}.zip" .)
+        done
+
+    - name: Get latest release tag
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      run: |
+        latest=$(curl -s -H "Authorization: token $GITHUB_TOKEN" \
+          "https://api.github.com/repos/${{ github.repository }}/releases/latest" \
+          | jq -r '.tag_name // "none"')
+        echo "last_release_tag=$latest" >> $GITHUB_ENV
+
+    - name: Create Pre-Release
+      uses: ncipollo/release-action@v1
+      with:
+        token: ${{ secrets.GITHUB_TOKEN }}
+        name: "shadnet-${{ needs.get-info.outputs.date }}-${{ needs.get-info.outputs.shorthash }}"
+        tag: "pre-release-shadnet-${{ needs.get-info.outputs.date }}-${{ needs.get-info.outputs.fullhash }}"
+        draft: false
+        prerelease: true
+        body: |
+          Full Changelog: [${{ env.last_release_tag }}...${{ needs.get-info.outputs.shorthash }}](https://github.com/${{ github.repository }}/compare/${{ env.last_release_tag }}...${{ needs.get-info.outputs.fullhash }})
+        artifacts: ./artifacts/*.zip
+
+    - name: Delete old pre-releases and tags
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      run: |
+        api_url="https://api.github.com/repos/${{ github.repository }}/releases"
+        current_tag="pre-release-shadnet-${{ needs.get-info.outputs.date }}-${{ needs.get-info.outputs.fullhash }}"
+        releases=$(curl -s -H "Authorization: token $GITHUB_TOKEN" "$api_url")
+
+        echo "$releases" | jq -c '.[] | select(.prerelease == true)' | while read -r release; do
+          release_id=$(echo "$release"  | jq -r '.id')
+          release_tag=$(echo "$release" | jq -r '.tag_name')
+
+          if [[ "$release_tag" != "$current_tag" ]]; then
+            echo "Deleting old pre-release: $release_tag"
+            curl -s -X DELETE -H "Authorization: token $GITHUB_TOKEN" "$api_url/$release_id"
+            curl -s -X DELETE -H "Authorization: token $GITHUB_TOKEN" \
+              "https://api.github.com/repos/${{ github.repository }}/git/refs/tags/$release_tag"
+          fi
+        done
