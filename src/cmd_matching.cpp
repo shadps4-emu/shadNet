@@ -709,7 +709,7 @@ ErrorType ClientSession::CmdLeaveRoom(StreamExtractor& data, QByteArray& reply) 
         appendU64LE(leaveResponseBlob, roomId);
         QByteArray reqPayload = BuildRequestEventPayload(
             m_matching.ctxId, m_matching.serverId, m_matching.worldId, m_matching.lobbyId, 0x0103,
-            reqId, 0, roomId, myMemberId, 0, 0, false, leaveResponseBlob);
+            reqId, 0, roomId, myMemberId, 0, 0, wasOwner, leaveResponseBlob);
         SendSelfNotification(NotificationType::RequestEvent, reqPayload);
     }
 
