@@ -22,6 +22,10 @@ public:
         QReadLocker lk(&m_lock);
         return m_unsecured_port;
     }
+    QString GetMatchingUdpPort() const {
+        QReadLocker lk(&m_lock);
+        return m_matchingUdpPort;
+    }
     bool IsEmailValidated() const {
         QReadLocker lk(&m_lock);
         return m_emailValidated;
@@ -62,6 +66,7 @@ private:
     // config values
     QString m_host = "0.0.0.0";
     QString m_unsecured_port = "31313";
+    QString m_matchingUdpPort = "31314";
     bool m_emailValidated = false;
     QStringList m_adminsList;
     QSet<QString> m_bannedDomains;

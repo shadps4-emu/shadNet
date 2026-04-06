@@ -40,6 +40,12 @@ bool ShadNetServer::Start(ConfigManager* config) {
     else
         addr = QHostAddress(host);
 
+    // Start STUN/signaling UDP server
+    m_stunServer = new StunServer(&m_shared, this);
+    uint16_t udpPort = static_cast<uint16_t>(config->GetMatchingUdpPort().toUInt());
+    if (!m_stunServer->Start(addr, udpPort))
+        qWarning() << "STUN UDP listen failed on port" << udpPort;
+
     uint16_t plainPort = static_cast<uint16_t>(config->GetUnsecuredPort().toUInt());
     if (m_unsecuredServer->listen(addr, plainPort)) {
         qInfo().nospace() << "Unsesured TCP listener on " << addr.toString() << ":" << plainPort

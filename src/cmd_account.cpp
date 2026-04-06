@@ -10,7 +10,7 @@
 // fixed-layout presence blob.  Offline/unknown friends get an empty blob.
 // Layout: ComId(12) + title\0 + status\0 + comment\0 + data_len(u32) + data
 static void appendEmptyPresence(QByteArray& buf) {
-    // Empty ComId: 9 null bytes + '_' + '0' + '0'  (matches RPCS3 expectation)
+    // Empty ComId: 9 null bytes + '_' + '0' + '0'
     static const char emptyComId[12] = {0, 0, 0, 0, 0, 0, 0, 0, 0, '_', '0', '0'};
     buf.append(emptyComId, 12);
     buf.append('\0');    // title
@@ -160,6 +160,7 @@ ErrorType ClientSession::CmdLogin(StreamExtractor& data, QByteArray& reply) {
             }
         }
         m_shared->clients[user.userId] = std::move(entry);
+        m_shared->npidToUserId[npid] = user.userId;
     }
 
     // Notify online friends that we just came online.

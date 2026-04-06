@@ -31,7 +31,18 @@ enum class CommandType : uint16_t {
     RemoveFriend = 9,
     AddBlock = 10,
     RemoveBlock = 11,
-    // (12–29: room/lobby/ticket commands not implemented here)
+    // Matchmaking
+    RegisterHandlers = 12,
+    CreateRoom = 13,
+    JoinRoom = 14,
+    LeaveRoom = 15,
+    GetRoomList = 16,
+    RequestSignalingInfos = 17,
+    SignalingEstablished = 18,
+    ActivationConfirm = 19,
+    SetRoomDataInternal = 20,
+    SetRoomDataExternal = 21,
+    // TODO 22-29
     GetBoardInfos = 30,
     RecordScore = 31,
     RecordScoreData = 32,
@@ -39,6 +50,7 @@ enum class CommandType : uint16_t {
     GetScoreRange = 34,
     GetScoreFriends = 35,
     GetScoreNpid = 36,
+
 };
 
 // Notification type IDs (u16 LE in Notification packet header).
@@ -49,6 +61,14 @@ enum class NotificationType : uint16_t {
     FriendNew = 6,    // Mutual friendship formed (request accepted)
     FriendLost = 7,   // Someone removed you from their friend list
     FriendStatus = 8, // A friend came online or went offline
+    // Matchmaking
+    RequestEvent = 9,             // Room request completed (create/join/leave)
+    MemberJoined = 10,            // A member joined the room
+    MemberLeft = 11,              // A member left the room
+    SignalingHelper = 12,         // Peer P2P address exchange
+    SignalingEvent = 13,          // NpMatching2-layer signaling event (0x5102 ESTABLISHED)
+    NpSignalingEvent = 14,        // NpSignaling-layer event (activation confirmed)
+    RoomDataInternalUpdated = 15, // Room internal data changed (broadcast to other members)
 };
 
 // Error codes for Reply packets
