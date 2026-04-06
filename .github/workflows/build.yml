@@ -259,7 +259,7 @@ jobs:
 
     - name: Get latest release tag
       env:
-        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        GITHUB_TOKEN: ${{ secrets.SHADNET_TOKEN_REPO }}
       run: |
         latest=$(curl -s -H "Authorization: token $GITHUB_TOKEN" \
           "https://api.github.com/repos/${{ github.repository }}/releases/latest" \
