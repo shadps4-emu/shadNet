@@ -1,20 +1,12 @@
 @echo off
-:: Matching walkthrough — demonstrates the full room lifecycle with Shadow and Stephen.
+:: Matching walkthrough,demonstrates the full room lifecycle with Shadow and Stephen.
 :: Assumes setup-test-accounts.bat has already been run.
 ::
-:: Steps:
-::   1. Shadow lists rooms (empty)
-::   2. Shadow creates a room with 2 slots
-::   3. Shadow lists rooms again (sees her own room)
-::   4. Stephen joins the room
-::      — Server sends MemberJoined to Shadow
-::      — Server sends SignalingHelper to both sides with each other's P2P endpoint
-::      — After 2 s: server sends SignalingEvent(ESTABLISHED) to both sides
-::   5. Stephen lists rooms (sees the room with 2 members)
-::   6. Stephen leaves the room
-::      — Server sends MemberLeft to Shadow
-::   7. Shadow leaves the room (room is now empty and destroyed)
-::   8. Shadow lists rooms (empty again)
+:: Design: each user is allowed exactly one TCP connection at a time.  The server
+:: calls DoLeaveRoom when a connection drops, so the connection IS the room slot.
+:: room-create and room-join open an interactive session window that keeps the
+:: connection alive.  All subsequent commands for that user (room-list, room-leave)
+:: are typed into that same window rather than opening a new process.
 
 setlocal
 
@@ -30,51 +22,63 @@ echo.
 
 echo ============================================================
 echo  Step 2: Shadow creates a 2-slot room
+echo    A new window opens.  It stays connected,the connection
+echo    IS Shadow's room membership (server removes her on disconnect).
 echo ============================================================
-"%EXE%" %HOST% %PORT% room-create Shadow 1234 2
+start "Shadow session" "%EXE%" %HOST% %PORT% room-create Shadow 1234 2
 echo.
 
-echo  NOTE: copy the roomId from the output above and set it below.
+echo  Look at the "Shadow session" window for the roomId, then come back here.
 set /p ROOM_ID="Enter roomId: "
 
 echo ============================================================
-echo  Step 3: Room list — should show Shadow's room
+echo  Step 3: Room list,should show Shadow's room
+echo    Type this in the SHADOW SESSION window:
+echo      room-list
 echo ============================================================
-"%EXE%" %HOST% %PORT% room-list Shadow 1234
 echo.
+pause
 
 echo ============================================================
 echo  Step 4: Stephen joins the room
-echo    Shadow will receive MemberJoined + SignalingHelper
-echo    Both will receive SignalingEvent(ESTABLISHED) after ~2 s
+echo    A new window opens for Stephen.
+echo    Shadow's window will show MemberJoined + SignalingHelper.
+echo    Both sides get SignalingEvent(ESTABLISHED) after ~2 s.
 echo ============================================================
-"%EXE%" %HOST% %PORT% room-join Stephen 12345 %ROOM_ID%
+start "Stephen session" "%EXE%" %HOST% %PORT% room-join Stephen 12345 %ROOM_ID%
 echo.
-
-echo  (wait a moment for the delayed ESTABLISHED notification)
+echo  (wait a moment for join + delayed ESTABLISHED notification)
 timeout /t 3 /nobreak > nul
 
 echo ============================================================
-echo  Step 5: Room list — should show room with 2 members
+echo  Step 5: Room list,should show room with 2 members
+echo    Type this in the STEPHEN SESSION window:
+echo      room-list
 echo ============================================================
-"%EXE%" %HOST% %PORT% room-list Stephen 12345
 echo.
+pause
 
 echo ============================================================
 echo  Step 6: Stephen leaves the room
-echo    Shadow will receive MemberLeft
+echo    Type this in the STEPHEN SESSION window:
+echo      room-leave %ROOM_ID%
+echo    Shadow's window will show MemberLeft.
+echo    Stephen's window will exit automatically.
 echo ============================================================
-"%EXE%" %HOST% %PORT% room-leave Stephen 12345 %ROOM_ID%
 echo.
+pause
 
 echo ============================================================
 echo  Step 7: Shadow leaves the room (room destroyed)
+echo    Type this in the SHADOW SESSION window:
+echo      room-leave %ROOM_ID%
+echo    Shadow's window will exit automatically.
 echo ============================================================
-"%EXE%" %HOST% %PORT% room-leave Shadow 1234 %ROOM_ID%
 echo.
+pause
 
 echo ============================================================
-echo  Step 8: Room list — should be empty again
+echo  Step 8: Room list,should be empty again
 echo ============================================================
 "%EXE%" %HOST% %PORT% room-list Shadow 1234
 echo.

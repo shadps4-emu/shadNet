@@ -1,9 +1,12 @@
 // SPDX-FileCopyrightText: Copyright 2019-2026 rpcsn Project
 // SPDX-FileCopyrightText: Copyright 2026 shadNet Project
 // SPDX-License-Identifier: GPL-2.0-or-later
+#include <atomic>
 #include <chrono>
 #include <cstdio>
 #include <cstring>
+#include <mutex>
+#include <string>
 #include <thread>
 #include "client.h"
 
@@ -100,7 +103,7 @@ int main(int argc, char* argv[]) {
                    strcmp(command, "score-board") == 0 || strcmp(command, "score-record") == 0 ||
                    strcmp(command, "score-range") == 0 || strcmp(command, "score-get-npid") == 0 ||
                    strcmp(command, "room-create") == 0 || strcmp(command, "room-join") == 0 ||
-                   strcmp(command, "room-leave") == 0  || strcmp(command, "room-list") == 0;
+                   strcmp(command, "room-leave") == 0 || strcmp(command, "room-list") == 0;
 
     if (!isKnown) {
         printf("Unknown command: %s\n", command);
@@ -109,7 +112,7 @@ int main(int argc, char* argv[]) {
     }
 
     bool isScoreCmd = (strncmp(command, "score-", 6) == 0);
-    bool isRoomCmd  = (strncmp(command, "room-",  5) == 0);
+    bool isRoomCmd = (strncmp(command, "room-", 5) == 0);
 
     if (isScoreCmd && argc < 8) {
         printf("%s: <npid> <password> <comId> <boardId> ...\n", command);
@@ -136,19 +139,21 @@ int main(int argc, char* argv[]) {
         loginOk = (res.error == shadnet::ErrorType::NoError);
         loginDone = true;
     };
-    client.onFriendResult    = [&](const shadnet::FriendResult&)                 { actionDone = true; };
-    client.onBoardInfos      = [&](const shadnet::BoardInfo&)                    { actionDone = true; };
-    client.onRecordScore     = [&](const shadnet::RecordScoreResult&)            { actionDone = true; };
-    client.onRecordScoreData = [&](shadnet::ErrorType)                           { actionDone = true; };
-    client.onGetScoreData    = [&](shadnet::ErrorType, const std::vector<uint8_t>&) { actionDone = true; };
-    client.onScoreRange      = [&](const shadnet::ScoreRangeResult&)             { actionDone = true; };
-    client.onScoreNpid       = [&](const shadnet::ScoreRangeResult&)             { actionDone = true; };
-    client.onScoreFriends    = [&](const shadnet::ScoreRangeResult&)             { actionDone = true; };
-    client.onRegisterHandlers= [&](shadnet::ErrorType)                           { actionDone = true; };
-    client.onCreateRoom      = [&](const shadnet::CreateRoomResult&)             { actionDone = true; };
-    client.onJoinRoom        = [&](const shadnet::JoinRoomResult&)               { actionDone = true; };
-    client.onLeaveRoom       = [&](shadnet::ErrorType, uint64_t)                 { actionDone = true; };
-    client.onRoomList        = [&](const shadnet::RoomListResult&)               { actionDone = true; };
+    client.onFriendResult = [&](const shadnet::FriendResult&) { actionDone = true; };
+    client.onBoardInfos = [&](const shadnet::BoardInfo&) { actionDone = true; };
+    client.onRecordScore = [&](const shadnet::RecordScoreResult&) { actionDone = true; };
+    client.onRecordScoreData = [&](shadnet::ErrorType) { actionDone = true; };
+    client.onGetScoreData = [&](shadnet::ErrorType, const std::vector<uint8_t>&) {
+        actionDone = true;
+    };
+    client.onScoreRange = [&](const shadnet::ScoreRangeResult&) { actionDone = true; };
+    client.onScoreNpid = [&](const shadnet::ScoreRangeResult&) { actionDone = true; };
+    client.onScoreFriends = [&](const shadnet::ScoreRangeResult&) { actionDone = true; };
+    client.onRegisterHandlers = [&](shadnet::ErrorType) { actionDone = true; };
+    client.onCreateRoom = [&](const shadnet::CreateRoomResult&) { actionDone = true; };
+    client.onJoinRoom = [&](const shadnet::JoinRoomResult&) { actionDone = true; };
+    client.onLeaveRoom = [&](shadnet::ErrorType, uint64_t) { actionDone = true; };
+    client.onRoomList = [&](const shadnet::RoomListResult&) { actionDone = true; };
 
     // Step 1 — login
     client.login(npid, password, "");
@@ -233,6 +238,94 @@ int main(int argc, char* argv[]) {
     for (int i = 0; i < 20; ++i) {
         client.update();
         std::this_thread::sleep_for(std::chrono::milliseconds(10));
+    }
+
+    if (strcmp(command, "room-create") == 0 || strcmp(command, "room-join") == 0) {
+        std::atomic<bool> sessionActive{true};
+        std::atomic<bool> commandReady{false};
+        std::string pendingCmd;
+        std::mutex cmdMutex;
+
+        // Stdin reader thread: blocks on fgets, hands each line to the main thread.
+        std::thread stdinThread([&]() {
+            char buf[256];
+            printf("[session] Commands: room-list  |  room-leave <roomId>  |  quit\n");
+            while (sessionActive) {
+                printf("> ");
+                fflush(stdout);
+                if (!fgets(buf, sizeof(buf), stdin))
+                    break;
+
+                // Strip \r\n
+                size_t len = strlen(buf);
+                while (len > 0 && (buf[len - 1] == '\n' || buf[len - 1] == '\r'))
+                    buf[--len] = '\0';
+
+                {
+                    std::lock_guard<std::mutex> lk(cmdMutex);
+                    pendingCmd = buf;
+                    commandReady = true;
+                }
+                // Wait for main thread to consume before prompting again
+                while (commandReady && sessionActive)
+                    std::this_thread::sleep_for(std::chrono::milliseconds(1));
+            }
+        });
+
+        // Main thread: poll network + dispatch commands handed over by stdin thread.
+        while (sessionActive) {
+            // Drain socket — this dispatches any received notifications immediately.
+            client.update();
+
+            if (commandReady) {
+                std::string cmd;
+                {
+                    std::lock_guard<std::mutex> lk(cmdMutex);
+                    cmd = pendingCmd;
+                    commandReady = false; // let stdin thread continue
+                }
+
+                if (cmd == "quit" || cmd == "exit") {
+                    printf("[session] Disconnecting.\n");
+                    sessionActive = false;
+
+                } else if (cmd == "room-list") {
+                    actionDone = false;
+                    client.onRoomList = [&](const shadnet::RoomListResult&) { actionDone = true; };
+                    client.getRoomList();
+                    pollUntil(client, actionDone, 5000);
+
+                } else if (cmd.rfind("room-leave", 0) == 0) {
+                    uint64_t leaveId = 0;
+                    if (cmd.size() > 11)
+                        leaveId = static_cast<uint64_t>(std::stoull(cmd.substr(11)));
+                    if (leaveId == 0) {
+                        printf("[session] Usage: room-leave <roomId>\n");
+                    } else {
+                        actionDone = false;
+                        client.onLeaveRoom = [&](shadnet::ErrorType, uint64_t) {
+                            actionDone = true;
+                        };
+                        client.leaveRoom(leaveId, 1);
+                        pollUntil(client, actionDone, 5000);
+                        // Drain so any final notifications (MemberLeft to others) are sent
+                        for (int i = 0; i < 20; ++i) {
+                            client.update();
+                            std::this_thread::sleep_for(std::chrono::milliseconds(10));
+                        }
+                        sessionActive = false;
+                    }
+
+                } else if (!cmd.empty()) {
+                    printf("[session] Unknown: %s\n", cmd.c_str());
+                    printf("[session] Commands: room-list  |  room-leave <roomId>  |  quit\n");
+                }
+            }
+
+            std::this_thread::sleep_for(std::chrono::milliseconds(10));
+        }
+
+        stdinThread.join();
     }
 
     client.disconnect();

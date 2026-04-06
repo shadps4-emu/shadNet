@@ -19,43 +19,43 @@ enum class CommandType : uint16_t {
     SendResetToken = 5,
     ResetPassword = 6,
     ResetState = 7,
-    AddFriend    = 8,
+    AddFriend = 8,
     RemoveFriend = 9,
-    AddBlock     = 10,
-    RemoveBlock  = 11,
+    AddBlock = 10,
+    RemoveBlock = 11,
     // Matchmaking
-    RegisterHandlers      = 12,
-    CreateRoom            = 13,
-    JoinRoom              = 14,
-    LeaveRoom             = 15,
-    GetRoomList           = 16,
+    RegisterHandlers = 12,
+    CreateRoom = 13,
+    JoinRoom = 14,
+    LeaveRoom = 15,
+    GetRoomList = 16,
     RequestSignalingInfos = 17,
-    SignalingEstablished  = 18,
-    ActivationConfirm     = 19,
-    SetRoomDataInternal   = 20,
-    SetRoomDataExternal   = 21,
+    SignalingEstablished = 18,
+    ActivationConfirm = 19,
+    SetRoomDataInternal = 20,
+    SetRoomDataExternal = 21,
     // (22–29 reserved)
-    GetBoardInfos   = 30,
-    RecordScore     = 31,
+    GetBoardInfos = 30,
+    RecordScore = 31,
     RecordScoreData = 32,
-    GetScoreData    = 33,
-    GetScoreRange   = 34,
+    GetScoreData = 33,
+    GetScoreRange = 34,
     GetScoreFriends = 35,
-    GetScoreNpid    = 36,
+    GetScoreNpid = 36,
 };
 
 enum class NotificationType : uint16_t {
-    FriendQuery  = 5,
-    FriendNew    = 6,
-    FriendLost   = 7,
+    FriendQuery = 5,
+    FriendNew = 6,
+    FriendLost = 7,
     FriendStatus = 8,
     // Matchmaking
-    RequestEvent            = 9,  // Room request completed (create/join/leave)
-    MemberJoined            = 10, // A member joined the room
-    MemberLeft              = 11, // A member left the room
-    SignalingHelper         = 12, // Peer P2P address exchange
-    SignalingEvent          = 13, // NpMatching2-layer signaling (0x5102 ESTABLISHED)
-    NpSignalingEvent        = 14, // NpSignaling-layer activation event
+    RequestEvent = 9,             // Room request completed (create/join/leave)
+    MemberJoined = 10,            // A member joined the room
+    MemberLeft = 11,              // A member left the room
+    SignalingHelper = 12,         // Peer P2P address exchange
+    SignalingEvent = 13,          // NpMatching2-layer signaling (0x5102 ESTABLISHED)
+    NpSignalingEvent = 14,        // NpSignaling-layer activation event
     RoomDataInternalUpdated = 15, // Room internal data changed
 };
 
@@ -74,14 +74,25 @@ enum class ErrorType : uint8_t {
     CreationExistingUsername = 11,
     CreationBannedEmail = 12,
     CreationExistingEmail = 13,
+    RoomMissing = 14,
+    RoomAlreadyJoined = 15,
+    RoomFull = 16,
+    RoomPasswordMismatch = 17,
+    RoomPasswordMissing = 18,
+    RoomGroupNoJoinLabel = 19,
+    RoomGroupFull = 20,
+    RoomGroupJoinLabelNotFound = 21,
+    RoomGroupMaxSlotMismatch = 22,
     Unauthorized = 23,
     DbFail = 24,
+    EmailFail = 25,
     NotFound = 26,
     Blocked = 27,
     AlreadyFriend = 28,
     ScoreNotBest = 29,
     ScoreInvalid = 30,
     ScoreHasData = 31,
+    CondFail = 32,
     Unsupported = 33,
 };
 
@@ -115,10 +126,30 @@ inline const char* errorName(ErrorType e) {
         return "CreationBannedEmail";
     case ErrorType::CreationExistingEmail:
         return "CreationExistingEmail";
+    case ErrorType::RoomMissing:
+        return "RoomMissing";
+    case ErrorType::RoomAlreadyJoined:
+        return "RoomAlreadyJoined";
+    case ErrorType::RoomFull:
+        return "RoomFull";
+    case ErrorType::RoomPasswordMismatch:
+        return "RoomPasswordMismatch";
+    case ErrorType::RoomPasswordMissing:
+        return "RoomPasswordMissing";
+    case ErrorType::RoomGroupNoJoinLabel:
+        return "RoomGroupNoJoinLabel";
+    case ErrorType::RoomGroupFull:
+        return "RoomGroupFull";
+    case ErrorType::RoomGroupJoinLabelNotFound:
+        return "RoomGroupJoinLabelNotFound";
+    case ErrorType::RoomGroupMaxSlotMismatch:
+        return "RoomGroupMaxSlotMismatch";
     case ErrorType::Unauthorized:
         return "Unauthorized";
     case ErrorType::DbFail:
         return "DbFail";
+    case ErrorType::EmailFail:
+        return "EmailFail";
     case ErrorType::NotFound:
         return "NotFound";
     case ErrorType::Blocked:
@@ -131,6 +162,8 @@ inline const char* errorName(ErrorType e) {
         return "ScoreInvalid";
     case ErrorType::ScoreHasData:
         return "ScoreHasData";
+    case ErrorType::CondFail:
+        return "CondFail";
     case ErrorType::Unsupported:
         return "Unsupported";
     default:
