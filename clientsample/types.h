@@ -19,25 +19,44 @@ enum class CommandType : uint16_t {
     SendResetToken = 5,
     ResetPassword = 6,
     ResetState = 7,
-    AddFriend = 8,
+    AddFriend    = 8,
     RemoveFriend = 9,
-    AddBlock = 10,
-    RemoveBlock = 11,
-    // (12–29: room/lobby commands not implemented here)
-    GetBoardInfos = 30,
-    RecordScore = 31,
+    AddBlock     = 10,
+    RemoveBlock  = 11,
+    // Matchmaking
+    RegisterHandlers      = 12,
+    CreateRoom            = 13,
+    JoinRoom              = 14,
+    LeaveRoom             = 15,
+    GetRoomList           = 16,
+    RequestSignalingInfos = 17,
+    SignalingEstablished  = 18,
+    ActivationConfirm     = 19,
+    SetRoomDataInternal   = 20,
+    SetRoomDataExternal   = 21,
+    // (22–29 reserved)
+    GetBoardInfos   = 30,
+    RecordScore     = 31,
     RecordScoreData = 32,
-    GetScoreData = 33,
-    GetScoreRange = 34,
+    GetScoreData    = 33,
+    GetScoreRange   = 34,
     GetScoreFriends = 35,
-    GetScoreNpid = 36,
+    GetScoreNpid    = 36,
 };
 
 enum class NotificationType : uint16_t {
-    FriendQuery = 5,
-    FriendNew = 6,
-    FriendLost = 7,
+    FriendQuery  = 5,
+    FriendNew    = 6,
+    FriendLost   = 7,
     FriendStatus = 8,
+    // Matchmaking
+    RequestEvent            = 9,  // Room request completed (create/join/leave)
+    MemberJoined            = 10, // A member joined the room
+    MemberLeft              = 11, // A member left the room
+    SignalingHelper         = 12, // Peer P2P address exchange
+    SignalingEvent          = 13, // NpMatching2-layer signaling (0x5102 ESTABLISHED)
+    NpSignalingEvent        = 14, // NpSignaling-layer activation event
+    RoomDataInternalUpdated = 15, // Room internal data changed
 };
 
 enum class ErrorType : uint8_t {

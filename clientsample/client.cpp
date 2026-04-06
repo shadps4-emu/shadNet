@@ -404,7 +404,380 @@ void ShadNetClient::handleNotification(const Packet& pkt) {
     default:
         printf("[notify] Unknown type=%u\n", pkt.command);
         break;
+    case NotificationType::RequestEvent:
+        handleNotifyRequestEvent(pkt.payload);
+        break;
+    case NotificationType::MemberJoined:
+        handleNotifyMemberJoined(pkt.payload);
+        break;
+    case NotificationType::MemberLeft:
+        handleNotifyMemberLeft(pkt.payload);
+        break;
+    case NotificationType::SignalingHelper:
+        handleNotifySignalingHelper(pkt.payload);
+        break;
+    case NotificationType::SignalingEvent:
+        handleNotifySignalingEvent(pkt.payload);
+        break;
+    case NotificationType::NpSignalingEvent:
+        handleNotifyNpSignalingEvent(pkt.payload);
+        break;
+    case NotificationType::RoomDataInternalUpdated:
+        handleNotifyRoomDataIntUpdated(pkt.payload);
+        break;
     }
+}
+
+// ══════════════════════════════════════════════════════════════════════════════
+// Matching — send methods
+// ══════════════════════════════════════════════════════════════════════════════
+
+void ShadNetClient::registerHandlers(const std::string& addr, uint16_t port,
+                                      uint32_t ctxId, uint32_t serviceLabel,
+                                      uint8_t handlers)
+{
+    std::vector<uint8_t> payload;
+    // addr\0
+    payload.insert(payload.end(), addr.begin(), addr.end());
+    payload.push_back(0);
+    // port (u16 LE)
+    payload.push_back(port & 0xFF);
+    payload.push_back((port >> 8) & 0xFF);
+    // ctxId (u32 LE)
+    for (int i = 0; i < 4; ++i) payload.push_back((ctxId >> (8 * i)) & 0xFF);
+    // serviceLabel (u32 LE)
+    for (int i = 0; i < 4; ++i) payload.push_back((serviceLabel >> (8 * i)) & 0xFF);
+    // handlerCount
+    constexpr uint8_t COUNT = 7;
+    payload.push_back(COUNT);
+    // For each handler slot: enabled(u8) + callbackAddr(u64) + callbackArg(u64)
+    for (uint8_t i = 0; i < COUNT; ++i) {
+        bool enabled = (handlers >> i) & 1;
+        payload.push_back(enabled ? 1 : 0);
+        for (int j = 0; j < 8; ++j) payload.push_back(0); // callbackAddr
+        for (int j = 0; j < 8; ++j) payload.push_back(0); // callbackArg
+    }
+    conn.send(buildPacket(CommandType::RegisterHandlers, packetCounter++, payload));
+}
+
+void ShadNetClient::createRoom(uint32_t reqId, uint16_t maxSlots,
+                                uint16_t worldId, uint32_t flags)
+{
+    std::vector<uint8_t> p;
+    auto u16 = [&](uint16_t v){ p.push_back(v&0xFF); p.push_back((v>>8)&0xFF); };
+    auto u32 = [&](uint32_t v){ for(int i=0;i<4;++i) p.push_back((v>>(8*i))&0xFF); };
+    u32(reqId);
+    u16(maxSlots);
+    u16(0);       // teamId
+    u16(worldId);
+    u16(0);       // lobbyId
+    u32(flags);
+    u16(1);       // groupConfigCount
+    u16(0);       // allowedUserCount
+    u16(0);       // blockedUserCount
+    u16(0);       // internalBinAttrCount
+    u16(0);       // externalSearchIntAttrCount
+    u16(0);       // externalSearchBinAttrCount
+    u16(0);       // externalBinAttrCount
+    u16(0);       // memberInternalBinAttrCount
+    p.push_back(0); // joinGroupLabelPresent
+    p.push_back(0); // roomPasswordPresent
+    p.push_back(0); // signalingType
+    p.push_back(0); // signalingFlag
+    u16(0);       // signalingMainMember
+    conn.send(buildPacket(CommandType::CreateRoom, packetCounter++, p));
+}
+
+void ShadNetClient::joinRoom(uint64_t roomId, uint32_t reqId)
+{
+    std::vector<uint8_t> p;
+    auto u16 = [&](uint16_t v){ p.push_back(v&0xFF); p.push_back((v>>8)&0xFF); };
+    auto u32 = [&](uint32_t v){ for(int i=0;i<4;++i) p.push_back((v>>(8*i))&0xFF); };
+    auto u64 = [&](uint64_t v){ for(int i=0;i<8;++i) p.push_back((v>>(8*i))&0xFF); };
+    u64(roomId);
+    u32(reqId);
+    u16(0); // teamId
+    u32(0); // joinFlags
+    u16(0); // blockedUserCount
+    u16(0); // joinMemberBinAttrCount
+    p.push_back(0); // roomPasswordPresent
+    p.push_back(0); // joinGroupLabelPresent
+    conn.send(buildPacket(CommandType::JoinRoom, packetCounter++, p));
+}
+
+void ShadNetClient::leaveRoom(uint64_t roomId, uint32_t reqId)
+{
+    std::vector<uint8_t> p;
+    for (int i = 0; i < 8; ++i) p.push_back((roomId >> (8*i)) & 0xFF);
+    for (int i = 0; i < 4; ++i) p.push_back((reqId  >> (8*i)) & 0xFF);
+    conn.send(buildPacket(CommandType::LeaveRoom, packetCounter++, p));
+}
+
+void ShadNetClient::getRoomList()
+{
+    conn.send(buildPacket(CommandType::GetRoomList, packetCounter++, {}));
+}
+
+void ShadNetClient::requestSignalingInfos(const std::string& targetNpid)
+{
+    std::vector<uint8_t> p;
+    p.insert(p.end(), targetNpid.begin(), targetNpid.end());
+    p.push_back(0);
+    conn.send(buildPacket(CommandType::RequestSignalingInfos, packetCounter++, p));
+}
+
+void ShadNetClient::signalingEstablished(const std::string& peerNpid, uint32_t connId)
+{
+    std::vector<uint8_t> p;
+    p.insert(p.end(), peerNpid.begin(), peerNpid.end());
+    p.push_back(0);
+    for (int i = 0; i < 4; ++i) p.push_back((connId >> (8*i)) & 0xFF);
+    conn.send(buildPacket(CommandType::SignalingEstablished, packetCounter++, p));
+}
+
+// ── Matching reply handlers ───────────────────────────────────────────────────
+
+void ShadNetClient::handleRegisterHandlersReply(const std::vector<uint8_t>& payload)
+{
+    ErrorType err = payload.empty() ? ErrorType::Malformed
+                                    : static_cast<ErrorType>(payload[0]);
+    if (err == ErrorType::NoError) printf("[register-handlers] OK\n");
+    else                           printf("[register-handlers] FAILED: %s\n", errorName(err));
+    if (onRegisterHandlers) onRegisterHandlers(err);
+}
+
+void ShadNetClient::handleCreateRoomReply(const std::vector<uint8_t>& payload)
+{
+    CreateRoomResult res;
+    if (payload.empty()) { if (onCreateRoom) onCreateRoom(res); return; }
+    res.error = static_cast<ErrorType>(payload[0]);
+    if (res.error == ErrorType::NoError && payload.size() >= 15) {
+        int pos = 1;
+        memcpy(&res.roomId,   payload.data() + pos, 8); pos += 8;
+        memcpy(&res.memberId, payload.data() + pos, 2); pos += 2;
+        memcpy(&res.maxSlots, payload.data() + pos, 2);
+        printf("[create-room] OK  roomId=%llu memberId=%u maxSlots=%u\n",
+               static_cast<unsigned long long>(res.roomId), res.memberId, res.maxSlots);
+    } else if (res.error != ErrorType::NoError) {
+        printf("[create-room] FAILED: %s\n", errorName(res.error));
+    }
+    if (onCreateRoom) onCreateRoom(res);
+}
+
+void ShadNetClient::handleJoinRoomReply(const std::vector<uint8_t>& payload)
+{
+    JoinRoomResult res;
+    if (payload.empty()) { if (onJoinRoom) onJoinRoom(res); return; }
+    res.error = static_cast<ErrorType>(payload[0]);
+    if (res.error == ErrorType::NoError && payload.size() >= 15) {
+        int pos = 1;
+        memcpy(&res.roomId,   payload.data() + pos, 8); pos += 8;
+        memcpy(&res.memberId, payload.data() + pos, 2); pos += 2;
+        memcpy(&res.maxSlots, payload.data() + pos, 2); pos += 2;
+        printf("[join-room] OK  roomId=%llu memberId=%u maxSlots=%u\n",
+               static_cast<unsigned long long>(res.roomId), res.memberId, res.maxSlots);
+    } else if (res.error != ErrorType::NoError) {
+        printf("[join-room] FAILED: %s\n", errorName(res.error));
+    }
+    if (onJoinRoom) onJoinRoom(res);
+}
+
+void ShadNetClient::handleLeaveRoomReply(const std::vector<uint8_t>& payload)
+{
+    ErrorType err = payload.empty() ? ErrorType::Malformed
+                                    : static_cast<ErrorType>(payload[0]);
+    uint64_t roomId = 0;
+    if (err == ErrorType::NoError && payload.size() >= 9)
+        memcpy(&roomId, payload.data() + 1, 8);
+    if (err == ErrorType::NoError)
+        printf("[leave-room] OK  roomId=%llu\n", static_cast<unsigned long long>(roomId));
+    else
+        printf("[leave-room] FAILED: %s\n", errorName(err));
+    if (onLeaveRoom) onLeaveRoom(err, roomId);
+}
+
+void ShadNetClient::handleGetRoomListReply(const std::vector<uint8_t>& payload)
+{
+    RoomListResult res;
+    if (payload.empty()) { if (onRoomList) onRoomList(res); return; }
+    res.error = static_cast<ErrorType>(payload[0]);
+    if (res.error == ErrorType::NoError && payload.size() >= 5) {
+        int pos = 1;
+        uint32_t count = fromLE32(payload.data() + pos); pos += 4;
+        printf("[room-list] %u room(s)\n", count);
+        for (uint32_t i = 0; i < count && pos + 20 <= (int)payload.size(); ++i) {
+            RoomEntry e;
+            // Parse minimal RoomDataExternal fields we care about
+            memcpy(&e.maxSlots,   payload.data() + pos, 2); pos += 2;
+            memcpy(&e.curMembers, payload.data() + pos, 2); pos += 2;
+            pos += 4; // flags
+            pos += 2; // serverId
+            pos += 4; // worldId
+            pos += 8; // lobbyId
+            memcpy(&e.roomId, payload.data() + pos, 8); pos += 8;
+            // Skip the rest — we don't need full parsing for sample output
+            printf("  room %llu  slots=%u/%u\n",
+                   static_cast<unsigned long long>(e.roomId), e.curMembers, e.maxSlots);
+            res.rooms.push_back(e);
+            // Skip remaining room fields (variable length — stop parsing for simplicity)
+            break;
+        }
+    } else if (res.error != ErrorType::NoError) {
+        printf("[room-list] FAILED: %s\n", errorName(res.error));
+    }
+    if (onRoomList) onRoomList(res);
+}
+
+void ShadNetClient::handleSignalingInfosReply(const std::vector<uint8_t>& payload)
+{
+    SignalingInfoResult res;
+    if (payload.empty()) { if (onSignalingInfos) onSignalingInfos(res); return; }
+    res.error = static_cast<ErrorType>(payload[0]);
+    if (res.error == ErrorType::NoError) {
+        int pos = 1;
+        auto readStr = [&]() -> std::string {
+            std::string s;
+            while (pos < (int)payload.size() && payload[pos] != 0)
+                s += static_cast<char>(payload[pos++]);
+            if (pos < (int)payload.size()) ++pos;
+            return s;
+        };
+        res.targetNpid = readStr();
+        res.targetIp   = readStr();
+        if (pos + 4 <= (int)payload.size()) {
+            memcpy(&res.targetPort,     payload.data() + pos, 2); pos += 2;
+            memcpy(&res.targetMemberId, payload.data() + pos, 2);
+        }
+        printf("[signaling-infos] OK  %s @ %s:%u (mid=%u)\n",
+               res.targetNpid.c_str(), res.targetIp.c_str(),
+               res.targetPort, res.targetMemberId);
+    } else {
+        printf("[signaling-infos] FAILED: %s\n", errorName(res.error));
+    }
+    if (onSignalingInfos) onSignalingInfos(res);
+}
+
+// ── Matching notification handlers ────────────────────────────────────────────
+
+void ShadNetClient::handleNotifyRequestEvent(const std::vector<uint8_t>& p)
+{
+    if (p.size() < 26) return;
+    int pos = 0;
+    NotifyRequestEvent n;
+    memcpy(&n.ctxId,     p.data() + pos, 4); pos += 4;
+    pos += 6; // serverId(2) + worldId(2) + lobbyId(2)
+    memcpy(&n.reqEvent,  p.data() + pos, 2); pos += 2;
+    memcpy(&n.reqId,     p.data() + pos, 4); pos += 4;
+    memcpy(&n.errorCode, p.data() + pos, 4); pos += 4;
+    memcpy(&n.roomId,    p.data() + pos, 8); pos += 8;
+    memcpy(&n.memberId,  p.data() + pos, 2); pos += 2;
+    memcpy(&n.maxSlots,  p.data() + pos, 2); pos += 2;
+    pos += 4; // flags
+    n.isOwner = (pos < (int)p.size()) && (p[pos] != 0);
+    printf("[notify] RequestEvent reqEvent=0x%04x roomId=%llu memberId=%u owner=%s\n",
+           n.reqEvent, static_cast<unsigned long long>(n.roomId),
+           n.memberId, n.isOwner ? "yes" : "no");
+    if (onRequestEvent) onRequestEvent(n);
+}
+
+void ShadNetClient::handleNotifyMemberJoined(const std::vector<uint8_t>& p)
+{
+    if (p.size() < 12) return;
+    int pos = 0;
+    NotifyMemberJoined n;
+    memcpy(&n.roomId,   p.data() + pos, 8); pos += 8;
+    memcpy(&n.memberId, p.data() + pos, 2); pos += 2;
+    auto readStr = [&]() -> std::string {
+        std::string s;
+        while (pos < (int)p.size() && p[pos] != 0) s += static_cast<char>(p[pos++]);
+        if (pos < (int)p.size()) ++pos; return s;
+    };
+    n.npid = readStr();
+    n.addr = readStr();
+    if (pos + 2 <= (int)p.size()) { memcpy(&n.port, p.data() + pos, 2); pos += 2; }
+    printf("[notify] MemberJoined roomId=%llu memberId=%u npid=%s addr=%s:%u\n",
+           static_cast<unsigned long long>(n.roomId), n.memberId,
+           n.npid.c_str(), n.addr.c_str(), n.port);
+    if (onMemberJoined) onMemberJoined(n);
+}
+
+void ShadNetClient::handleNotifyMemberLeft(const std::vector<uint8_t>& p)
+{
+    if (p.size() < 10) return;
+    int pos = 0;
+    NotifyMemberLeft n;
+    memcpy(&n.roomId,   p.data() + pos, 8); pos += 8;
+    memcpy(&n.memberId, p.data() + pos, 2); pos += 2;
+    while (pos < (int)p.size() && p[pos] != 0) n.npid += static_cast<char>(p[pos++]);
+    printf("[notify] MemberLeft roomId=%llu memberId=%u npid=%s\n",
+           static_cast<unsigned long long>(n.roomId), n.memberId, n.npid.c_str());
+    if (onMemberLeft) onMemberLeft(n);
+}
+
+void ShadNetClient::handleNotifySignalingHelper(const std::vector<uint8_t>& p)
+{
+    int pos = 0;
+    auto readStr = [&]() -> std::string {
+        std::string s;
+        while (pos < (int)p.size() && p[pos] != 0) s += static_cast<char>(p[pos++]);
+        if (pos < (int)p.size()) ++pos; return s;
+    };
+    NotifySignalingHelper n;
+    n.peerNpid = readStr();
+    if (pos + 2 <= (int)p.size()) { memcpy(&n.peerMemberId, p.data() + pos, 2); pos += 2; }
+    n.peerAddr = readStr();
+    if (pos + 2 <= (int)p.size()) memcpy(&n.peerPort, p.data() + pos, 2);
+    printf("[notify] SignalingHelper peer=%s (mid=%u) @ %s:%u\n",
+           n.peerNpid.c_str(), n.peerMemberId, n.peerAddr.c_str(), n.peerPort);
+    if (onSignalingHelper) onSignalingHelper(n);
+}
+
+void ShadNetClient::handleNotifySignalingEvent(const std::vector<uint8_t>& p)
+{
+    if (p.size() < 16) return;
+    int pos = 0;
+    NotifySignalingEvent n;
+    memcpy(&n.event,    p.data() + pos, 2); pos += 2;
+    memcpy(&n.roomId,   p.data() + pos, 8); pos += 8;
+    memcpy(&n.memberId, p.data() + pos, 2); pos += 2;
+    memcpy(&n.connId,   p.data() + pos, 4);
+    printf("[notify] SignalingEvent event=0x%04x roomId=%llu memberId=%u\n",
+           n.event, static_cast<unsigned long long>(n.roomId), n.memberId);
+    if (onSignalingEvent) onSignalingEvent(n);
+}
+
+void ShadNetClient::handleNotifyNpSignalingEvent(const std::vector<uint8_t>& p)
+{
+    if (p.size() < 5) return;
+    int pos = 0;
+    NotifyNpSignalingEvent n;
+    memcpy(&n.event, p.data() + pos, 4); pos += 4;
+    while (pos < (int)p.size() && p[pos] != 0) n.peerNpid += static_cast<char>(p[pos++]);
+    printf("[notify] NpSignalingEvent event=%u peer=%s\n", n.event, n.peerNpid.c_str());
+    if (onNpSignalingEvent) onNpSignalingEvent(n);
+}
+
+void ShadNetClient::handleNotifyRoomDataIntUpdated(const std::vector<uint8_t>& p)
+{
+    if (p.size() < 14) return;
+    int pos = 0;
+    NotifyRoomDataInternalUpdated n;
+    memcpy(&n.roomId, p.data() + pos, 8); pos += 8;
+    memcpy(&n.flags,  p.data() + pos, 4); pos += 4;
+    uint16_t count = 0; memcpy(&count, p.data() + pos, 2); pos += 2;
+    for (uint16_t i = 0; i < count && pos + 6 <= (int)p.size(); ++i) {
+        NotifyRoomDataInternalUpdated::BinAttr a;
+        memcpy(&a.attrId, p.data() + pos, 2); pos += 2;
+        uint32_t sz = 0; memcpy(&sz, p.data() + pos, 4); pos += 4;
+        if (pos + (int)sz <= (int)p.size()) {
+            a.data.assign(p.begin() + pos, p.begin() + pos + sz);
+            pos += sz;
+        }
+        n.binAttrs.push_back(std::move(a));
+    }
+    printf("[notify] RoomDataInternalUpdated roomId=%llu flags=0x%x attrs=%zu\n",
+           static_cast<unsigned long long>(n.roomId), n.flags, n.binAttrs.size());
+    if (onRoomDataInternalUpdated) onRoomDataInternalUpdated(n);
 }
 
 void ShadNetClient::handlePacket(const Packet& pkt) {
@@ -450,6 +823,30 @@ void ShadNetClient::handlePacket(const Packet& pkt) {
         break;
     case CommandType::GetScoreNpid:
         handleScoreRangeReply(pkt.payload, onScoreNpid);
+        break;
+    case CommandType::RegisterHandlers:
+        handleRegisterHandlersReply(pkt.payload);
+        break;
+    case CommandType::CreateRoom:
+        handleCreateRoomReply(pkt.payload);
+        break;
+    case CommandType::JoinRoom:
+        handleJoinRoomReply(pkt.payload);
+        break;
+    case CommandType::LeaveRoom:
+        handleLeaveRoomReply(pkt.payload);
+        break;
+    case CommandType::GetRoomList:
+        handleGetRoomListReply(pkt.payload);
+        break;
+    case CommandType::RequestSignalingInfos:
+        handleSignalingInfosReply(pkt.payload);
+        break;
+    case CommandType::SignalingEstablished:
+    case CommandType::ActivationConfirm:
+    case CommandType::SetRoomDataInternal:
+    case CommandType::SetRoomDataExternal:
+        // reply is error byte only — already printed by generic handler
         break;
     default:
         printf("[recv] Unhandled reply command=%u\n", pkt.command);

@@ -86,7 +86,107 @@ struct NotifyFriendStatus {
     uint64_t timestamp;
 };
 
-// ── Client──────
+// Matching result types
+
+struct RoomMemberInfo {
+    std::string npid;
+    uint16_t memberId = 0;
+    std::string addr;
+    uint16_t port = 0;
+};
+
+struct CreateRoomResult {
+    ErrorType error = ErrorType::Malformed;
+    uint64_t roomId = 0;
+    uint16_t memberId = 0; // our assigned member ID
+    uint16_t maxSlots = 0;
+};
+
+struct JoinRoomResult {
+    ErrorType error = ErrorType::Malformed;
+    uint64_t roomId = 0;
+    uint16_t memberId = 0;
+    uint16_t maxSlots = 0;
+    std::vector<RoomMemberInfo> members; // all members including self
+};
+
+struct RoomEntry {
+    uint64_t roomId = 0;
+    uint16_t maxSlots = 0;
+    uint16_t curMembers = 0;
+    std::string ownerNpid;
+};
+
+struct RoomListResult {
+    ErrorType error = ErrorType::Malformed;
+    std::vector<RoomEntry> rooms;
+};
+
+struct SignalingInfoResult {
+    ErrorType error = ErrorType::Malformed;
+    std::string targetNpid;
+    std::string targetIp;
+    uint16_t targetPort = 0;
+    uint16_t targetMemberId = 0;
+};
+
+// Matching notification structs
+
+struct NotifyRequestEvent {
+    uint32_t ctxId = 0;
+    uint16_t reqEvent = 0; // 0x0101=CreateJoin, 0x0102=Join, 0x0103=Leave, etc.
+    uint32_t reqId = 0;
+    uint32_t errorCode = 0;
+    uint64_t roomId = 0;
+    uint16_t memberId = 0;
+    uint16_t maxSlots = 0;
+    bool isOwner = false;
+};
+
+struct NotifyMemberJoined {
+    uint64_t roomId;
+    uint16_t memberId;
+    std::string npid;
+    std::string addr;
+    uint16_t port;
+};
+
+struct NotifyMemberLeft {
+    uint64_t roomId;
+    uint16_t memberId;
+    std::string npid;
+};
+
+struct NotifySignalingHelper {
+    std::string peerNpid;
+    uint16_t peerMemberId;
+    std::string peerAddr;
+    uint16_t peerPort;
+};
+
+struct NotifySignalingEvent {
+    uint16_t event = 0; // 0x5102 = ESTABLISHED
+    uint64_t roomId = 0;
+    uint16_t memberId = 0;
+    uint32_t connId = 0;
+};
+
+struct NotifyNpSignalingEvent {
+    uint32_t event = 0; // 1 = activated
+    std::string peerNpid;
+};
+
+struct NotifyRoomDataInternalUpdated {
+    uint64_t roomId = 0;
+    uint32_t flags = 0;
+    struct BinAttr {
+        uint16_t attrId;
+        std::vector<uint8_t> data;
+    };
+    std::vector<BinAttr> binAttrs;
+};
+
+// Client
 
 class ShadNetClient {
 public:
@@ -135,6 +235,36 @@ public:
     void getScoreFriends(const std::string& comId, uint32_t boardId, bool includeSelf = true,
                          uint32_t max = 100, bool withComment = false, bool withGameInfo = false);
 
+    // ── Matching commands ─────────────────────────────────────────────────────
+    // All matching commands require prior successful login.
+    // Call registerHandlers first to receive room notifications.
+
+    // Register P2P address and callback handlers with the server.
+    // addr: your externally reachable IP (empty = server uses TCP peer address).
+    // port: your externally reachable UDP port.
+    // ctxId: NpMatching2 context ID (pass 1 if not using the PS3 SDK directly).
+    // handlers: bitmask of handler types to enable (0x7F = all).
+    void registerHandlers(const std::string& addr, uint16_t port, uint32_t ctxId,
+                          uint32_t serviceLabel, uint8_t handlers = 0x7F);
+
+    // Create a new room and join it.
+    void createRoom(uint32_t reqId, uint16_t maxSlots, uint16_t worldId = 1, uint32_t flags = 0);
+
+    // Join an existing room by ID.
+    void joinRoom(uint64_t roomId, uint32_t reqId);
+
+    // Leave the current room.
+    void leaveRoom(uint64_t roomId, uint32_t reqId);
+
+    // Fetch the list of all open rooms.
+    void getRoomList();
+
+    // Request the signaling endpoint of another player (triggers SignalingHelper on both sides).
+    void requestSignalingInfos(const std::string& targetNpid);
+
+    // Notify the server that P2P signaling with a peer is established.
+    void signalingEstablished(const std::string& peerNpid, uint32_t connId);
+
     // Callbacks
     std::function<void(const LoginResult&)> onLoginResult;
     std::function<void(ErrorType)> onCreateResult;
@@ -147,6 +277,23 @@ public:
     std::function<void(const ScoreRangeResult&)> onScoreRange;
     std::function<void(const ScoreRangeResult&)> onScoreNpid;
     std::function<void(const ScoreRangeResult&)> onScoreFriends;
+
+    // Matching reply callbacks
+    std::function<void(const CreateRoomResult&)> onCreateRoom;
+    std::function<void(const JoinRoomResult&)> onJoinRoom;
+    std::function<void(ErrorType, uint64_t)> onLeaveRoom; // error, roomId
+    std::function<void(const RoomListResult&)> onRoomList;
+    std::function<void(const SignalingInfoResult&)> onSignalingInfos;
+    std::function<void(ErrorType)> onRegisterHandlers;
+
+    // Matching notification callbacks
+    std::function<void(const NotifyRequestEvent&)> onRequestEvent;
+    std::function<void(const NotifyMemberJoined&)> onMemberJoined;
+    std::function<void(const NotifyMemberLeft&)> onMemberLeft;
+    std::function<void(const NotifySignalingHelper&)> onSignalingHelper;
+    std::function<void(const NotifySignalingEvent&)> onSignalingEvent;
+    std::function<void(const NotifyNpSignalingEvent&)> onNpSignalingEvent;
+    std::function<void(const NotifyRoomDataInternalUpdated&)> onRoomDataInternalUpdated;
 
     std::function<void(const NotifyFriendQuery&)> onFriendQuery;
     std::function<void(const NotifyFriendNew&)> onFriendNew;
@@ -177,6 +324,23 @@ private:
     void handleGetScoreDataReply(const std::vector<uint8_t>& payload);
     void handleScoreRangeReply(const std::vector<uint8_t>& payload,
                                std::function<void(const ScoreRangeResult&)>& cb);
+
+    // Matching reply handlers
+    void handleRegisterHandlersReply(const std::vector<uint8_t>& payload);
+    void handleCreateRoomReply(const std::vector<uint8_t>& payload);
+    void handleJoinRoomReply(const std::vector<uint8_t>& payload);
+    void handleLeaveRoomReply(const std::vector<uint8_t>& payload);
+    void handleGetRoomListReply(const std::vector<uint8_t>& payload);
+    void handleSignalingInfosReply(const std::vector<uint8_t>& payload);
+
+    // Matching notification handlers
+    void handleNotifyRequestEvent(const std::vector<uint8_t>& p);
+    void handleNotifyMemberJoined(const std::vector<uint8_t>& p);
+    void handleNotifyMemberLeft(const std::vector<uint8_t>& p);
+    void handleNotifySignalingHelper(const std::vector<uint8_t>& p);
+    void handleNotifySignalingEvent(const std::vector<uint8_t>& p);
+    void handleNotifyNpSignalingEvent(const std::vector<uint8_t>& p);
+    void handleNotifyRoomDataIntUpdated(const std::vector<uint8_t>& p);
 
     std::string m_pendingFriendNpid;
     CommandType m_pendingFriendCmd = CommandType::AddFriend;

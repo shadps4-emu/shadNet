@@ -98,7 +98,9 @@ int main(int argc, char* argv[]) {
     bool isKnown = strcmp(command, "friend-add") == 0 || strcmp(command, "friend-remove") == 0 ||
                    strcmp(command, "block-add") == 0 || strcmp(command, "block-remove") == 0 ||
                    strcmp(command, "score-board") == 0 || strcmp(command, "score-record") == 0 ||
-                   strcmp(command, "score-range") == 0 || strcmp(command, "score-get-npid") == 0;
+                   strcmp(command, "score-range") == 0 || strcmp(command, "score-get-npid") == 0 ||
+                   strcmp(command, "room-create") == 0 || strcmp(command, "room-join") == 0 ||
+                   strcmp(command, "room-leave") == 0  || strcmp(command, "room-list") == 0;
 
     if (!isKnown) {
         printf("Unknown command: %s\n", command);
@@ -107,11 +109,18 @@ int main(int argc, char* argv[]) {
     }
 
     bool isScoreCmd = (strncmp(command, "score-", 6) == 0);
+    bool isRoomCmd  = (strncmp(command, "room-",  5) == 0);
+
     if (isScoreCmd && argc < 8) {
         printf("%s: <npid> <password> <comId> <boardId> ...\n", command);
         return 1;
     }
-    if (!isScoreCmd && argc < 7) {
+    // room-join and room-leave need a roomId; room-create needs maxSlots; room-list needs nothing
+    if (isRoomCmd && strcmp(command, "room-list") != 0 && argc < 7) {
+        printf("%s: <npid> <password> <arg>\n", command);
+        return 1;
+    }
+    if (!isScoreCmd && !isRoomCmd && argc < 7) {
         printf("%s: <npid> <password> <target_npid>\n", command);
         return 1;
     }
@@ -127,16 +136,19 @@ int main(int argc, char* argv[]) {
         loginOk = (res.error == shadnet::ErrorType::NoError);
         loginDone = true;
     };
-    client.onFriendResult = [&](const shadnet::FriendResult&) { actionDone = true; };
-    client.onBoardInfos = [&](const shadnet::BoardInfo&) { actionDone = true; };
-    client.onRecordScore = [&](const shadnet::RecordScoreResult&) { actionDone = true; };
-    client.onRecordScoreData = [&](shadnet::ErrorType) { actionDone = true; };
-    client.onGetScoreData = [&](shadnet::ErrorType, const std::vector<uint8_t>&) {
-        actionDone = true;
-    };
-    client.onScoreRange = [&](const shadnet::ScoreRangeResult&) { actionDone = true; };
-    client.onScoreNpid = [&](const shadnet::ScoreRangeResult&) { actionDone = true; };
-    client.onScoreFriends = [&](const shadnet::ScoreRangeResult&) { actionDone = true; };
+    client.onFriendResult    = [&](const shadnet::FriendResult&)                 { actionDone = true; };
+    client.onBoardInfos      = [&](const shadnet::BoardInfo&)                    { actionDone = true; };
+    client.onRecordScore     = [&](const shadnet::RecordScoreResult&)            { actionDone = true; };
+    client.onRecordScoreData = [&](shadnet::ErrorType)                           { actionDone = true; };
+    client.onGetScoreData    = [&](shadnet::ErrorType, const std::vector<uint8_t>&) { actionDone = true; };
+    client.onScoreRange      = [&](const shadnet::ScoreRangeResult&)             { actionDone = true; };
+    client.onScoreNpid       = [&](const shadnet::ScoreRangeResult&)             { actionDone = true; };
+    client.onScoreFriends    = [&](const shadnet::ScoreRangeResult&)             { actionDone = true; };
+    client.onRegisterHandlers= [&](shadnet::ErrorType)                           { actionDone = true; };
+    client.onCreateRoom      = [&](const shadnet::CreateRoomResult&)             { actionDone = true; };
+    client.onJoinRoom        = [&](const shadnet::JoinRoomResult&)               { actionDone = true; };
+    client.onLeaveRoom       = [&](shadnet::ErrorType, uint64_t)                 { actionDone = true; };
+    client.onRoomList        = [&](const shadnet::RoomListResult&)               { actionDone = true; };
 
     // Step 1 — login
     client.login(npid, password, "");
@@ -150,7 +162,18 @@ int main(int argc, char* argv[]) {
         return 1;
     }
 
-    // Step 2 — issue command
+    // Step 2 — register matching handlers (needed for room commands)
+    if (isRoomCmd) {
+        bool regDone = false;
+        client.onRegisterHandlers = [&](shadnet::ErrorType) { regDone = true; };
+        client.registerHandlers("", 0, 1, 0, 0x7F);
+        if (!pollUntil(client, regDone, 5000))
+            printf("[warn] RegisterHandlers timed out — continuing anyway\n");
+        // reset so the outer actionDone works
+        client.onRegisterHandlers = [&](shadnet::ErrorType) { actionDone = true; };
+    }
+
+    // Step 3 — issue command
     if (strcmp(command, "friend-add") == 0)
         client.addFriend(argv[6]);
     else if (strcmp(command, "friend-remove") == 0)
@@ -187,6 +210,17 @@ int main(int argc, char* argv[]) {
         }
         int32_t pcId = (argc >= 10) ? static_cast<int32_t>(atoi(argv[9])) : 0;
         client.getScoreNpid(argv[6], static_cast<uint32_t>(atoi(argv[7])), {{argv[8], pcId}});
+    } else if (strcmp(command, "room-create") == 0) {
+        uint16_t maxSlots = argc >= 7 ? static_cast<uint16_t>(atoi(argv[6])) : 4;
+        client.createRoom(1, maxSlots);
+    } else if (strcmp(command, "room-join") == 0) {
+        uint64_t roomId = static_cast<uint64_t>(atoll(argv[6]));
+        client.joinRoom(roomId, 1);
+    } else if (strcmp(command, "room-leave") == 0) {
+        uint64_t roomId = static_cast<uint64_t>(atoll(argv[6]));
+        client.leaveRoom(roomId, 1);
+    } else if (strcmp(command, "room-list") == 0) {
+        client.getRoomList();
     }
 
     if (!pollUntil(client, actionDone)) {
