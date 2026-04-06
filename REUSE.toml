@@ -27,8 +27,8 @@ path = [
     "clientsample/samples/walkthrough-scores.bat",
     "documentation/database.md",
     "documentation/protocol.md",
-    "documentation/matching.md,
-    "documentation/signaling.md,
+    "documentation/matching.md",
+    "documentation/signaling.md",
     "externals/CMakeLists.txt",
 ]
 
