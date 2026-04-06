@@ -1,0 +1,35 @@
+version = 1
+
+[[annotations]]
+path = [
+    "REUSE.toml",
+    "CMakePresets.json",
+    ".gitignore",
+    ".gitmodules",
+    "README.md",
+    "CMakeLists.txt",
+    "CMakeUserPresets.json",
+    "clientsample/CMakeLists.txt",
+    "clientsample/CMakeSettings.json",
+    "clientsample/samples/block-add.bat",
+    "clientsample/samples/block-remove.bat",
+    "clientsample/samples/friend-add.bat",
+    "clientsample/samples/friend-remove.bat",
+    "clientsample/samples/login.bat",
+    "clientsample/samples/register.bat",
+    "clientsample/samples/score-board.bat",
+    "clientsample/samples/score-get-npid.bat",
+    "clientsample/samples/score-range.bat",
+    "clientsample/samples/score-record.bat",
+    "clientsample/samples/setup-test-accounts.bat",
+    "clientsample/samples/walkthrough-block.bat",
+    "clientsample/samples/walkthrough-friends.bat",
+    "clientsample/samples/walkthrough-scores.bat",
+    "documentation/database.md",
+    "documentation/protocol.md",
+    "externals/CMakeLists.txt",
+]
+
+precedence = "aggregate"
+SPDX-FileCopyrightText = "shadNet Project"
+SPDX-License-Identifier = "GPL-2.0-or-later"
