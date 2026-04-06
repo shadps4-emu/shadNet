@@ -242,6 +242,8 @@ jobs:
     if: github.ref == 'refs/heads/main' && github.event_name == 'push'
     needs: [get-info, windows, linux]
     runs-on: ubuntu-latest
+    permissions:
+      contents: write   # required to create releases and upload assets
     steps:
     - name: Download all artifacts
       uses: actions/download-artifact@v4
