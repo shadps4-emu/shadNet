@@ -37,7 +37,6 @@ struct UserRecord {
     QString username;
     QByteArray hash;
     QByteArray salt;
-    QString onlineName;
     QString avatarUrl;
     QString email;
     QString emailCheck;
@@ -72,7 +71,7 @@ public:
 
     // Account
     std::optional<DbError> CreateAccount(const QString& npid, const QString& password,
-                                         const QString& onlineName, const QString& avatarUrl,
+                                         const QString& avatarUrl,
                                          const QString& email);
     std::optional<UserRecord> CheckUser(const QString& npid, const QString& password,
                                         const QString& token, bool checkToken);
