@@ -8,7 +8,7 @@
 #include <vector>
 #include "connection.h"
 
-namespace shadnet {
+namespace shadnetclient {
 // Result types
 
 struct FriendEntry {
@@ -18,7 +18,6 @@ struct FriendEntry {
 
 struct LoginResult {
     ErrorType error = ErrorType::Malformed;
-    std::string onlineName;
     std::string avatarUrl;
     uint64_t userId = 0;
     std::vector<FriendEntry> friends;
@@ -46,7 +45,6 @@ struct BoardInfo {
 
 struct ScoreRankEntry {
     std::string npid;
-    std::string onlineName;
     int32_t pcId = 0;
     uint32_t rank = 0;
     int64_t score = 0;
@@ -98,8 +96,8 @@ public:
     void login(const std::string& npid, const std::string& password, const std::string& token = {});
 
     void createAccount(const std::string& npid, const std::string& password,
-                       const std::string& onlineName, const std::string& avatarUrl,
-                       const std::string& email);
+                       const std::string& avatarUrl, const std::string& email,
+                       const std::string& secretKey = {});
 
     // Friend commands
     void addFriend(const std::string& targetNpid);
@@ -181,4 +179,4 @@ private:
     std::string m_pendingFriendNpid;
     CommandType m_pendingFriendCmd = CommandType::AddFriend;
 };
-} // namespace shadnet
+} // namespace shadnetclient

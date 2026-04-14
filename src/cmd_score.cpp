@@ -17,6 +17,22 @@ static ScoreDb scoreDb(Database* db) {
 static QString comIdStr(const QByteArray& id) {
     return QString::fromLatin1(id.constData(), id.size());
 }
+// Read a u32-LE-prefixed protobuf blob from the stream and parse it.
+// Returns false and sets data.error() on failure.
+template <typename T>
+static bool decodeProto(T& msg, StreamExtractor& data) {
+    QByteArray blob = data.getRawData();
+    if (data.error())
+        return false;
+    return msg.ParseFromArray(blob.constData(), blob.size());
+}
+
+// Serialise a protobuf message and append it as a u32-LE-prefixed blob to reply.
+template <typename T>
+static void appendProto(QByteArray& reply, const T& msg) {
+    std::string s = msg.SerializeAsString();
+    appendBlob(reply, QByteArray(s.data(), static_cast<int>(s.size())));
+}
 
 // GetBoardInfos
 // Request:  ComId(12) + boardId(u32 LE)

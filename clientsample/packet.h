@@ -6,7 +6,7 @@
 #include <vector>
 #include "types.h"
 
-namespace shadnet {
+namespace shadnetclient {
 struct Packet {
     PacketType type;
     uint16_t command;
@@ -14,4 +14,4 @@ struct Packet {
     uint64_t packetId;
     std::vector<uint8_t> payload; // everything after the 15-byte header
 };
-} // namespace shadnet
+} // namespace shadnetclient

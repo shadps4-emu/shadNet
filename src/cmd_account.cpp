@@ -11,6 +11,23 @@
 // Request:  u32LE blob size + RegistrationRequest proto
 // Reply:    ErrorType(u8) only — no body on success
 
+// Read a u32-LE-prefixed protobuf blob from the stream and parse it.
+// Returns false and sets data.error() on failure.
+template <typename T>
+static bool decodeProto(T& msg, StreamExtractor& data) {
+    QByteArray blob = data.getRawData();
+    if (data.error())
+        return false;
+    return msg.ParseFromArray(blob.constData(), blob.size());
+}
+
+// Serialise a protobuf message and append it as a u32-LE-prefixed blob to reply.
+template <typename T>
+static void appendProto(QByteArray& reply, const T& msg) {
+    std::string s = msg.SerializeAsString();
+    appendBlob(reply, QByteArray(s.data(), static_cast<int>(s.size())));
+}
+
 ErrorType ClientSession::CmdCreate(StreamExtractor& data, QByteArray& reply) {
     Q_UNUSED(reply);
 
@@ -154,7 +171,7 @@ ErrorType ClientSession::CmdLogin(StreamExtractor& data, QByteArray& reply) {
     }
 
     // Notify online friends: FriendStatus notification (we just came online).
-    {
+    if (!onlineFriendSenders.isEmpty()) {
         shadnet::NotifyFriendStatus ns;
         ns.set_npid(npid.toStdString());
         ns.set_online(true);
