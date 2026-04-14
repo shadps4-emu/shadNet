@@ -7,8 +7,8 @@
 #include <QPair>
 #include <QReadWriteLock>
 #include <QVector>
-#include "score_messages.pb.h"
 #include "score_types.h"
+#include "shadnet.pb.h"
 
 enum class ScoreCacheError { NotFound, Invalid, HasData };
 
@@ -28,13 +28,13 @@ public:
     uint32_t InsertScore(const QString& comId, uint32_t boardId, const ScoreBoardConfig& cfg,
                          const ScoreEntry& entry);
 
-    score::GetScoreResponse GetScoreRange(const QString& comId, uint32_t boardId,
-                                          uint32_t startRank, uint32_t numRanks, bool withComment,
-                                          bool withGameInfo);
+    shadnet::GetScoreResponse GetScoreRange(const QString& comId, uint32_t boardId,
+                                            uint32_t startRank, uint32_t numRanks, bool withComment,
+                                            bool withGameInfo);
 
-    score::GetScoreResponse GetScoreByIds(const QString& comId, uint32_t boardId,
-                                          const QVector<QPair<int64_t, int32_t>>& ids,
-                                          bool withComment, bool withGameInfo);
+    shadnet::GetScoreResponse GetScoreByIds(const QString& comId, uint32_t boardId,
+                                            const QVector<QPair<int64_t, int32_t>>& ids,
+                                            bool withComment, bool withGameInfo);
 
     std::optional<ScoreCacheError> ContainsScoreWithNoData(const QString& comId, uint32_t boardId,
                                                            int64_t userId, int32_t charId,
