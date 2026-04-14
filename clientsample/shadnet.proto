@@ -25,10 +25,10 @@ message FriendEntry {
 message LoginReply {
     string               avatar_url               = 1;
     uint64               user_id                  = 2;
-    repeated FriendEntry friends                  = 4;
-    repeated string      friend_requests_sent     = 5;
-    repeated string      friend_requests_received = 6;
-    repeated string      blocked                  = 7;
+    repeated FriendEntry friends                  = 3;
+    repeated string      friend_requests_sent     = 4;
+    repeated string      friend_requests_received = 5;
+    repeated string      blocked                  = 6;
 }
 
 message RegistrationRequest {
