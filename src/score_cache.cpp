@@ -34,8 +34,6 @@ static shadnet::ScoreRankData ToRankData(const ScoreEntry& e, int index) {
     shadnet::ScoreRankData r;
     const QByteArray npidU8 = e.npid.toUtf8();
     r.set_npid(npidU8.constData(), static_cast<size_t>(npidU8.size()));
-    const QByteArray nameU8 = e.onlineName.toUtf8();
-    r.set_onlinename(nameU8.constData(), static_cast<size_t>(nameU8.size()));
     r.set_pcid(e.characterId);
     r.set_rank(static_cast<uint32_t>(index + 1));
     r.set_score(e.score);

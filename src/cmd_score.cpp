@@ -82,7 +82,6 @@ ErrorType ClientSession::CmdRecordScore(StreamExtractor& data, QByteArray& reply
     entry.gameInfo = QByteArray(req.data().data(), static_cast<int>(req.data().size()));
     entry.timestamp = ShadNetTimestamp();
     entry.npid = m_info.npid;
-    entry.onlineName = m_info.onlineName;
 
     auto dbErr = sdb.RecordScore(cid, req.boardid(), *cfg, entry);
     if (dbErr) {

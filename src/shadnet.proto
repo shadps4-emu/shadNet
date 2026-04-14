@@ -135,12 +135,11 @@ message GetScoreFriendsRequest {
 
 message ScoreRankData {
     string npId        = 1;
-    string onlineName  = 2;
-    int32  pcId        = 3;
-    uint32 rank        = 4;
-    int64  score       = 5;
-    bool   hasGameData = 6;
-    uint64 recordDate  = 7;
+    int32  pcId        = 2;
+    uint32 rank        = 3;
+    int64  score       = 4;
+    bool   hasGameData = 5;
+    uint64 recordDate  = 6;
 }
 
 message ScoreInfo {

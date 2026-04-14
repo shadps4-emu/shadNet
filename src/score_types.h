@@ -31,7 +31,6 @@ struct ScoreEntry {
 
     // Resolved from account table,populated when loaded into cache
     QString npid;
-    QString onlineName;
 };
 
 // timestamp

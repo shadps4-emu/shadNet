@@ -41,7 +41,6 @@ struct SharedState {
 struct ClientInfo {
     int64_t userId = 0;
     QString npid;
-    QString onlineName;
     QString avatarUrl;
     QString token;
     bool admin = false;

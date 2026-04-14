@@ -4,7 +4,7 @@
 #pragma once
 
 #include <QByteArray>
-#include "score_messages.pb.h"
+#include "shadnet.pb.h"
 
 // Encode any protobuf message to a QByteArray.
 template <typename T>
