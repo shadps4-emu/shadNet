@@ -49,6 +49,7 @@ void ConfigManager::Parse(const QString& path) {
     m_unsecured_port = str("UnsecuredPort", "31313");
     m_emailValidated = boolean("EmailValidated", false);
     m_adminsList = strList("AdminsList");
+    m_registrationSecretKey = str("RegistrationSecretKey", "");
 
     s.sync();
 
@@ -56,6 +57,11 @@ void ConfigManager::Parse(const QString& path) {
         qWarning() << "QSettings error reading" << path;
     else
         qInfo() << "Config loaded from" << path;
+
+    if (!m_registrationSecretKey.isEmpty())
+        qInfo() << "Registration requires secret key";
+    else
+        qInfo() << "Registration is open (no secret key set)";
 
     LoadBannedDomains();
 }

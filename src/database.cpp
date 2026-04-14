@@ -180,8 +180,7 @@ bool Database::Migrate() {
 }
 
 std::optional<DbError> Database::CreateAccount(const QString& npid, const QString& password,
-                                               const QString& avatarUrl,
-                                               const QString& email) {
+                                               const QString& avatarUrl, const QString& email) {
     // Input validation
     if (npid.isEmpty()) {
         qWarning() << "createAccount: NPID is empty";
@@ -382,16 +381,16 @@ std::optional<UserRecord> Database::CheckUser(const QString& npid, const QString
         return std::nullopt; // Empty = no such user
 
     UserRecord r;
-    r.userId    = q.value(0).toLongLong();
-    r.hash      = q.value(1).toByteArray();
-    r.salt      = q.value(2).toByteArray();
+    r.userId = q.value(0).toLongLong();
+    r.hash = q.value(1).toByteArray();
+    r.salt = q.value(2).toByteArray();
     r.avatarUrl = q.value(3).toString();
-    r.email     = q.value(4).toString();
+    r.email = q.value(4).toString();
     r.emailCheck = q.value(5).toString();
-    r.token     = q.value(6).toString();
-    r.admin     = q.value(7).toBool();
+    r.token = q.value(6).toString();
+    r.admin = q.value(7).toBool();
     r.statAgent = q.value(8).toBool();
-    r.banned    = q.value(9).toBool();
+    r.banned = q.value(9).toBool();
     r.username = npid;
 
     QByteArray computed = HashPassword(password, r.salt);
