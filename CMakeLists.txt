@@ -24,16 +24,16 @@ file(MAKE_DIRECTORY "${PROTO_OUT}")
 
 add_custom_command(
     OUTPUT
-        "${PROTO_OUT}/score_messages.pb.cc"
-        "${PROTO_OUT}/score_messages.pb.h"
+        "${PROTO_OUT}/shadnet.pb.cc"
+        "${PROTO_OUT}/shadnet.pb.h"
     COMMAND $<TARGET_FILE:protoc>
         "--proto_path=${CMAKE_CURRENT_SOURCE_DIR}/src"
         "--cpp_out=${PROTO_OUT}"
-        "${CMAKE_CURRENT_SOURCE_DIR}/src/score_messages.proto"
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/shadnet.proto"
     DEPENDS
-        "${CMAKE_CURRENT_SOURCE_DIR}/src/score_messages.proto"
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/shadnet.proto"
         protoc
-    COMMENT "Generating score_messages protobuf sources"
+    COMMENT "Generating shadnet protobuf sources"
     VERBATIM
 )
 
@@ -59,7 +59,7 @@ set(SOURCES
     src/score_files.h
     src/cmd_score.cpp
     src/proto_utils.h
-    "${PROTO_OUT}/score_messages.pb.cc"
+    "${PROTO_OUT}/shadnet.pb.cc"
 )
 
 add_executable(shadnet ${SOURCES})
