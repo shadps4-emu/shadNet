@@ -16,7 +16,7 @@ using SocketHandle = int;
 static constexpr SocketHandle INVALID_SOCK = -1;
 #endif
 
-namespace shadnet {
+namespace shadnetclient {
 class ShadNetConnection {
 public:
     ShadNetConnection();
@@ -53,4 +53,4 @@ private:
     // Parse m_readBuf and fire onPacket for each complete packet.
     void parse();
 };
-} // namespace shadnet
+} // namespace shadnetclient

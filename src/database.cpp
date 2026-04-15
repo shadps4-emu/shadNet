@@ -111,7 +111,6 @@ bool Database::Migrate() {
         "  username    TEXT NOT NULL,"
         "  hash        BLOB NOT NULL,"
         "  salt        BLOB NOT NULL,"
-        "  online_name TEXT NOT NULL,"
         "  avatar_url  TEXT NOT NULL,"
         "  email       TEXT NOT NULL,"
         "  email_check TEXT NOT NULL UNIQUE,"
@@ -181,8 +180,7 @@ bool Database::Migrate() {
 }
 
 std::optional<DbError> Database::CreateAccount(const QString& npid, const QString& password,
-                                               const QString& onlineName, const QString& avatarUrl,
-                                               const QString& email) {
+                                               const QString& avatarUrl, const QString& email) {
     // Input validation
     if (npid.isEmpty()) {
         qWarning() << "createAccount: NPID is empty";
@@ -191,11 +189,6 @@ std::optional<DbError> Database::CreateAccount(const QString& npid, const QStrin
 
     if (password.isEmpty()) {
         qWarning() << "createAccount: Password is empty";
-        return DbError::InvalidInput;
-    }
-
-    if (onlineName.isEmpty()) {
-        qWarning() << "createAccount: Online name is empty";
         return DbError::InvalidInput;
     }
 
@@ -301,9 +294,9 @@ std::optional<DbError> Database::CreateAccount(const QString& npid, const QStrin
     // Insert account
     {
         QSqlQuery q(m_db);
-        if (!q.prepare("INSERT INTO account(username, hash, salt, online_name, avatar_url, "
+        if (!q.prepare("INSERT INTO account(username, hash, salt, avatar_url, "
                        "email, email_check, token, admin, stat_agent, banned) "
-                       "VALUES(?, ?, ?, ?, ?, ?, ?, ?, 0, 0, 0)")) {
+                       "VALUES(?, ?, ?, ?, ?, ?, ?, 0, 0, 0)")) {
             qCritical() << "createAccount: Failed to prepare insert query:" << q.lastError().text();
             m_db.rollback();
             return DbError::Internal;
@@ -312,7 +305,6 @@ std::optional<DbError> Database::CreateAccount(const QString& npid, const QStrin
         q.addBindValue(npid);
         q.addBindValue(hash);
         q.addBindValue(salt);
-        q.addBindValue(onlineName);
         q.addBindValue(avatarUrl);
         q.addBindValue(email);
         q.addBindValue(email.isEmpty() ? "" : email.toLower().trimmed());
@@ -382,7 +374,7 @@ std::optional<DbError> Database::CreateAccount(const QString& npid, const QStrin
 std::optional<UserRecord> Database::CheckUser(const QString& npid, const QString& password,
                                               const QString& token, bool checkToken) {
     QSqlQuery q(m_db);
-    q.prepare("SELECT user_id,hash,salt,online_name,avatar_url,email,email_check,"
+    q.prepare("SELECT user_id,hash,salt,avatar_url,email,email_check,"
               "token,admin,stat_agent,banned FROM account WHERE username=? COLLATE NOCASE");
     q.addBindValue(npid);
     if (!Exec(q) || !q.next())
@@ -392,14 +384,13 @@ std::optional<UserRecord> Database::CheckUser(const QString& npid, const QString
     r.userId = q.value(0).toLongLong();
     r.hash = q.value(1).toByteArray();
     r.salt = q.value(2).toByteArray();
-    r.onlineName = q.value(3).toString();
-    r.avatarUrl = q.value(4).toString();
-    r.email = q.value(5).toString();
-    r.emailCheck = q.value(6).toString();
-    r.token = q.value(7).toString();
-    r.admin = q.value(8).toBool();
-    r.statAgent = q.value(9).toBool();
-    r.banned = q.value(10).toBool();
+    r.avatarUrl = q.value(3).toString();
+    r.email = q.value(4).toString();
+    r.emailCheck = q.value(5).toString();
+    r.token = q.value(6).toString();
+    r.admin = q.value(7).toBool();
+    r.statAgent = q.value(8).toBool();
+    r.banned = q.value(9).toBool();
     r.username = npid;
 
     QByteArray computed = HashPassword(password, r.salt);

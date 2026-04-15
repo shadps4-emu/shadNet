@@ -30,12 +30,10 @@ ScoreTableCache& ScoreCache::GetOrCreate(const QString& comId, uint32_t boardId,
     return inner[boardId];
 }
 
-static score::ScoreRankData ToRankData(const ScoreEntry& e, int index) {
-    score::ScoreRankData r;
+static shadnet::ScoreRankData ToRankData(const ScoreEntry& e, int index) {
+    shadnet::ScoreRankData r;
     const QByteArray npidU8 = e.npid.toUtf8();
     r.set_npid(npidU8.constData(), static_cast<size_t>(npidU8.size()));
-    const QByteArray nameU8 = e.onlineName.toUtf8();
-    r.set_onlinename(nameU8.constData(), static_cast<size_t>(nameU8.size()));
     r.set_pcid(e.characterId);
     r.set_rank(static_cast<uint32_t>(index + 1));
     r.set_score(e.score);
@@ -103,7 +101,7 @@ uint32_t ScoreCache::InsertScore(const QString& comId, uint32_t boardId,
 }
 
 // Append one rank entry (and optionally comment / game-info) to a response.
-static void AppendEntry(score::GetScoreResponse& resp, const ScoreEntry& e, int idx,
+static void AppendEntry(shadnet::GetScoreResponse& resp, const ScoreEntry& e, int idx,
                         bool withComment, bool withGameInfo) {
     *resp.add_rankarray() = ToRankData(e, idx);
     if (withComment) {
@@ -118,7 +116,7 @@ static void AppendEntry(score::GetScoreResponse& resp, const ScoreEntry& e, int 
 }
 
 // Append a blank entry (user not on this board) to keep index alignment.
-static void appendBlankEntry(score::GetScoreResponse& resp, bool withComment, bool withGameInfo) {
+static void appendBlankEntry(shadnet::GetScoreResponse& resp, bool withComment, bool withGameInfo) {
     resp.add_rankarray(); // default-constructed ScoreRankData (all zeros)
     if (withComment)
         resp.add_commentarray("");
@@ -126,10 +124,10 @@ static void appendBlankEntry(score::GetScoreResponse& resp, bool withComment, bo
         resp.add_infoarray();
 }
 
-score::GetScoreResponse ScoreCache::GetScoreRange(const QString& comId, uint32_t boardId,
-                                                  uint32_t startRank, uint32_t numRanks,
-                                                  bool withComment, bool withGameInfo) {
-    score::GetScoreResponse resp;
+shadnet::GetScoreResponse ScoreCache::GetScoreRange(const QString& comId, uint32_t boardId,
+                                                    uint32_t startRank, uint32_t numRanks,
+                                                    bool withComment, bool withGameInfo) {
+    shadnet::GetScoreResponse resp;
     QReadLocker lk(&m_lock);
 
     if (!m_tables.contains(comId) || !m_tables[comId].contains(boardId)) {
@@ -152,10 +150,10 @@ score::GetScoreResponse ScoreCache::GetScoreRange(const QString& comId, uint32_t
     return resp;
 }
 
-score::GetScoreResponse ScoreCache::GetScoreByIds(const QString& comId, uint32_t boardId,
-                                                  const QVector<QPair<int64_t, int32_t>>& ids,
-                                                  bool withComment, bool withGameInfo) {
-    score::GetScoreResponse resp;
+shadnet::GetScoreResponse ScoreCache::GetScoreByIds(const QString& comId, uint32_t boardId,
+                                                    const QVector<QPair<int64_t, int32_t>>& ids,
+                                                    bool withComment, bool withGameInfo) {
+    shadnet::GetScoreResponse resp;
     QReadLocker lk(&m_lock);
 
     const ScoreTableCache* tp = nullptr;

@@ -22,7 +22,7 @@
 #define SOCK_WOULD_BLOCK (errno == EAGAIN || errno == EWOULDBLOCK)
 #endif
 
-using namespace shadnet;
+using namespace shadnetclient;
 
 static void platformInit() {
 #ifdef _WIN32

@@ -138,7 +138,7 @@ QVector<ScoreEntry> ScoreDb::ScoresForBoard(const QString& comId, uint32_t board
                                         : "s.score ASC,  s.timestamp ASC, s.user_id ASC";
     QSqlQuery q(m_db);
     q.prepare("SELECT s.user_id,s.character_id,s.score,s.comment,s.game_info,s.data_id,s.timestamp,"
-              "       a.username,a.online_name"
+              "       a.username"
               " FROM score s LEFT JOIN account a ON a.user_id=s.user_id"
               " WHERE s.communication_id=? AND s.board_id=?"
               " ORDER BY " +
@@ -158,7 +158,6 @@ QVector<ScoreEntry> ScoreDb::ScoresForBoard(const QString& comId, uint32_t board
                 e.dataId = static_cast<uint64_t>(q.value(5).toULongLong());
             e.timestamp = static_cast<uint64_t>(q.value(6).toULongLong());
             e.npid = q.value(7).toString();
-            e.onlineName = q.value(8).toString();
             result.append(e);
         }
     }

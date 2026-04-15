@@ -4,9 +4,9 @@
 #include <cstdio>
 #include <cstring>
 #include "client.h"
-#include "score.pb.h"
+#include "shadnet.pb.h"
 
-using namespace shadnet;
+using namespace shadnetclient;
 
 bool ShadNetClient::connect(const char* host, uint16_t port) {
     if (!conn.connect(host, port))
@@ -37,45 +37,64 @@ std::vector<uint8_t> ShadNetClient::buildPacket(CommandType cmd, uint64_t id,
     return out;
 }
 
-// Account commands
+// Serialise a protobuf message as a u32-LE-prefixed blob.
+// This is the standard request payload format for all non-score commands.
+static std::vector<uint8_t> makeProtoPayload(const google::protobuf::MessageLite& msg) {
+    std::string serialised;
+    msg.SerializeToString(&serialised);
+    uint32_t len = static_cast<uint32_t>(serialised.size());
+    std::vector<uint8_t> out(4);
+    memcpy(out.data(), &len, 4); // LE on little-endian hosts
+    out.insert(out.end(), serialised.begin(), serialised.end());
+    return out;
+}
+
+// Read a u32-LE-prefixed blob at payload[pos] and return it ready for ParseFromString.
+static std::string extractBlob(const std::vector<uint8_t>& p, int pos) {
+    if (pos + 4 > static_cast<int>(p.size()))
+        return {};
+    uint32_t len = 0;
+    memcpy(&len, p.data() + pos, 4);
+    pos += 4;
+    if (pos + static_cast<int>(len) > static_cast<int>(p.size()))
+        return {};
+    return std::string(reinterpret_cast<const char*>(p.data() + pos), len);
+}
+
+// ── Account commands ──────────────────────────────────────────────────────────
+
 void ShadNetClient::login(const std::string& npid, const std::string& password,
                           const std::string& token) {
-    std::vector<uint8_t> payload;
-    auto addStr = [&](const std::string& s) {
-        payload.insert(payload.end(), s.begin(), s.end());
-        payload.push_back(0);
-    };
-    addStr(npid);
-    addStr(password);
-    addStr(token);
-    conn.send(buildPacket(CommandType::Login, packetCounter++, payload));
+    shadnet::LoginRequest req;
+    req.set_npid(npid);
+    req.set_password(password);
+    if (!token.empty())
+        req.set_token(token);
+    conn.send(buildPacket(CommandType::Login, packetCounter++, makeProtoPayload(req)));
 }
 
 void ShadNetClient::createAccount(const std::string& npid, const std::string& password,
-                                  const std::string& onlineName, const std::string& avatarUrl,
-                                  const std::string& email) {
-    std::vector<uint8_t> payload;
-    auto addStr = [&](const std::string& s) {
-        payload.insert(payload.end(), s.begin(), s.end());
-        payload.push_back(0);
-    };
-    addStr(npid);
-    addStr(password);
-    addStr(onlineName);
-    addStr(avatarUrl);
-    addStr(email);
-    conn.send(buildPacket(CommandType::Create, packetCounter++, payload));
+                                  const std::string& avatarUrl, const std::string& email,
+                                  const std::string& secretKey) {
+    shadnet::RegistrationRequest req;
+    req.set_npid(npid);
+    req.set_password(password);
+    if (!avatarUrl.empty())
+        req.set_avatar_url(avatarUrl);
+    req.set_email(email);
+    if (!secretKey.empty())
+        req.set_secret_key(secretKey);
+    conn.send(buildPacket(CommandType::Create, packetCounter++, makeProtoPayload(req)));
 }
 
-// Friend commands
+// ── Friend / block commands ───────────────────────────────────────────────────
 
 void ShadNetClient::sendFriendCommand(CommandType cmd, const std::string& targetNpid) {
     m_pendingFriendCmd = cmd;
     m_pendingFriendNpid = targetNpid;
-    std::vector<uint8_t> payload;
-    payload.insert(payload.end(), targetNpid.begin(), targetNpid.end());
-    payload.push_back(0);
-    conn.send(buildPacket(cmd, packetCounter++, payload));
+    shadnet::FriendCommandRequest req;
+    req.set_npid(targetNpid);
+    conn.send(buildPacket(cmd, packetCounter++, makeProtoPayload(req)));
 }
 
 void ShadNetClient::addFriend(const std::string& n) {
@@ -91,10 +110,9 @@ void ShadNetClient::removeBlock(const std::string& n) {
     sendFriendCommand(CommandType::RemoveBlock, n);
 }
 
-// NPScore wire helpers
+// ── Score wire helpers ────────────────────────────────────────────────────────
 
-// Build the standard score request payload:
-//   ComId(12 bytes, padded) + u32 LE blob size + serialised protobuf
+// Build score payload: ComId(12 bytes, zero-padded) + u32-LE blob size + proto bytes.
 static std::vector<uint8_t> makeScorePayload(const std::string& comId,
                                              const google::protobuf::MessageLite& msg) {
     std::vector<uint8_t> out(12, 0);
@@ -111,22 +129,9 @@ static std::vector<uint8_t> makeScorePayload(const std::string& comId,
     return out;
 }
 
-// Read the u32 LE-prefixed blob at the given position and return it as a std::string
-// ready for ParseFromString.
-static std::string extractBlob(const std::vector<uint8_t>& p, int pos) {
-    if (pos + 4 > static_cast<int>(p.size()))
-        return {};
-    uint32_t len = 0;
-    memcpy(&len, p.data() + pos, 4);
-    pos += 4;
-    if (pos + static_cast<int>(len) > static_cast<int>(p.size()))
-        return {};
-    return std::string(reinterpret_cast<const char*>(p.data() + pos), len);
-}
+// ── Score send methods ────────────────────────────────────────────────────────
 
-// NPScore send methods
 void ShadNetClient::getBoardInfos(const std::string& comId, uint32_t boardId) {
-    // GetBoardInfos is special: boardId is a raw u32 LE, not a protobuf blob.
     std::vector<uint8_t> payload(12, 0);
     size_t n = (std::min)(comId.size(), size_t(12));
     memcpy(payload.data(), comId.data(), n);
@@ -139,7 +144,7 @@ void ShadNetClient::getBoardInfos(const std::string& comId, uint32_t boardId) {
 void ShadNetClient::recordScore(const std::string& comId, uint32_t boardId, int32_t pcId,
                                 int64_t score, const std::string& comment,
                                 const std::vector<uint8_t>& gameInfo) {
-    score::RecordScoreRequest req;
+    shadnet::RecordScoreRequest req;
     req.set_boardid(boardId);
     req.set_pcid(pcId);
     req.set_score(score);
@@ -152,12 +157,10 @@ void ShadNetClient::recordScore(const std::string& comId, uint32_t boardId, int3
 
 void ShadNetClient::recordScoreData(const std::string& comId, uint32_t boardId, int32_t pcId,
                                     int64_t score, const std::vector<uint8_t>& data) {
-    score::RecordScoreGameDataRequest req;
+    shadnet::RecordScoreGameDataRequest req;
     req.set_boardid(boardId);
     req.set_pcid(pcId);
     req.set_score(score);
-
-    // Wire: ComId(12) + pb_blob(u32+bytes) + raw_data(u32+bytes)
     std::vector<uint8_t> payload = makeScorePayload(comId, req);
     uint32_t dlen = static_cast<uint32_t>(data.size());
     uint8_t dl[4];
@@ -169,7 +172,7 @@ void ShadNetClient::recordScoreData(const std::string& comId, uint32_t boardId, 
 
 void ShadNetClient::getScoreData(const std::string& comId, uint32_t boardId,
                                  const std::string& npid, int32_t pcId) {
-    score::GetScoreGameDataRequest req;
+    shadnet::GetScoreGameDataRequest req;
     req.set_boardid(boardId);
     req.set_npid(npid);
     req.set_pcid(pcId);
@@ -179,7 +182,7 @@ void ShadNetClient::getScoreData(const std::string& comId, uint32_t boardId,
 
 void ShadNetClient::getScoreRange(const std::string& comId, uint32_t boardId, uint32_t startRank,
                                   uint32_t numRanks, bool withComment, bool withGameInfo) {
-    score::GetScoreRangeRequest req;
+    shadnet::GetScoreRangeRequest req;
     req.set_boardid(boardId);
     req.set_startrank(startRank);
     req.set_numranks(numRanks);
@@ -192,7 +195,7 @@ void ShadNetClient::getScoreRange(const std::string& comId, uint32_t boardId, ui
 void ShadNetClient::getScoreNpid(const std::string& comId, uint32_t boardId,
                                  const std::vector<NpIdPcId>& targets, bool withComment,
                                  bool withGameInfo) {
-    score::GetScoreNpIdRequest req;
+    shadnet::GetScoreNpIdRequest req;
     req.set_boardid(boardId);
     for (const auto& t : targets) {
         auto* e = req.add_npids();
@@ -207,7 +210,7 @@ void ShadNetClient::getScoreNpid(const std::string& comId, uint32_t boardId,
 
 void ShadNetClient::getScoreFriends(const std::string& comId, uint32_t boardId, bool includeSelf,
                                     uint32_t max, bool withComment, bool withGameInfo) {
-    score::GetScoreFriendsRequest req;
+    shadnet::GetScoreFriendsRequest req;
     req.set_boardid(boardId);
     req.set_includeself(includeSelf);
     req.set_max(max);
@@ -217,25 +220,7 @@ void ShadNetClient::getScoreFriends(const std::string& comId, uint32_t boardId, 
         buildPacket(CommandType::GetScoreFriends, packetCounter++, makeScorePayload(comId, req)));
 }
 
-// Reply handlers
-
-static bool skipPresence(const std::vector<uint8_t>& p, int& pos) {
-    if (pos + 12 > static_cast<int>(p.size()))
-        return false;
-    pos += 12;
-    for (int i = 0; i < 3; ++i) {
-        while (pos < static_cast<int>(p.size()) && p[pos] != 0)
-            ++pos;
-        if (pos >= static_cast<int>(p.size()))
-            return false;
-        ++pos;
-    }
-    if (pos + 4 > static_cast<int>(p.size()))
-        return false;
-    uint32_t dlen = fromLE32(p.data() + pos);
-    pos += 4 + static_cast<int>(dlen);
-    return pos <= static_cast<int>(p.size());
-}
+// ── Reply handlers ────────────────────────────────────────────────────────────
 
 void ShadNetClient::handleLoginReply(const std::vector<uint8_t>& payload) {
     LoginResult res;
@@ -244,51 +229,30 @@ void ShadNetClient::handleLoginReply(const std::vector<uint8_t>& payload) {
     } else {
         res.error = static_cast<ErrorType>(payload[0]);
         if (res.error == ErrorType::NoError) {
-            int pos = 1;
-            auto readStr = [&]() -> std::string {
-                std::string s;
-                while (pos < static_cast<int>(payload.size()) && payload[pos] != 0)
-                    s += static_cast<char>(payload[pos++]);
-                if (pos < static_cast<int>(payload.size()))
-                    ++pos;
-                return s;
-            };
-            auto readU32 = [&]() -> uint32_t {
-                if (pos + 4 > static_cast<int>(payload.size()))
-                    return 0;
-                uint32_t v = fromLE32(payload.data() + pos);
-                pos += 4;
-                return v;
-            };
-            res.onlineName = readStr();
-            res.avatarUrl = readStr();
-            if (pos + 8 <= static_cast<int>(payload.size())) {
-                res.userId = fromLE64(payload.data() + pos);
-                pos += 8;
+            shadnet::LoginReply pb;
+            if (pb.ParseFromString(extractBlob(payload, 1))) {
+                res.avatarUrl = pb.avatar_url();
+                res.userId = pb.user_id();
+                for (const auto& f : pb.friends()) {
+                    FriendEntry fe;
+                    fe.npid = f.npid();
+                    fe.online = f.online();
+                    res.friends.push_back(std::move(fe));
+                }
+                for (const auto& n : pb.friend_requests_sent())
+                    res.friendRequestsSent.push_back(n);
+                for (const auto& n : pb.friend_requests_received())
+                    res.friendRequestsReceived.push_back(n);
+                for (const auto& n : pb.blocked())
+                    res.blocked.push_back(n);
+            } else {
+                res.error = ErrorType::Malformed;
             }
-            uint32_t fc = readU32();
-            for (uint32_t i = 0; i < fc && pos < static_cast<int>(payload.size()); ++i) {
-                FriendEntry fe;
-                fe.npid = readStr();
-                fe.online = (pos < static_cast<int>(payload.size())) && (payload[pos++] != 0);
-                skipPresence(payload, pos);
-                res.friends.push_back(fe);
-            }
-            uint32_t sc = readU32();
-            for (uint32_t i = 0; i < sc; ++i)
-                res.friendRequestsSent.push_back(readStr());
-            uint32_t rc = readU32();
-            for (uint32_t i = 0; i < rc; ++i)
-                res.friendRequestsReceived.push_back(readStr());
-            uint32_t bc = readU32();
-            for (uint32_t i = 0; i < bc; ++i)
-                res.blocked.push_back(readStr());
         }
     }
 
     if (res.error == ErrorType::NoError) {
-        printf("[login] OK  onlineName=%s  userId=%llu\n", res.onlineName.c_str(),
-               static_cast<unsigned long long>(res.userId));
+        printf("[login] OK userId=%llu\n", static_cast<unsigned long long>(res.userId));
         printf("[login]   friends(%zu):", res.friends.size());
         for (const auto& f : res.friends)
             printf("  %s(%s)", f.npid.c_str(), f.online ? "online" : "offline");
@@ -350,52 +314,59 @@ void ShadNetClient::handleFriendReply(CommandType cmd, const std::vector<uint8_t
 
 void ShadNetClient::handleNotification(const Packet& pkt) {
     const auto& p = pkt.payload;
-    int pos = 0;
-    auto readStr = [&]() -> std::string {
-        std::string s;
-        while (pos < static_cast<int>(p.size()) && p[pos] != 0)
-            s += static_cast<char>(p[pos++]);
-        if (pos < static_cast<int>(p.size()))
-            ++pos;
-        return s;
-    };
+    std::string blob = extractBlob(p, 0);
 
     switch (static_cast<NotificationType>(pkt.command)) {
     case NotificationType::FriendQuery: {
+        shadnet::NotifyFriendQuery pb;
+        if (!pb.ParseFromString(blob)) {
+            printf("[notify] FriendQuery: parse error\n");
+            break;
+        }
         NotifyFriendQuery n;
-        n.fromNpid = readStr();
+        n.fromNpid = pb.from_npid();
         printf("[notify] FriendQuery from %s\n", n.fromNpid.c_str());
         if (onFriendQuery)
             onFriendQuery(n);
         break;
     }
     case NotificationType::FriendNew: {
+        shadnet::NotifyFriendNew pb;
+        if (!pb.ParseFromString(blob)) {
+            printf("[notify] FriendNew: parse error\n");
+            break;
+        }
         NotifyFriendNew n;
-        if (pos < static_cast<int>(p.size()))
-            n.online = (p[pos++] != 0);
-        n.npid = readStr();
+        n.npid = pb.npid();
+        n.online = pb.online();
         printf("[notify] FriendNew %s (%s)\n", n.npid.c_str(), n.online ? "online" : "offline");
         if (onFriendNew)
             onFriendNew(n);
         break;
     }
     case NotificationType::FriendLost: {
+        shadnet::NotifyFriendLost pb;
+        if (!pb.ParseFromString(blob)) {
+            printf("[notify] FriendLost: parse error\n");
+            break;
+        }
         NotifyFriendLost n;
-        n.npid = readStr();
+        n.npid = pb.npid();
         printf("[notify] FriendLost %s\n", n.npid.c_str());
         if (onFriendLost)
             onFriendLost(n);
         break;
     }
     case NotificationType::FriendStatus: {
-        NotifyFriendStatus n;
-        if (pos < static_cast<int>(p.size()))
-            n.online = (p[pos++] != 0);
-        if (pos + 8 <= static_cast<int>(p.size())) {
-            n.timestamp = fromLE64(p.data() + pos);
-            pos += 8;
+        shadnet::NotifyFriendStatus pb;
+        if (!pb.ParseFromString(blob)) {
+            printf("[notify] FriendStatus: parse error\n");
+            break;
         }
-        n.npid = readStr();
+        NotifyFriendStatus n;
+        n.npid = pb.npid();
+        n.online = pb.online();
+        n.timestamp = pb.timestamp();
         printf("[notify] FriendStatus %s is %s\n", n.npid.c_str(), n.online ? "online" : "offline");
         if (onFriendStatus)
             onFriendStatus(n);
@@ -457,7 +428,7 @@ void ShadNetClient::handlePacket(const Packet& pkt) {
     }
 }
 
-// NPScore reply handlers
+// ── Score reply handlers (unchanged) ─────────────────────────────────────────
 
 void ShadNetClient::handleBoardInfosReply(const std::vector<uint8_t>& payload) {
     BoardInfo info;
@@ -468,7 +439,7 @@ void ShadNetClient::handleBoardInfosReply(const std::vector<uint8_t>& payload) {
     }
     info.error = static_cast<ErrorType>(payload[0]);
     if (info.error == ErrorType::NoError) {
-        score::BoardInfo pb;
+        shadnet::BoardInfo pb;
         if (pb.ParseFromString(extractBlob(payload, 1))) {
             info.rankLimit = pb.ranklimit();
             info.updateMode = pb.updatemode();
@@ -476,8 +447,7 @@ void ShadNetClient::handleBoardInfosReply(const std::vector<uint8_t>& payload) {
             info.uploadNumLimit = pb.uploadnumlimit();
             info.uploadSizeLimit = pb.uploadsizelimit();
         }
-        printf("[board-info] rankLimit=%u updateMode=%u sortMode=%u"
-               " uploadNum=%u uploadSize=%u\n",
+        printf("[board-info] rankLimit=%u updateMode=%u sortMode=%u uploadNum=%u uploadSize=%u\n",
                info.rankLimit, info.updateMode, info.sortMode, info.uploadNumLimit,
                info.uploadSizeLimit);
     } else {
@@ -545,23 +515,19 @@ void ShadNetClient::handleScoreRangeReply(const std::vector<uint8_t>& payload,
             cb(result);
         return;
     }
-
-    score::GetScoreResponse pb;
+    shadnet::GetScoreResponse pb;
     if (!pb.ParseFromString(extractBlob(payload, 1))) {
         printf("[score-range] Failed to parse GetScoreResponse\n");
         if (cb)
             cb(result);
         return;
     }
-
     result.lastSortDate = pb.lastsortdate();
     result.totalRecord = pb.totalrecord();
-
     for (int i = 0; i < pb.rankarray_size(); ++i) {
         const auto& r = pb.rankarray(i);
         ScoreRankEntry e;
         e.npid = r.npid();
-        e.onlineName = r.onlinename();
         e.pcId = r.pcid();
         e.rank = r.rank();
         e.score = r.score();
@@ -574,7 +540,6 @@ void ShadNetClient::handleScoreRangeReply(const std::vector<uint8_t>& payload,
                 std::vector<uint8_t>(pb.infoarray(i).data().begin(), pb.infoarray(i).data().end());
         result.entries.push_back(std::move(e));
     }
-
     printf("[score-range] total=%u lastSort=%llu\n", result.totalRecord,
            static_cast<unsigned long long>(result.lastSortDate));
     for (const auto& e : result.entries) {

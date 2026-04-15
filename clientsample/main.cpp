@@ -8,7 +8,7 @@
 #include "client.h"
 
 // Usage:
-//   shadnet-sample <host> <port> register       <npid> <password> <onlineName> <email>
+//   shadnet-sample <host> <port> register       <npid> <password> <email> [secretKey]
 //   shadnet-sample <host> <port> login          <npid> <password> [token]
 //   shadnet-sample <host> <port> friend-add     <npid> <password> <friend_npid>
 //   shadnet-sample <host> <port> friend-remove  <npid> <password> <friend_npid>
@@ -22,7 +22,7 @@
 
 static void printUsage(const char* prog) {
     printf("Usage:\n"
-           "  %s <host> <port> register       <npid> <password> <onlineName> <email>\n"
+           "  %s <host> <port> register       <npid> <password> <email> [secretKey]\n"
            "  %s <host> <port> login          <npid> <password> [token]\n"
            "  %s <host> <port> friend-add     <npid> <password> <friend_npid>\n"
            "  %s <host> <port> friend-remove  <npid> <password> <friend_npid>\n"
@@ -38,7 +38,7 @@ static void printUsage(const char* prog) {
            prog, prog, prog, prog, prog, prog, prog, prog, prog, prog);
 }
 
-static bool pollUntil(shadnet::ShadNetClient& client, bool& done, int timeoutMs = 10000) {
+static bool pollUntil(shadnetclient::ShadNetClient& client, bool& done, int timeoutMs = 10000) {
     for (int i = 0; i < timeoutMs / 10 && !done; ++i) {
         client.update();
         std::this_thread::sleep_for(std::chrono::milliseconds(10));
@@ -56,23 +56,24 @@ int main(int argc, char* argv[]) {
     uint16_t port = static_cast<uint16_t>(atoi(argv[2]));
     const char* command = argv[3];
 
-    shadnet::ShadNetClient client;
+    shadnetclient::ShadNetClient client;
     printf("[connect] %s:%u ...\n", host, port);
     if (!client.connect(host, port)) {
         printf("[connect] FAILED: %s\n", client.lastError().c_str());
         return 1;
     }
-    printf("[connect] OK (protocol v%u)\n", shadnet::PROTOCOL_VERSION);
+    printf("[connect] OK (protocol v%u)\n", shadnetclient::PROTOCOL_VERSION);
 
     // register
     if (strcmp(command, "register") == 0) {
-        if (argc < 8) {
-            printf("register: <npid> <password> <onlineName> <email>\n");
+        if (argc < 7) {
+            printf("register: <npid> <password> <email> [secretKey]\n");
             return 1;
         }
         bool done = false;
-        client.onCreateResult = [&done](shadnet::ErrorType) { done = true; };
-        client.createAccount(argv[4], argv[5], argv[6], "", argv[7]);
+        client.onCreateResult = [&done](shadnetclient::ErrorType) { done = true; };
+        // argv[4]=npid, argv[5]=password, argv[6]=email, argv[7]=secretKey (optional)
+        client.createAccount(argv[4], argv[5], "", argv[6], argc >= 8 ? argv[7] : "");
         if (!pollUntil(client, done))
             printf("[timeout] No reply.\n");
         client.disconnect();
@@ -86,7 +87,7 @@ int main(int argc, char* argv[]) {
             return 1;
         }
         bool done = false;
-        client.onLoginResult = [&done](const shadnet::LoginResult&) { done = true; };
+        client.onLoginResult = [&done](const shadnetclient::LoginResult&) { done = true; };
         client.login(argv[4], argv[5], argc >= 7 ? argv[6] : "");
         if (!pollUntil(client, done))
             printf("[timeout] No reply.\n");
@@ -123,20 +124,20 @@ int main(int argc, char* argv[]) {
     bool loginOk = false;
     bool actionDone = false;
 
-    client.onLoginResult = [&](const shadnet::LoginResult& res) {
-        loginOk = (res.error == shadnet::ErrorType::NoError);
+    client.onLoginResult = [&](const shadnetclient::LoginResult& res) {
+        loginOk = (res.error == shadnetclient::ErrorType::NoError);
         loginDone = true;
     };
-    client.onFriendResult = [&](const shadnet::FriendResult&) { actionDone = true; };
-    client.onBoardInfos = [&](const shadnet::BoardInfo&) { actionDone = true; };
-    client.onRecordScore = [&](const shadnet::RecordScoreResult&) { actionDone = true; };
-    client.onRecordScoreData = [&](shadnet::ErrorType) { actionDone = true; };
-    client.onGetScoreData = [&](shadnet::ErrorType, const std::vector<uint8_t>&) {
+    client.onFriendResult = [&](const shadnetclient::FriendResult&) { actionDone = true; };
+    client.onBoardInfos = [&](const shadnetclient::BoardInfo&) { actionDone = true; };
+    client.onRecordScore = [&](const shadnetclient::RecordScoreResult&) { actionDone = true; };
+    client.onRecordScoreData = [&](shadnetclient::ErrorType) { actionDone = true; };
+    client.onGetScoreData = [&](shadnetclient::ErrorType, const std::vector<uint8_t>&) {
         actionDone = true;
     };
-    client.onScoreRange = [&](const shadnet::ScoreRangeResult&) { actionDone = true; };
-    client.onScoreNpid = [&](const shadnet::ScoreRangeResult&) { actionDone = true; };
-    client.onScoreFriends = [&](const shadnet::ScoreRangeResult&) { actionDone = true; };
+    client.onScoreRange = [&](const shadnetclient::ScoreRangeResult&) { actionDone = true; };
+    client.onScoreNpid = [&](const shadnetclient::ScoreRangeResult&) { actionDone = true; };
+    client.onScoreFriends = [&](const shadnetclient::ScoreRangeResult&) { actionDone = true; };
 
     // Step 1 — login
     client.login(npid, password, "");

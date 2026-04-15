@@ -5,14 +5,15 @@ set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_AUTOMOC ON)
 
-# === CRITICAL FIX: Set runtime library consistently ===
+# === Runtime library: must match Qt6 which always uses DLL runtime ===
 if(MSVC)
-    cmake_policy(SET CMP0091 NEW)  # Enable runtime library selection
-    # Use static runtime for consistency with your protobuf/abseil
-    set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
-    
-    # Fix exception handling and UTF-8 warnings
+    cmake_policy(SET CMP0091 NEW)
+    # /MD (release) or /MDd (debug) — DLL runtime, same as Qt6.
+    # protobuf_MSVC_STATIC_RUNTIME=OFF ensures protobuf follows the same setting.
+    set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>DLL")
+    set(protobuf_MSVC_STATIC_RUNTIME OFF CACHE BOOL "" FORCE)
     add_compile_options(/EHsc /utf-8)
+    # Remove /VERBOSE:LIB from link options (noisy, only needed for debugging)
 endif()
 
 find_package(Qt6 REQUIRED COMPONENTS Core Network Sql Concurrent)
@@ -24,16 +25,16 @@ file(MAKE_DIRECTORY "${PROTO_OUT}")
 
 add_custom_command(
     OUTPUT
-        "${PROTO_OUT}/score_messages.pb.cc"
-        "${PROTO_OUT}/score_messages.pb.h"
+        "${PROTO_OUT}/shadnet.pb.cc"
+        "${PROTO_OUT}/shadnet.pb.h"
     COMMAND $<TARGET_FILE:protoc>
         "--proto_path=${CMAKE_CURRENT_SOURCE_DIR}/src"
         "--cpp_out=${PROTO_OUT}"
-        "${CMAKE_CURRENT_SOURCE_DIR}/src/score_messages.proto"
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/shadnet.proto"
     DEPENDS
-        "${CMAKE_CURRENT_SOURCE_DIR}/src/score_messages.proto"
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/shadnet.proto"
         protoc
-    COMMENT "Generating score_messages protobuf sources"
+    COMMENT "Generating shadnet protobuf sources"
     VERBATIM
 )
 
@@ -59,7 +60,7 @@ set(SOURCES
     src/score_files.h
     src/cmd_score.cpp
     src/proto_utils.h
-    "${PROTO_OUT}/score_messages.pb.cc"
+    "${PROTO_OUT}/shadnet.pb.cc"
 )
 
 add_executable(shadnet ${SOURCES})
@@ -78,9 +79,6 @@ target_link_libraries(shadnet PRIVATE
     libprotobuf
 )
 
-# Optional: Add this to see what runtime libraries are being used
-if(MSVC)
-    target_link_options(shadnet PRIVATE /VERBOSE:LIB)
-endif()
+
 
 install(TARGETS shadnet RUNTIME DESTINATION bin)

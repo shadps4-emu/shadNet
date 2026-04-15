@@ -13,7 +13,7 @@ setlocal
 
 set HOST=127.0.0.1
 set PORT=31313
-set EXE=..\rpcn-sample.exe
+set EXE=shadnet-sample.exe
 
 if "%~3"=="" (
     echo Usage: friend-remove.bat ^<my_npid^> ^<my_password^> ^<target_npid^>

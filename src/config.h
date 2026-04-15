@@ -35,6 +35,15 @@ public:
         return m_adminsList.contains(npid);
     }
 
+    // Returns true if registration is allowed for the given secret_key.
+    // When RegistrationSecretKey is empty, all registrations are allowed.
+    // When set, only requests carrying the matching key are accepted.
+    bool IsRegistrationAllowed(const QString& key) const {
+        QReadLocker lk(&m_lock);
+        return m_registrationSecretKey.isEmpty() ||
+               (!key.isEmpty() && key == m_registrationSecretKey);
+    }
+
     void SetHost(const QString& v) {
         QWriteLocker lk(&m_lock);
         m_host = v;
@@ -65,4 +74,6 @@ private:
     bool m_emailValidated = false;
     QStringList m_adminsList;
     QSet<QString> m_bannedDomains;
+    // When non-empty, registrations must supply this key or they are rejected.
+    QString m_registrationSecretKey;
 };

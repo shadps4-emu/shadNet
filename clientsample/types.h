@@ -4,7 +4,7 @@
 #pragma once
 #include <cstdint>
 
-namespace shadnet {
+namespace shadnetclient {
 constexpr uint32_t HEADER_SIZE = 15;
 constexpr uint32_t PROTOCOL_VERSION = 1;
 
@@ -155,4 +155,4 @@ inline uint64_t fromLE64(const uint8_t* p) {
         v |= static_cast<uint64_t>(p[i]) << (8 * i);
     return v;
 }
-} // namespace shadnet
+} // namespace shadnetclient

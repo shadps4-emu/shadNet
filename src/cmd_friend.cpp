@@ -3,13 +3,45 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
 #include <QDebug>
 #include "client_session.h"
+#include "proto_utils.h"
+#include "shadnet.pb.h"
+
+// AddFriend
+// Request:  u32LE blob size + FriendCommandRequest proto
+// Reply:    ErrorType(u8) only
+
+// Read a u32-LE-prefixed protobuf blob from the stream and parse it.
+// Returns false and sets data.error() on failure.
+template <typename T>
+static bool decodeProto(T& msg, StreamExtractor& data) {
+    QByteArray blob = data.getRawData();
+    if (data.error())
+        return false;
+    return msg.ParseFromArray(blob.constData(), blob.size());
+}
+
+// Serialise a protobuf message and append it as a u32-LE-prefixed blob to reply.
+template <typename T>
+static void appendProto(QByteArray& reply, const T& msg) {
+    std::string s = msg.SerializeAsString();
+    appendBlob(reply, QByteArray(s.data(), static_cast<int>(s.size())));
+}
+
+// Build a notification QByteArray containing a serialised proto message.
+template <typename T>
+static QByteArray buildNotifPayload(const T& msg) {
+    QByteArray buf;
+    appendProto(buf, msg);
+    return buf;
+}
 
 ErrorType ClientSession::CmdAddFriend(StreamExtractor& data) {
-    QString friendNpid = data.getString(false);
-    if (data.error())
+    shadnet::FriendCommandRequest req;
+    if (!decodeProto(req, data) || data.error())
         return ErrorType::Malformed;
 
-    // Resolve target npid → userId.
+    QString friendNpid = QString::fromStdString(req.npid());
+
     auto friendIdOpt = m_db->GetUserId(friendNpid);
     if (!friendIdOpt)
         return ErrorType::NotFound;
@@ -27,10 +59,8 @@ ErrorType ClientSession::CmdAddFriend(StreamExtractor& data) {
         return ErrorType::DbFail;
 
     if (res == Database::RelResult::Ok) {
-        // Any block on either side prevents the operation.
         if ((rel.caller & B) || (rel.other & B))
             return ErrorType::Blocked;
-        // Already requested or already friends.
         if (rel.caller & F)
             return ErrorType::AlreadyFriend;
     }
@@ -44,9 +74,6 @@ ErrorType ClientSession::CmdAddFriend(StreamExtractor& data) {
     bool mutualFriendship = (newOther & F) != 0;
 
     if (mutualFriendship) {
-        // The target had already sent a request — this AddFriend completes the mutual friendship.
-
-        // Update both in-memory friends maps under a single write lock.
         bool targetOnline = false;
         {
             QWriteLocker lk(&m_shared->clientsLock);
@@ -61,29 +88,27 @@ ErrorType ClientSession::CmdAddFriend(StreamExtractor& data) {
             }
         }
 
-        // FriendNew payload: online(u8) + npid\0
-        // Notify ourselves.
+        // FriendNew to ourselves: tell us about the new friend and whether they're online.
         {
-            QByteArray payload;
-            payload.append(static_cast<char>(targetOnline ? 1 : 0));
-            appendCStr(payload, friendNpid);
-            SendSelfNotification(NotificationType::FriendNew, payload);
+            shadnet::NotifyFriendNew n;
+            n.set_npid(friendNpid.toStdString());
+            n.set_online(targetOnline);
+            SendSelfNotification(NotificationType::FriendNew, buildNotifPayload(n));
         }
-        // Notify the new friend.
+        // FriendNew to new friend: tell them about us (we are definitely online).
         {
-            QByteArray payload;
-            payload.append('\x01'); // we are definitely online since we're sending this
-            appendCStr(payload, m_info.npid);
-            SendNotification(NotificationType::FriendNew, payload, friendId);
+            shadnet::NotifyFriendNew n;
+            n.set_npid(m_info.npid.toStdString());
+            n.set_online(true);
+            SendNotification(NotificationType::FriendNew, buildNotifPayload(n), friendId);
         }
 
         qInfo() << "Friendship formed:" << m_info.npid << "<->" << friendNpid;
     } else {
-        // Target has not yet sent a request — this is a new outgoing request.
-        // FriendQuery payload: requester_npid\0
-        QByteArray payload;
-        appendCStr(payload, m_info.npid);
-        SendNotification(NotificationType::FriendQuery, payload, friendId);
+        // Outgoing friend request notify the target.
+        shadnet::NotifyFriendQuery q;
+        q.set_from_npid(m_info.npid.toStdString());
+        SendNotification(NotificationType::FriendQuery, buildNotifPayload(q), friendId);
 
         qInfo() << "Friend request sent:" << m_info.npid << "->" << friendNpid;
     }
@@ -91,10 +116,14 @@ ErrorType ClientSession::CmdAddFriend(StreamExtractor& data) {
     return ErrorType::NoError;
 }
 
+// RemoveFriend
+
 ErrorType ClientSession::CmdRemoveFriend(StreamExtractor& data) {
-    QString friendNpid = data.getString(false);
-    if (data.error())
+    shadnet::FriendCommandRequest req;
+    if (!decodeProto(req, data) || data.error())
         return ErrorType::Malformed;
+
+    QString friendNpid = QString::fromStdString(req.npid());
 
     auto friendIdOpt = m_db->GetUserId(friendNpid);
     if (!friendIdOpt)
@@ -109,8 +138,6 @@ ErrorType ClientSession::CmdRemoveFriend(StreamExtractor& data) {
     auto [res, rel] = m_db->GetRelStatus(m_info.userId, friendId);
     if (res != Database::RelResult::Ok)
         return ErrorType::NotFound;
-
-    // Require at least one side to have the Friend bit.
     if (!(rel.caller & F) && !(rel.other & F))
         return ErrorType::NotFound;
 
@@ -123,7 +150,6 @@ ErrorType ClientSession::CmdRemoveFriend(StreamExtractor& data) {
     if (!ok)
         return ErrorType::DbFail;
 
-    // Remove from both in-memory friends maps.
     {
         QWriteLocker lk(&m_shared->clientsLock);
         auto selfIt = m_shared->clients.find(m_info.userId);
@@ -135,25 +161,29 @@ ErrorType ClientSession::CmdRemoveFriend(StreamExtractor& data) {
             friendIt->friends.remove(m_info.userId);
     }
 
-    // FriendLost payload: npid\0 of the person being removed (from the recipient's view)
+    // FriendLost to both sides.
     {
-        QByteArray toSelf;
-        appendCStr(toSelf, friendNpid);
-        SendSelfNotification(NotificationType::FriendLost, toSelf);
+        shadnet::NotifyFriendLost toSelf;
+        toSelf.set_npid(friendNpid.toStdString());
+        SendSelfNotification(NotificationType::FriendLost, buildNotifPayload(toSelf));
 
-        QByteArray toFriend;
-        appendCStr(toFriend, m_info.npid);
-        SendNotification(NotificationType::FriendLost, toFriend, friendId);
+        shadnet::NotifyFriendLost toFriend;
+        toFriend.set_npid(m_info.npid.toStdString());
+        SendNotification(NotificationType::FriendLost, buildNotifPayload(toFriend), friendId);
     }
 
     qInfo() << "Friend removed:" << m_info.npid << "removed" << friendNpid;
     return ErrorType::NoError;
 }
 
+// AddBlock
+
 ErrorType ClientSession::CmdAddBlock(StreamExtractor& data) {
-    QString targetNpid = data.getString(false);
-    if (data.error())
+    shadnet::FriendCommandRequest req;
+    if (!decodeProto(req, data) || data.error())
         return ErrorType::Malformed;
+
+    QString targetNpid = QString::fromStdString(req.npid());
 
     auto targetIdOpt = m_db->GetUserId(targetNpid);
     if (!targetIdOpt)
@@ -173,7 +203,6 @@ ErrorType ClientSession::CmdAddBlock(StreamExtractor& data) {
 
     bool wasFriend = (curCaller & F) && (curOther & F);
 
-    // Set Blocked, clear Friend on both sides.
     uint8_t newCaller = (curCaller | B) & static_cast<uint8_t>(~F);
     uint8_t newOther = curOther & static_cast<uint8_t>(~F);
 
@@ -181,7 +210,6 @@ ErrorType ClientSession::CmdAddBlock(StreamExtractor& data) {
         return ErrorType::DbFail;
 
     if (wasFriend) {
-        // Remove from in-memory maps and notify both sides of the lost friendship.
         {
             QWriteLocker lk(&m_shared->clientsLock);
             auto selfIt = m_shared->clients.find(m_info.userId);
@@ -193,23 +221,27 @@ ErrorType ClientSession::CmdAddBlock(StreamExtractor& data) {
                 targetIt->friends.remove(m_info.userId);
         }
 
-        QByteArray toSelf;
-        appendCStr(toSelf, targetNpid);
-        SendSelfNotification(NotificationType::FriendLost, toSelf);
+        shadnet::NotifyFriendLost toSelf;
+        toSelf.set_npid(targetNpid.toStdString());
+        SendSelfNotification(NotificationType::FriendLost, buildNotifPayload(toSelf));
 
-        QByteArray toTarget;
-        appendCStr(toTarget, m_info.npid);
-        SendNotification(NotificationType::FriendLost, toTarget, targetId);
+        shadnet::NotifyFriendLost toTarget;
+        toTarget.set_npid(m_info.npid.toStdString());
+        SendNotification(NotificationType::FriendLost, buildNotifPayload(toTarget), targetId);
     }
 
     qInfo() << m_info.npid << "blocked" << targetNpid;
     return ErrorType::NoError;
 }
 
+// RemoveBlock
+
 ErrorType ClientSession::CmdRemoveBlock(StreamExtractor& data) {
-    QString targetNpid = data.getString(false);
-    if (data.error())
+    shadnet::FriendCommandRequest req;
+    if (!decodeProto(req, data) || data.error())
         return ErrorType::Malformed;
+
+    QString targetNpid = QString::fromStdString(req.npid());
 
     auto targetIdOpt = m_db->GetUserId(targetNpid);
     if (!targetIdOpt)
@@ -225,7 +257,7 @@ ErrorType ClientSession::CmdRemoveBlock(StreamExtractor& data) {
     if (res != Database::RelResult::Ok)
         return ErrorType::NotFound;
     if (!(rel.caller & B))
-        return ErrorType::NotFound; // nothing to unblock
+        return ErrorType::NotFound;
 
     uint8_t newCaller = rel.caller & static_cast<uint8_t>(~B);
     uint8_t newOther = rel.other;

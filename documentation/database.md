@@ -25,7 +25,6 @@ CREATE TABLE IF NOT EXISTS account (
     username    TEXT    NOT NULL,
     hash        BLOB    NOT NULL,
     salt        BLOB    NOT NULL,
-    online_name TEXT    NOT NULL,
     avatar_url  TEXT    NOT NULL,
     email       TEXT    NOT NULL,
     email_check TEXT    NOT NULL UNIQUE,
@@ -38,21 +37,20 @@ CREATE TABLE IF NOT EXISTS account (
 );
 ```
 
-| Column | Type | Notes |
-|---|---|---|
-| `user_id` | INTEGER | Auto-assigned primary key |
-| `username` | TEXT | NP ID,case-insensitive unique constraint |
-| `hash` | BLOB | 32-byte  hash |
-| `salt` | BLOB | 64-byte random salt |
-| `online_name` | TEXT | Display name shown in-game |
-| `avatar_url` | TEXT | May be empty string |
-| `email` | TEXT | Original casing preserved |
-| `email_check` | TEXT | `email.toLower()`,used for dedup, unique |
-| `token` | TEXT | 16-char alphanumeric, used for email validation |
-| `reset_token` | TEXT | Nullable,set only during password reset flow |
-| `admin` | BOOL | 1 = server administrator |
-| `stat_agent` | BOOL | 1 = allowed to submit stats |
-| `banned` | BOOL | 1 = login rejected |
+| Column        | Type    | Notes                                           |
+| ------------- | ------- | ----------------------------------------------- |
+| `user_id`     | INTEGER | Auto-assigned primary key                       |
+| `username`    | TEXT    | NP ID,case-insensitive unique constraint        |
+| `hash`        | BLOB    | 32-byte  hash                                   |
+| `salt`        | BLOB    | 64-byte random salt                             |
+| `avatar_url`  | TEXT    | May be empty string                             |
+| `email`       | TEXT    | Original casing preserved                       |
+| `email_check` | TEXT    | `email.toLower()`,used for dedup, unique        |
+| `token`       | TEXT    | 16-char alphanumeric, used for email validation |
+| `reset_token` | TEXT    | Nullable,set only during password reset flow    |
+| `admin`       | BOOL    | 1 = server administrator                        |
+| `stat_agent`  | BOOL    | 1 = allowed to submit stats                     |
+| `banned`      | BOOL    | 1 = login rejected                              |
 
 ### account_timestamp
 
@@ -68,13 +66,13 @@ CREATE TABLE IF NOT EXISTS account_timestamp (
 );
 ```
 
-| Column | Type | Notes |
-|---|---|---|
-| `user_id` | UNSIGNED BIGINT | Foreign key to `account.user_id` |
-| `creation` | UNSIGNED INTEGER | Unix seconds,set once at account creation |
-| `last_login` | UNSIGNED INTEGER | Unix seconds,updated on each successful login; NULL until first login |
+| Column            | Type             | Notes                                                                                                            |
+| ----------------- | ---------------- | ---------------------------------------------------------------------------------------------------------------- |
+| `user_id`         | UNSIGNED BIGINT  | Foreign key to `account.user_id`                                                                                 |
+| `creation`        | UNSIGNED INTEGER | Unix seconds,set once at account creation                                                                        |
+| `last_login`      | UNSIGNED INTEGER | Unix seconds,updated on each successful login; NULL until first login                                            |
 | `token_last_sent` | UNSIGNED INTEGER | Unix seconds,timestamp of the last email validation token dispatch; used to enforce rate limiting on `SendToken` |
-| `reset_emit` | UNSIGNED INTEGER | Unix seconds,timestamp of the last password-reset token email; used to enforce rate limiting on `SendResetToken` |
+| `reset_emit`      | UNSIGNED INTEGER | Unix seconds,timestamp of the last password-reset token email; used to enforce rate limiting on `SendResetToken` |
 
 ---
 
@@ -96,28 +94,28 @@ CREATE INDEX IF NOT EXISTS friendship_user1 ON friendship(user_id_1);
 CREATE INDEX IF NOT EXISTS friendship_user2 ON friendship(user_id_2);
 ```
 
-| Column | Type | Notes |
-|---|---|---|
-| `user_id_1` | INTEGER | The lower of the two user IDs,enforced by the `CHECK` constraint |
-| `user_id_2` | INTEGER | The higher of the two user IDs |
-| `status_user_1` | INTEGER | Bitmask of `FriendStatus` flags from `user_id_1`'s perspective |
-| `status_user_2` | INTEGER | Bitmask of `FriendStatus` flags from `user_id_2`'s perspective |
+| Column          | Type    | Notes                                                            |
+| --------------- | ------- | ---------------------------------------------------------------- |
+| `user_id_1`     | INTEGER | The lower of the two user IDs,enforced by the `CHECK` constraint |
+| `user_id_2`     | INTEGER | The higher of the two user IDs                                   |
+| `status_user_1` | INTEGER | Bitmask of `FriendStatus` flags from `user_id_1`'s perspective   |
+| `status_user_2` | INTEGER | Bitmask of `FriendStatus` flags from `user_id_2`'s perspective   |
 
 **`FriendStatus` bitmask:**
 
-| Flag | Value | Meaning |
-|---|---|---|
-| `Friend` | `0x01` | This user has sent or accepted a friend request |
-| `Blocked` | `0x02` | This user has blocked the other |
+| Flag      | Value  | Meaning                                         |
+| --------- | ------ | ----------------------------------------------- |
+| `Friend`  | `0x01` | This user has sent or accepted a friend request |
+| `Blocked` | `0x02` | This user has blocked the other                 |
 
 **Relationship states** (interpreting the two status columns from one user's perspective):
 
-| My flags | Other's flags | State |
-|---|---|---|
-| `Friend=1` | `Friend=0` | I sent a request,pending acceptance |
-| `Friend=0` | `Friend=1` | They sent me a request,pending my acceptance |
-| `Friend=1` | `Friend=1` | Mutual friendship |
-| `Blocked=1` | any | I have blocked them |
+| My flags    | Other's flags | State                                        |
+| ----------- | ------------- | -------------------------------------------- |
+| `Friend=1`  | `Friend=0`    | I sent a request,pending acceptance          |
+| `Friend=0`  | `Friend=1`    | They sent me a request,pending my acceptance |
+| `Friend=1`  | `Friend=1`    | Mutual friendship                            |
+| `Blocked=1` | any           | I have blocked them                          |
 
 A single row can represent both a block and a pending/confirmed friendship simultaneously (e.g. one user blocks the other after accepting a request), though the `AddFriend` command rejects any row where either side has `Blocked` set.
 
@@ -142,15 +140,15 @@ CREATE TABLE IF NOT EXISTS score_table (
 );
 ```
 
-| Column | Type | Notes |
-|---|---|---|
-| `communication_id` | TEXT | 12-character PSN Communication ID, e.g. `NPWR12345_00` |
-| `board_id` | INTEGER | Board number within the communication ID; games typically use 1, 2, 3… |
-| `rank_limit` | INTEGER | Maximum number of scores kept on the board; older/worse scores are dropped |
-| `update_mode` | INTEGER | `0` = NORMAL_UPDATE,only store if the new score is better; `1` = FORCE_UPDATE,always overwrite |
-| `sort_mode` | INTEGER | `0` = DESCENDING,higher score ranks better (most games); `1` = ASCENDING,lower score ranks better (time trials) |
-| `upload_num_limit` | INTEGER | Max number of score-data file uploads per user |
-| `upload_size_limit` | INTEGER | Max bytes per score-data file upload |
+| Column              | Type    | Notes                                                                                                           |
+| ------------------- | ------- | --------------------------------------------------------------------------------------------------------------- |
+| `communication_id`  | TEXT    | 12-character PSN Communication ID, e.g. `NPWR12345_00`                                                          |
+| `board_id`          | INTEGER | Board number within the communication ID; games typically use 1, 2, 3…                                          |
+| `rank_limit`        | INTEGER | Maximum number of scores kept on the board; older/worse scores are dropped                                      |
+| `update_mode`       | INTEGER | `0` = NORMAL_UPDATE,only store if the new score is better; `1` = FORCE_UPDATE,always overwrite                  |
+| `sort_mode`         | INTEGER | `0` = DESCENDING,higher score ranks better (most games); `1` = ASCENDING,lower score ranks better (time trials) |
+| `upload_num_limit`  | INTEGER | Max number of score-data file uploads per user                                                                  |
+| `upload_size_limit` | INTEGER | Max bytes per score-data file upload                                                                            |
 
 ---
 
@@ -173,17 +171,17 @@ CREATE TABLE IF NOT EXISTS score (
 );
 ```
 
-| Column | Type | Notes |
-|---|---|---|
-| `communication_id` | TEXT | Matches `score_table.communication_id` |
-| `board_id` | INTEGER | Matches `score_table.board_id` |
-| `user_id` | INTEGER | References `account.user_id` |
-| `character_id` | INTEGER | Character/slot index; games that don't use multiple characters always use `0` |
-| `score` | INTEGER | The score value; sign and magnitude depend on the game |
-| `comment` | TEXT | Optional player-supplied comment submitted with the score; NULL if omitted |
-| `game_info` | BLOB | Optional small inline game data blob submitted with the score (not the large game data file); NULL if omitted |
-| `data_id` | INTEGER | ID of the associated score-data file in `score_data/`; NULL until `RecordScoreData` is called |
-| `timestamp` | INTEGER | PSN timestamp in microseconds since the Common Era epoch (0001-01-01), set at the time of submission |
+| Column             | Type    | Notes                                                                                                         |
+| ------------------ | ------- | ------------------------------------------------------------------------------------------------------------- |
+| `communication_id` | TEXT    | Matches `score_table.communication_id`                                                                        |
+| `board_id`         | INTEGER | Matches `score_table.board_id`                                                                                |
+| `user_id`          | INTEGER | References `account.user_id`                                                                                  |
+| `character_id`     | INTEGER | Character/slot index; games that don't use multiple characters always use `0`                                 |
+| `score`            | INTEGER | The score value; sign and magnitude depend on the game                                                        |
+| `comment`          | TEXT    | Optional player-supplied comment submitted with the score; NULL if omitted                                    |
+| `game_info`        | BLOB    | Optional small inline game data blob submitted with the score (not the large game data file); NULL if omitted |
+| `data_id`          | INTEGER | ID of the associated score-data file in `score_data/`; NULL until `RecordScoreData` is called                 |
+| `timestamp`        | INTEGER | PSN timestamp in microseconds since the Common Era epoch (0001-01-01), set at the time of submission          |
 
 **Score lifecycle:**
 

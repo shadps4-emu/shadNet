@@ -4,8 +4,9 @@
 #include <QDebug>
 #include <QSqlDatabase>
 #include "client_session.h"
+#include "proto_utils.h"
 #include "score_db.h"
-#include "score_messages.pb.h"
+#include "shadnet.pb.h"
 
 // Wrap this session's DB connection for score operations.
 static ScoreDb scoreDb(Database* db) {
@@ -16,7 +17,6 @@ static ScoreDb scoreDb(Database* db) {
 static QString comIdStr(const QByteArray& id) {
     return QString::fromLatin1(id.constData(), id.size());
 }
-
 // Read a u32-LE-prefixed protobuf blob from the stream and parse it.
 // Returns false and sets data.error() on failure.
 template <typename T>
@@ -48,7 +48,7 @@ ErrorType ClientSession::CmdGetBoardInfos(StreamExtractor& data, QByteArray& rep
     if (!cfg)
         return ErrorType::NotFound;
 
-    score::BoardInfo bi;
+    shadnet::BoardInfo bi;
     bi.set_ranklimit(cfg->rankLimit);
     bi.set_updatemode(cfg->updateMode);
     bi.set_sortmode(cfg->sortMode);
@@ -63,7 +63,7 @@ ErrorType ClientSession::CmdGetBoardInfos(StreamExtractor& data, QByteArray& rep
 //  Reply:    rank (u32 LE)
 ErrorType ClientSession::CmdRecordScore(StreamExtractor& data, QByteArray& reply) {
     QByteArray comId = data.getBytes(12);
-    score::RecordScoreRequest req;
+    shadnet::RecordScoreRequest req;
     if (!decodeProto(req, data) || data.error())
         return ErrorType::Malformed;
 
@@ -82,7 +82,6 @@ ErrorType ClientSession::CmdRecordScore(StreamExtractor& data, QByteArray& reply
     entry.gameInfo = QByteArray(req.data().data(), static_cast<int>(req.data().size()));
     entry.timestamp = ShadNetTimestamp();
     entry.npid = m_info.npid;
-    entry.onlineName = m_info.onlineName;
 
     auto dbErr = sdb.RecordScore(cid, req.boardid(), *cfg, entry);
     if (dbErr) {
@@ -102,7 +101,7 @@ ErrorType ClientSession::CmdRecordScore(StreamExtractor& data, QByteArray& reply
 // Reply:    error byte only
 ErrorType ClientSession::CmdRecordScoreData(StreamExtractor& data) {
     QByteArray comId = data.getBytes(12);
-    score::RecordScoreGameDataRequest req;
+    shadnet::RecordScoreGameDataRequest req;
     if (!decodeProto(req, data) || data.error())
         return ErrorType::Malformed;
     QByteArray rawData = data.getRawData();
@@ -143,7 +142,7 @@ ErrorType ClientSession::CmdRecordScoreData(StreamExtractor& data) {
 // Reply:    u32 LE size + raw data bytes
 ErrorType ClientSession::CmdGetScoreData(StreamExtractor& data, QByteArray& reply) {
     QByteArray comId = data.getBytes(12);
-    score::GetScoreGameDataRequest req;
+    shadnet::GetScoreGameDataRequest req;
     if (!decodeProto(req, data) || data.error())
         return ErrorType::Malformed;
     if (req.npid().empty())
@@ -174,7 +173,7 @@ ErrorType ClientSession::CmdGetScoreData(StreamExtractor& data, QByteArray& repl
 // Reply:    u32 LE size + GetScoreResponse protobuf blob
 ErrorType ClientSession::CmdGetScoreRange(StreamExtractor& data, QByteArray& reply) {
     QByteArray comId = data.getBytes(12);
-    score::GetScoreRangeRequest req;
+    shadnet::GetScoreRangeRequest req;
     if (!decodeProto(req, data) || data.error())
         return ErrorType::Malformed;
 
@@ -190,7 +189,7 @@ ErrorType ClientSession::CmdGetScoreRange(StreamExtractor& data, QByteArray& rep
 // Reply:    u32 LE size + GetScoreResponse protobuf blob
 ErrorType ClientSession::CmdGetScoreFriends(StreamExtractor& data, QByteArray& reply) {
     QByteArray comId = data.getBytes(12);
-    score::GetScoreFriendsRequest req;
+    shadnet::GetScoreFriendsRequest req;
     if (!decodeProto(req, data) || data.error())
         return ErrorType::Malformed;
 
@@ -221,7 +220,7 @@ ErrorType ClientSession::CmdGetScoreFriends(StreamExtractor& data, QByteArray& r
 // Reply:    u32 LE size + GetScoreResponse protobuf blob
 ErrorType ClientSession::CmdGetScoreNpid(StreamExtractor& data, QByteArray& reply) {
     QByteArray comId = data.getBytes(12);
-    score::GetScoreNpIdRequest req;
+    shadnet::GetScoreNpIdRequest req;
     if (!decodeProto(req, data) || data.error())
         return ErrorType::Malformed;
 
