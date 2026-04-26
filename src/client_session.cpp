@@ -154,6 +154,31 @@ ErrorType ClientSession::DispatchCommand(CommandType cmd, StreamExtractor& se, Q
         return CmdGetScoreFriends(se, reply);
     case CommandType::GetScoreNpid:
         return CmdGetScoreNpid(se, reply);
+    // Matchmaking
+    case CommandType::RegisterHandlers:
+        return CmdRegisterHandlers(se);
+    case CommandType::CreateRoom:
+        return CmdCreateRoom(se, reply);
+    case CommandType::JoinRoom:
+        return CmdJoinRoom(se, reply);
+    case CommandType::LeaveRoom:
+        return CmdLeaveRoom(se, reply);
+    case CommandType::GetRoomList:
+        return CmdGetRoomList(se, reply);
+    case CommandType::RequestSignalingInfos:
+        return CmdRequestSignalingInfos(se, reply);
+    case CommandType::SignalingEstablished:
+        return CmdSignalingEstablished(se);
+    case CommandType::ActivationConfirm:
+        return CmdActivationConfirm(se, reply);
+    case CommandType::CancelActivationIntent:
+        return CmdCancelActivationIntent(se, reply);
+    case CommandType::SetRoomDataInternal:
+        return CmdSetRoomDataInternal(se, reply);
+    case CommandType::SetRoomDataExternal:
+        return CmdSetRoomDataExternal(se, reply);
+    case CommandType::KickoutRoomMember:
+        return CmdKickoutRoomMember(se, reply);
     default:
         qWarning() << "Unknown command" << static_cast<uint16_t>(cmd);
         return ErrorType::Invalid;
@@ -165,6 +190,9 @@ void ClientSession::CleanupOnDisconnect() {
         qInfo() << "Unauthenticated client disconnected";
         return;
     }
+
+    // Leave any matchmaking room before tearing down the client entry
+    CleanupMatchingOnDisconnect();
 
     // Collect send functions for every online friend before releasing the lock,
     // then remove ourselves from the map.
@@ -179,6 +207,7 @@ void ClientSession::CleanupOnDisconnect() {
                     friendSenders.append(friendEntry->send);
             }
             m_shared->clients.erase(self);
+            m_shared->npidToUserId.remove(m_info.npid);
         }
     }
 

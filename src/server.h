@@ -13,6 +13,7 @@
 #include "config.h"
 #include "score_cache.h"
 #include "score_files.h"
+#include "stun_server.h"
 
 class ShadNetServer : public QObject {
     Q_OBJECT
@@ -38,4 +39,5 @@ private:
 
     std::unique_ptr<ScoreCache> m_scoreCache;
     std::unique_ptr<ScoreFiles> m_scoreFiles;
+    StunServer* m_stunServer = nullptr;
 };

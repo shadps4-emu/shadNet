@@ -1,4 +1,7 @@
 /.vs/*
 /out/*
+/build/*
 /clientsample/.vs/*
 /clientsample/out/*
+/clientsample/build2/*
+*.7z
