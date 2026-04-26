@@ -82,6 +82,8 @@ public:
     ErrorType CmdGetScoreRange(StreamExtractor& data, QByteArray& reply);
     ErrorType CmdGetScoreFriends(StreamExtractor& data, QByteArray& reply);
     ErrorType CmdGetScoreNpid(StreamExtractor& data, QByteArray& reply);
+    ErrorType CmdGetScoreAccountId(StreamExtractor& data, QByteArray& reply);
+    ErrorType CmdGetScoreGameDataByAccId(StreamExtractor& data, QByteArray& reply);
 
 signals:
     void Disconnected();

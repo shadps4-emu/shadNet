@@ -155,6 +155,10 @@ ErrorType ClientSession::DispatchCommand(CommandType cmd, StreamExtractor& se, Q
         return CmdGetScoreFriends(se, reply);
     case CommandType::GetScoreNpid:
         return CmdGetScoreNpid(se, reply);
+    case CommandType::GetScoreAccountId:
+        return CmdGetScoreAccountId(se, reply);
+    case CommandType::GetScoreGameDataByAccId:
+        return CmdGetScoreGameDataByAccId(se, reply);
     default:
         qWarning() << "Unknown command" << static_cast<uint16_t>(cmd);
         return ErrorType::Invalid;
