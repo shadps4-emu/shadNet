@@ -374,24 +374,29 @@ std::optional<DbError> Database::CreateAccount(const QString& npid, const QStrin
 std::optional<UserRecord> Database::CheckUser(const QString& npid, const QString& password,
                                               const QString& token, bool checkToken) {
     QSqlQuery q(m_db);
-    q.prepare("SELECT user_id,hash,salt,avatar_url,email,email_check,"
+    q.prepare("SELECT user_id,username,hash,salt,avatar_url,email,email_check,"
               "token,admin,stat_agent,banned FROM account WHERE username=? COLLATE NOCASE");
     q.addBindValue(npid);
     if (!Exec(q) || !q.next())
         return std::nullopt; // Empty = no such user
 
+    const QString canonicalUsername = q.value(1).toString();
+    if (canonicalUsername != npid) {
+        return std::nullopt;
+    }
+
     UserRecord r;
     r.userId = q.value(0).toLongLong();
-    r.hash = q.value(1).toByteArray();
-    r.salt = q.value(2).toByteArray();
-    r.avatarUrl = q.value(3).toString();
-    r.email = q.value(4).toString();
-    r.emailCheck = q.value(5).toString();
-    r.token = q.value(6).toString();
-    r.admin = q.value(7).toBool();
-    r.statAgent = q.value(8).toBool();
-    r.banned = q.value(9).toBool();
-    r.username = npid;
+    r.username = canonicalUsername; // exact match
+    r.hash = q.value(2).toByteArray();
+    r.salt = q.value(3).toByteArray();
+    r.avatarUrl = q.value(4).toString();
+    r.email = q.value(5).toString();
+    r.emailCheck = q.value(6).toString();
+    r.token = q.value(7).toString();
+    r.admin = q.value(8).toBool();
+    r.statAgent = q.value(9).toBool();
+    r.banned = q.value(10).toBool();
 
     QByteArray computed = HashPassword(password, r.salt);
     if (computed != r.hash)
