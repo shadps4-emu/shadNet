@@ -4,6 +4,7 @@
 #include <QDateTime>
 #include "client_session.h"
 #include "protocol.h"
+#include "shadnet.pb.h"
 #include "stream_extractor.h"
 
 ClientSession::ClientSession(QTcpSocket* socket, SharedState* shared, const QString& dbPath,
@@ -182,13 +183,16 @@ void ClientSession::CleanupOnDisconnect() {
         }
     }
 
-    // Build FriendStatus offline notification: online(u8=0) + timestamp(u64 LE) + npid\0
+    // Build FriendStatus offline notification using the NotifyFriendStatus
+    shadnet::NotifyFriendStatus ns;
+    ns.set_npid(m_info.npid.toStdString());
+    ns.set_online(false);
+    ns.set_timestamp(static_cast<uint64_t>(QDateTime::currentDateTimeUtc().toMSecsSinceEpoch()) *
+                     1'000'000ULL);
+
     QByteArray payload;
-    payload.append('\x00'); // offline
-    uint64_t ts =
-        static_cast<uint64_t>(QDateTime::currentDateTimeUtc().toMSecsSinceEpoch()) * 1'000'000ULL;
-    appendU64LE(payload, ts);
-    appendCStr(payload, m_info.npid);
+    const std::string s = ns.SerializeAsString();
+    appendBlob(payload, QByteArray(s.data(), static_cast<int>(s.size())));
     QByteArray pkt = BuildNotification(NotificationType::FriendStatus, payload);
     for (const auto& send : friendSenders)
         send(pkt);
