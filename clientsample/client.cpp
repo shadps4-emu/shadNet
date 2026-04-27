@@ -471,6 +471,32 @@ void ShadNetClient::getScoreNpid(const std::string& comId, uint32_t boardId,
         buildPacket(CommandType::GetScoreNpid, packetCounter++, makeScorePayload(comId, req)));
 }
 
+void ShadNetClient::getScoreAccountId(const std::string& comId, uint32_t boardId,
+                                      const std::vector<AccountIdPcId>& targets, bool withComment,
+                                      bool withGameInfo) {
+    shadnet::GetScoreAccountIdRequest req;
+    req.set_boardid(boardId);
+    for (const auto& t : targets) {
+        auto* e = req.add_ids();
+        e->set_accountid(t.accountId);
+        e->set_pcid(t.pcId);
+    }
+    req.set_withcomment(withComment);
+    req.set_withgameinfo(withGameInfo);
+    conn.send(
+        buildPacket(CommandType::GetScoreAccountId, packetCounter++, makeScorePayload(comId, req)));
+}
+
+void ShadNetClient::getScoreGameDataByAccountId(const std::string& comId, uint32_t boardId,
+                                                int64_t accountId, int32_t pcId) {
+    shadnet::GetScoreGameDataByAccountIdRequest req;
+    req.set_boardid(boardId);
+    req.set_accountid(accountId);
+    req.set_pcid(pcId);
+    conn.send(buildPacket(CommandType::GetScoreGameDataByAccId, packetCounter++,
+                          makeScorePayload(comId, req)));
+}
+
 void ShadNetClient::getScoreFriends(const std::string& comId, uint32_t boardId, bool includeSelf,
                                     uint32_t max, bool withComment, bool withGameInfo) {
     shadnet::GetScoreFriendsRequest req;
@@ -860,6 +886,11 @@ void ShadNetClient::handlePacket(const Packet& pkt) {
         break;
     case CommandType::KickoutRoomMember:
         handleKickoutRoomMemberReply(pkt.payload);
+    case CommandType::GetScoreAccountId:
+        handleScoreRangeReply(pkt.payload, onScoreAccountId);
+        break;
+    case CommandType::GetScoreGameDataByAccId:
+        handleGetScoreDataByAccountIdReply(pkt.payload);
         break;
     default:
         printf("[recv] Unhandled reply command=%u\n", pkt.command);
@@ -867,7 +898,7 @@ void ShadNetClient::handlePacket(const Packet& pkt) {
     }
 }
 
-// ── Score reply handlers (unchanged) ─────────────────────────────────────────
+// Score reply handlers
 
 void ShadNetClient::handleBoardInfosReply(const std::vector<uint8_t>& payload) {
     BoardInfo info;
@@ -886,9 +917,9 @@ void ShadNetClient::handleBoardInfosReply(const std::vector<uint8_t>& payload) {
             info.uploadNumLimit = pb.uploadnumlimit();
             info.uploadSizeLimit = pb.uploadsizelimit();
         }
-        printf("[board-info] rankLimit=%u updateMode=%u sortMode=%u uploadNum=%u uploadSize=%u\n",
+        printf("[board-info] rankLimit=%u updateMode=%u sortMode=%u uploadNum=%u uploadSize=%llu\n",
                info.rankLimit, info.updateMode, info.sortMode, info.uploadNumLimit,
-               info.uploadSizeLimit);
+               static_cast<unsigned long long>(info.uploadSizeLimit));
     } else {
         printf("[board-info] FAILED: %s\n", errorName(info.error));
     }
@@ -1162,6 +1193,21 @@ void ShadNetClient::handleKickoutRoomMemberReply(const std::vector<uint8_t>& pay
 
 // ── Score range reply ─────────────────────────────────────────────────────────
 
+void ShadNetClient::handleGetScoreDataByAccountIdReply(const std::vector<uint8_t>& payload) {
+    ErrorType err = payload.empty() ? ErrorType::Malformed : static_cast<ErrorType>(payload[0]);
+    std::vector<uint8_t> data;
+    if (err == ErrorType::NoError && payload.size() >= 5) {
+        uint32_t blobLen = 0;
+        memcpy(&blobLen, payload.data() + 1, 4);
+        data.assign(payload.begin() + 5, payload.begin() + 5 + blobLen);
+        printf("[get-score-data-accountid] OK  size=%u bytes\n", blobLen);
+    } else if (err != ErrorType::NoError) {
+        printf("[get-score-data-accountid] FAILED: %s\n", errorName(err));
+    }
+    if (onGetScoreGameDataByAccountId)
+        onGetScoreGameDataByAccountId(err, data);
+}
+
 void ShadNetClient::handleScoreRangeReply(const std::vector<uint8_t>& payload,
                                           std::function<void(const ScoreRangeResult&)>& cb) {
     ScoreRangeResult result;
@@ -1195,6 +1241,7 @@ void ShadNetClient::handleScoreRangeReply(const std::vector<uint8_t>& payload,
         e.score = r.score();
         e.hasGameData = r.hasgamedata();
         e.recordDate = r.recorddate();
+        e.accountId = r.accountid();
         if (i < pb.commentarray_size())
             e.comment = pb.commentarray(i);
         if (i < pb.infoarray_size())
@@ -1205,8 +1252,9 @@ void ShadNetClient::handleScoreRangeReply(const std::vector<uint8_t>& payload,
     printf("[score-range] total=%u lastSort=%llu\n", result.totalRecord,
            static_cast<unsigned long long>(result.lastSortDate));
     for (const auto& e : result.entries) {
-        printf("  #%u  %-16s  score=%-12lld  pcId=%d  gameData=%s\n", e.rank, e.npid.c_str(),
-               static_cast<long long>(e.score), e.pcId, e.hasGameData ? "yes" : "no");
+        printf("  #%u  %-16s  acct=%-10lld  score=%-12lld  pcId=%d  gameData=%s\n", e.rank,
+               e.npid.c_str(), static_cast<long long>(e.accountId), static_cast<long long>(e.score),
+               e.pcId, e.hasGameData ? "yes" : "no");
         if (!e.comment.empty())
             printf("       comment: %s\n", e.comment.c_str());
     }

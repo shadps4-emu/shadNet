@@ -78,7 +78,7 @@ message BoardInfo {
     uint32 updateMode      = 2;   // 0=NORMAL_UPDATE, 1=FORCE_UPDATE
     uint32 sortMode        = 3;   // 0=DESCENDING, 1=ASCENDING
     uint32 uploadNumLimit  = 4;
-    uint32 uploadSizeLimit = 5;
+    uint64 uploadSizeLimit = 5;
 }
 
 // Score: requests
@@ -131,6 +131,24 @@ message GetScoreFriendsRequest {
     bool   withGameInfo = 5;
 }
 
+message ScoreAccountIdPcId {
+    int64 accountId = 1;
+    int32 pcId      = 2;
+}
+
+message GetScoreAccountIdRequest {
+    uint32                       boardId      = 1;
+    repeated ScoreAccountIdPcId  ids          = 2;
+    bool                         withComment  = 3;
+    bool                         withGameInfo = 4;
+}
+
+message GetScoreGameDataByAccountIdRequest {
+    uint32 boardId   = 1;
+    int64  accountId = 2;
+    int32  pcId      = 3;
+}
+
 // Score: responses
 
 message ScoreRankData {
@@ -140,6 +158,7 @@ message ScoreRankData {
     int64  score       = 4;
     bool   hasGameData = 5;
     uint64 recordDate  = 6;
+    int64  accountId   = 7;
 }
 
 message ScoreInfo {

@@ -96,7 +96,7 @@ ErrorType ClientSession::CmdLogin(StreamExtractor& data, QByteArray& reply) {
     m_db->UpdateLoginTime(user.userId);
 
     m_info.userId = user.userId;
-    m_info.npid = npid;
+    m_info.npid = user.username;
     m_info.avatarUrl = user.avatarUrl;
     m_info.token = user.token;
     m_info.admin = user.admin;
