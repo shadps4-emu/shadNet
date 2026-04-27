@@ -240,3 +240,48 @@ ErrorType ClientSession::CmdGetScoreNpid(StreamExtractor& data, QByteArray& repl
     appendProto(reply, resp);
     return ErrorType::NoError;
 }
+
+// GetScoreAccountId
+// Request:  ComId(12) + GetScoreAccountIdRequest blob
+// Reply:    u32 LE size + GetScoreResponse protobuf blob
+ErrorType ClientSession::CmdGetScoreAccountId(StreamExtractor& data, QByteArray& reply) {
+    QByteArray comId = data.getBytes(12);
+    shadnet::GetScoreAccountIdRequest req;
+    if (!decodeProto(req, data) || data.error())
+        return ErrorType::Malformed;
+
+    QVector<QPair<int64_t, int32_t>> ids;
+    ids.reserve(req.ids_size());
+    for (const auto& e : req.ids()) {
+        ids.append({e.accountid(), e.pcid()});
+    }
+
+    auto resp = m_shared->scoreCache->GetScoreByIds(comIdStr(comId), req.boardid(), ids,
+                                                    req.withcomment(), req.withgameinfo());
+    appendProto(reply, resp);
+    return ErrorType::NoError;
+}
+
+// GetScoreGameDataByAccId
+// Request:  ComId(12) + GetScoreGameDataByAccountIdRequest blob
+// Reply:    u32 LE size + raw game-data bytes
+ErrorType ClientSession::CmdGetScoreGameDataByAccId(StreamExtractor& data, QByteArray& reply) {
+    QByteArray comId = data.getBytes(12);
+    shadnet::GetScoreGameDataByAccountIdRequest req;
+    if (!decodeProto(req, data) || data.error())
+        return ErrorType::Malformed;
+    if (req.accountid() == 0)
+        return ErrorType::Malformed;
+
+    auto [ok, fileId] = m_shared->scoreCache->GetGameDataId(comIdStr(comId), req.boardid(),
+                                                            req.accountid(), req.pcid());
+    if (!ok)
+        return ErrorType::NotFound;
+
+    auto fileData = m_shared->scoreFiles->Read(fileId);
+    if (!fileData)
+        return ErrorType::NotFound;
+
+    appendBlob(reply, *fileData);
+    return ErrorType::NoError;
+}

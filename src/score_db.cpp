@@ -25,7 +25,7 @@ bool ScoreDb::SetBoard(const QString& comId, uint32_t boardId, const ScoreBoardC
     q.addBindValue(cfg.updateMode);
     q.addBindValue(cfg.sortMode);
     q.addBindValue(cfg.uploadNumLimit);
-    q.addBindValue(cfg.uploadSizeLimit);
+    q.addBindValue(static_cast<qulonglong>(cfg.uploadSizeLimit));
     if (!q.exec()) {
         qWarning() << "setBoard:" << q.lastError().text();
         return false;
@@ -46,7 +46,7 @@ std::optional<ScoreBoardConfig> ScoreDb::GetBoard(const QString& comId, uint32_t
         c.updateMode = q.value(1).toUInt();
         c.sortMode = q.value(2).toUInt();
         c.uploadNumLimit = q.value(3).toUInt();
-        c.uploadSizeLimit = q.value(4).toUInt();
+        c.uploadSizeLimit = q.value(4).toULongLong();
         return c;
     }
     if (createMissing) {
@@ -67,7 +67,7 @@ QVector<std::pair<QPair<QString, uint32_t>, ScoreBoardConfig>> ScoreDb::AllBoard
         c.updateMode = q.value(3).toUInt();
         c.sortMode = q.value(4).toUInt();
         c.uploadNumLimit = q.value(5).toUInt();
-        c.uploadSizeLimit = q.value(6).toUInt();
+        c.uploadSizeLimit = q.value(6).toULongLong();
         result.append({{q.value(0).toString(), q.value(1).toUInt()}, c});
     }
     return result;

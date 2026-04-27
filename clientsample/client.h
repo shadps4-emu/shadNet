@@ -40,7 +40,7 @@ struct BoardInfo {
     uint32_t updateMode = 0; // 0=NORMAL_UPDATE, 1=FORCE_UPDATE
     uint32_t sortMode = 0;   // 0=DESCENDING, 1=ASCENDING
     uint32_t uploadNumLimit = 0;
-    uint32_t uploadSizeLimit = 0;
+    uint64_t uploadSizeLimit = 0;
 };
 
 struct ScoreRankEntry {
@@ -50,6 +50,7 @@ struct ScoreRankEntry {
     int64_t score = 0;
     bool hasGameData = false;
     uint64_t recordDate = 0;
+    int64_t accountId = 0;         // server user_id; matches LoginResult::userId
     std::string comment;           // only when withComment=true
     std::vector<uint8_t> gameInfo; // only when withGameInfo=true
 };
@@ -133,6 +134,17 @@ public:
     void getScoreFriends(const std::string& comId, uint32_t boardId, bool includeSelf = true,
                          uint32_t max = 100, bool withComment = false, bool withGameInfo = false);
 
+    struct AccountIdPcId {
+        int64_t accountId = 0;
+        int32_t pcId = 0;
+    };
+    void getScoreAccountId(const std::string& comId, uint32_t boardId,
+                           const std::vector<AccountIdPcId>& targets, bool withComment = false,
+                           bool withGameInfo = false);
+
+    void getScoreGameDataByAccountId(const std::string& comId, uint32_t boardId, int64_t accountId,
+                                     int32_t pcId);
+
     // Callbacks
     std::function<void(const LoginResult&)> onLoginResult;
     std::function<void(ErrorType)> onCreateResult;
@@ -145,6 +157,8 @@ public:
     std::function<void(const ScoreRangeResult&)> onScoreRange;
     std::function<void(const ScoreRangeResult&)> onScoreNpid;
     std::function<void(const ScoreRangeResult&)> onScoreFriends;
+    std::function<void(const ScoreRangeResult&)> onScoreAccountId;
+    std::function<void(ErrorType, const std::vector<uint8_t>&)> onGetScoreGameDataByAccountId;
 
     std::function<void(const NotifyFriendQuery&)> onFriendQuery;
     std::function<void(const NotifyFriendNew&)> onFriendNew;
@@ -173,6 +187,7 @@ private:
     void handleRecordScoreReply(const std::vector<uint8_t>& payload);
     void handleRecordScoreDataReply(const std::vector<uint8_t>& payload);
     void handleGetScoreDataReply(const std::vector<uint8_t>& payload);
+    void handleGetScoreDataByAccountIdReply(const std::vector<uint8_t>& payload);
     void handleScoreRangeReply(const std::vector<uint8_t>& payload,
                                std::function<void(const ScoreRangeResult&)>& cb);
 

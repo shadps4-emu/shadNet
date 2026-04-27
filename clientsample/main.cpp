@@ -34,8 +34,12 @@ static void printUsage(const char* prog) {
            "  %s <host> <port> score-range    <npid> <password> <comId> <boardId> <startRank> "
            "<numRanks>\n"
            "  %s <host> <port> score-get-npid <npid> <password> <comId> <boardId> <target_npid> "
-           "[pcId]\n",
-           prog, prog, prog, prog, prog, prog, prog, prog, prog, prog);
+           "[pcId]\n"
+           "  %s <host> <port> score-get-accountid      <npid> <password> <comId> <boardId> "
+           "<target_accountId> [pcId]\n"
+           "  %s <host> <port> score-get-data-accountid <npid> <password> <comId> <boardId> "
+           "<target_accountId> [pcId]\n",
+           prog, prog, prog, prog, prog, prog, prog, prog, prog, prog, prog, prog);
 }
 
 static bool pollUntil(shadnetclient::ShadNetClient& client, bool& done, int timeoutMs = 10000) {
@@ -99,7 +103,9 @@ int main(int argc, char* argv[]) {
     bool isKnown = strcmp(command, "friend-add") == 0 || strcmp(command, "friend-remove") == 0 ||
                    strcmp(command, "block-add") == 0 || strcmp(command, "block-remove") == 0 ||
                    strcmp(command, "score-board") == 0 || strcmp(command, "score-record") == 0 ||
-                   strcmp(command, "score-range") == 0 || strcmp(command, "score-get-npid") == 0;
+                   strcmp(command, "score-range") == 0 || strcmp(command, "score-get-npid") == 0 ||
+                   strcmp(command, "score-get-accountid") == 0 ||
+                   strcmp(command, "score-get-data-accountid") == 0;
 
     if (!isKnown) {
         printf("Unknown command: %s\n", command);
@@ -123,9 +129,11 @@ int main(int argc, char* argv[]) {
     bool loginDone = false;
     bool loginOk = false;
     bool actionDone = false;
+    uint64_t loginUserId = 0; // our accountId (server user_id)
 
     client.onLoginResult = [&](const shadnetclient::LoginResult& res) {
         loginOk = (res.error == shadnetclient::ErrorType::NoError);
+        loginUserId = res.userId;
         loginDone = true;
     };
     client.onFriendResult = [&](const shadnetclient::FriendResult&) { actionDone = true; };
@@ -138,6 +146,9 @@ int main(int argc, char* argv[]) {
     client.onScoreRange = [&](const shadnetclient::ScoreRangeResult&) { actionDone = true; };
     client.onScoreNpid = [&](const shadnetclient::ScoreRangeResult&) { actionDone = true; };
     client.onScoreFriends = [&](const shadnetclient::ScoreRangeResult&) { actionDone = true; };
+    client.onScoreAccountId = [&](const shadnetclient::ScoreRangeResult&) { actionDone = true; };
+    client.onGetScoreGameDataByAccountId = [&](shadnetclient::ErrorType,
+                                               const std::vector<uint8_t>&) { actionDone = true; };
 
     // Step 1 — login
     client.login(npid, password, "");
@@ -188,6 +199,38 @@ int main(int argc, char* argv[]) {
         }
         int32_t pcId = (argc >= 10) ? static_cast<int32_t>(atoi(argv[9])) : 0;
         client.getScoreNpid(argv[6], static_cast<uint32_t>(atoi(argv[7])), {{argv[8], pcId}});
+    } else if (strcmp(command, "score-get-accountid") == 0) {
+        if (argc < 9) {
+            printf("score-get-accountid: <comId> <boardId> <target_accountId> [pcId]\n");
+            printf("  Hint: use 0 for <target_accountId> to look up yourself.\n");
+            client.disconnect();
+            return 1;
+        }
+        int64_t accountId = atoll(argv[8]);
+        int32_t pcId = (argc >= 10) ? static_cast<int32_t>(atoi(argv[9])) : 0;
+        if (accountId == 0) {
+            accountId = static_cast<int64_t>(loginUserId);
+            printf("[score-get-accountid] using our own userId=%lld\n",
+                   static_cast<long long>(accountId));
+        }
+        client.getScoreAccountId(argv[6], static_cast<uint32_t>(atoi(argv[7])),
+                                 {{accountId, pcId}});
+    } else if (strcmp(command, "score-get-data-accountid") == 0) {
+        if (argc < 9) {
+            printf("score-get-data-accountid: <comId> <boardId> <target_accountId> [pcId]\n");
+            printf("  Hint: use 0 for <target_accountId> to look up your own blob.\n");
+            client.disconnect();
+            return 1;
+        }
+        int64_t accountId = atoll(argv[8]);
+        int32_t pcId = (argc >= 10) ? static_cast<int32_t>(atoi(argv[9])) : 0;
+        if (accountId == 0) {
+            accountId = static_cast<int64_t>(loginUserId);
+            printf("[score-get-data-accountid] using our own userId=%lld\n",
+                   static_cast<long long>(accountId));
+        }
+        client.getScoreGameDataByAccountId(argv[6], static_cast<uint32_t>(atoi(argv[7])), accountId,
+                                           pcId);
     }
 
     if (!pollUntil(client, actionDone)) {

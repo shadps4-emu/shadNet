@@ -39,6 +39,7 @@ static shadnet::ScoreRankData ToRankData(const ScoreEntry& e, int index) {
     r.set_score(e.score);
     r.set_hasgamedata(e.dataId.has_value());
     r.set_recorddate(e.timestamp);
+    r.set_accountid(e.userId);
     return r;
 }
 
