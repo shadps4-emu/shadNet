@@ -8,12 +8,12 @@
 #include <QTextStream>
 #include <QThread>
 #ifdef Q_OS_WIN
-#include <winsock2.h>
 #include <mstcpip.h>
+#include <winsock2.h>
 #else
-#include <sys/socket.h>
 #include <netinet/in.h>
 #include <netinet/tcp.h>
+#include <sys/socket.h>
 #endif
 #include "score_db.h"
 #include "server.h"
@@ -203,17 +203,17 @@ static void SetAggressiveKeepalive(QTcpSocket* socket) {
 #ifdef Q_OS_WIN
     struct tcp_keepalive ka;
     ka.onoff = 1;
-    ka.keepalivetime = 60000;     // 60s idle before first probe
-    ka.keepaliveinterval = 5000;  // 5s between probes (3 probes = ~75s total)
+    ka.keepalivetime = 60000;    // 60s idle before first probe
+    ka.keepaliveinterval = 5000; // 5s between probes (3 probes = ~75s total)
     DWORD bytes = 0;
-    WSAIoctl(static_cast<SOCKET>(socket->socketDescriptor()), SIO_KEEPALIVE_VALS,
-             &ka, sizeof(ka), nullptr, 0, &bytes, nullptr, nullptr);
+    WSAIoctl(static_cast<SOCKET>(socket->socketDescriptor()), SIO_KEEPALIVE_VALS, &ka, sizeof(ka),
+             nullptr, 0, &bytes, nullptr, nullptr);
 #else
     int fd = socket->socketDescriptor();
     int idle = 60, interval = 5, count = 3;
-    setsockopt(fd, IPPROTO_TCP, TCP_KEEPIDLE,  &idle,     sizeof(idle));
+    setsockopt(fd, IPPROTO_TCP, TCP_KEEPIDLE, &idle, sizeof(idle));
     setsockopt(fd, IPPROTO_TCP, TCP_KEEPINTVL, &interval, sizeof(interval));
-    setsockopt(fd, IPPROTO_TCP, TCP_KEEPCNT,   &count,    sizeof(count));
+    setsockopt(fd, IPPROTO_TCP, TCP_KEEPCNT, &count, sizeof(count));
 #endif
 }
 

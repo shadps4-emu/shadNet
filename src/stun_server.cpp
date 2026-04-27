@@ -173,7 +173,8 @@ void StunServer::HandleSignalingEstablished(const QByteArray& data, const QHostA
         QByteArray toPeer;
         toPeer.append(static_cast<char>(0x03));
         toPeer.append(meIdBytes);
-        m_socket->writeDatagram(FrameSignaling(toPeer), QHostAddress(reverseAddr.first), reverseAddr.second);
+        m_socket->writeDatagram(FrameSignaling(toPeer), QHostAddress(reverseAddr.first),
+                                reverseAddr.second);
     }
 }
 
