@@ -8,7 +8,7 @@
 #include "config.h"
 #include "server.h"
 
-const QString versionString = QStringLiteral("0.0.1");
+const QString versionString = QStringLiteral("0.0.2");
 
 int main(int argc, char* argv[]) {
     QLoggingCategory::setFilterRules(QStringLiteral("*.debug=false\n*.info=true\n*.warning=true"));
