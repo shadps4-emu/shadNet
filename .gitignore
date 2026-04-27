@@ -5,3 +5,4 @@
 /clientsample/out/*
 /clientsample/build2/*
 *.7z
+.vscode/settings.json

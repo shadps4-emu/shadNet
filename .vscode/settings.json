@@ -1,5 +1,0 @@
-{
-    "cmake.buildEnvironment": {
-        "PATH": "C:/Qt/Tools/mingw1310_64/bin;${env:PATH}"
-    }
-}
