@@ -48,6 +48,7 @@ void ConfigManager::Parse(const QString& path) {
     m_host = str("Host", "127.0.0.1");
     m_unsecured_port = str("UnsecuredPort", "31313");
     m_matchingUdpPort = str("MatchingUdpPort", "31314");
+    m_webapiPort = str("WebApiPort", "31315");
     m_emailValidated = boolean("EmailValidated", false);
     m_adminsList = strList("AdminsList");
     m_registrationSecretKey = str("RegistrationSecretKey", "");
