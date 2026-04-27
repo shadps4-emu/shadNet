@@ -11,6 +11,8 @@
 #include <winsock2.h>
 #include <mstcpip.h>
 #else
+#include <sys/socket.h>
+#include <netinet/in.h>
 #include <netinet/tcp.h>
 #endif
 #include "score_db.h"
