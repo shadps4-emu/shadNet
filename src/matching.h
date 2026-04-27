@@ -196,5 +196,4 @@ struct MatchingSharedState {
     mutable QReadWriteLock activationLock;
     // Key: (initiator_ip_u32, ctx_tag), Value: (initiator_npid, peer_npid)
     QHash<QPair<uint32_t, uint32_t>, QPair<QString, QString>> activationIntents;
-
 };

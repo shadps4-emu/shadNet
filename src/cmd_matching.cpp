@@ -344,9 +344,9 @@ ErrorType ClientSession::CmdCreateRoom(StreamExtractor& data, QByteArray& reply)
     if (m_matching.hasHandler(HandlerType::Request)) {
         QByteArray responseBlob = PbEncode(BuildCreateJoinResponse(room, *member));
         SendSelfNotification(NotificationType::RequestEvent,
-            MakeRequestEventPayload(m_matching.ctxId, room.serverId, room.worldId, room.lobbyId,
-                                    0x0101, reqId, 0, rid, memberId, maxSlots, room.flags,
-                                    true, responseBlob));
+                             MakeRequestEventPayload(m_matching.ctxId, room.serverId, room.worldId,
+                                                     room.lobbyId, 0x0101, reqId, 0, rid, memberId,
+                                                     maxSlots, room.flags, true, responseBlob));
         qDebug() << "  -> RequestEvent(0x0101/CreateJoinRoom) to" << m_info.npid;
     }
 
@@ -481,9 +481,10 @@ ErrorType ClientSession::CmdJoinRoom(StreamExtractor& data, QByteArray& reply) {
     // RequestEvent (0x0102) to self
     if (m_matching.hasHandler(HandlerType::Request)) {
         SendSelfNotification(NotificationType::RequestEvent,
-            MakeRequestEventPayload(m_matching.ctxId, m_matching.serverId, m_matching.worldId,
-                                    m_matching.lobbyId, 0x0102, reqId, 0, roomId, myMemberId,
-                                    maxSlots, flags, false, responseBlob));
+                             MakeRequestEventPayload(m_matching.ctxId, m_matching.serverId,
+                                                     m_matching.worldId, m_matching.lobbyId, 0x0102,
+                                                     reqId, 0, roomId, myMemberId, maxSlots, flags,
+                                                     false, responseBlob));
         qDebug() << "  -> RequestEvent(0x0102/JoinRoom) to" << m_info.npid;
     }
 
@@ -644,7 +645,8 @@ ErrorType ClientSession::CmdLeaveRoom(StreamExtractor& data, QByteArray& reply) 
                     dead.set_error_code(NP_SIG_ERROR_TERMINATED_BY_PEER);
                     QByteArray deadPayload;
                     appendProto(deadPayload, dead);
-                    SendMatchingNotification(NotificationType::NpSignalingEvent, deadPayload, rm.first);
+                    SendMatchingNotification(NotificationType::NpSignalingEvent, deadPayload,
+                                             rm.first);
                     qDebug() << "  -> NpSignaling DEAD(TERMINATED_BY_PEER) to" << rm.first
                              << "peer=" << leaverNpid;
                 }
@@ -656,7 +658,7 @@ ErrorType ClientSession::CmdLeaveRoom(StreamExtractor& data, QByteArray& reply) 
                     QByteArray deadPayload;
                     appendProto(deadPayload, dead);
                     SendMatchingNotification(NotificationType::NpSignalingEvent, deadPayload,
-                                            leaverNpid);
+                                             leaverNpid);
                     qDebug() << "  -> NpSignaling DEAD(TERMINATED_BY_MYSELF) to" << leaverNpid
                              << "peer=" << rm.first;
                 }
@@ -669,12 +671,12 @@ ErrorType ClientSession::CmdLeaveRoom(StreamExtractor& data, QByteArray& reply) 
         shadnet::LeaveRoomReply leaveBlob;
         leaveBlob.set_room_id(roomId);
         SendSelfNotification(NotificationType::RequestEvent,
-            MakeRequestEventPayload(m_matching.ctxId, m_matching.serverId, m_matching.worldId,
-                                    m_matching.lobbyId, 0x0103, reqId, 0, roomId, myMemberId,
-                                    0, 0, false, PbEncode(leaveBlob)));
+                             MakeRequestEventPayload(m_matching.ctxId, m_matching.serverId,
+                                                     m_matching.worldId, m_matching.lobbyId, 0x0103,
+                                                     reqId, 0, roomId, myMemberId, 0, 0, false,
+                                                     PbEncode(leaveBlob)));
         qDebug() << "  -> RequestEvent(0x0103/LeaveRoom) to" << m_info.npid;
     }
-
 
     shadnet::LeaveRoomReply rep;
     rep.set_room_id(roomId);
@@ -726,8 +728,8 @@ ErrorType ClientSession::CmdKickoutRoomMember(StreamExtractor& data, QByteArray&
         lobbyId = room.lobbyId;
     }
 
-    qInfo() << "Room" << roomId << m_info.npid << "kicked" << targetNpid
-            << "mid=" << targetMemberId << "blockKickFlag=" << blockKickFlag;
+    qInfo() << "Room" << roomId << m_info.npid << "kicked" << targetNpid << "mid=" << targetMemberId
+            << "blockKickFlag=" << blockKickFlag;
 
     {
         shadnet::NotifyKickedOut pb;
@@ -742,9 +744,9 @@ ErrorType ClientSession::CmdKickoutRoomMember(StreamExtractor& data, QByteArray&
 
     if (m_matching.hasHandler(HandlerType::Request)) {
         SendSelfNotification(NotificationType::RequestEvent,
-            MakeRequestEventPayload(m_matching.ctxId, serverId, worldId, lobbyId, 0x0104,
-                                    reqId, 0, roomId, initiatorMemberId, maxSlots, roomFlags,
-                                    true, {}));
+                             MakeRequestEventPayload(m_matching.ctxId, serverId, worldId, lobbyId,
+                                                     0x0104, reqId, 0, roomId, initiatorMemberId,
+                                                     maxSlots, roomFlags, true, {}));
         qDebug() << "  -> RequestEvent(0x0104/KickoutRoomMember) to" << m_info.npid;
     }
 
@@ -948,7 +950,7 @@ ErrorType ClientSession::CmdCancelActivationIntent(StreamExtractor& data, QByteA
     {
         QWriteLocker lk(&m_shared->matching.activationLock);
         auto& intents = m_shared->matching.activationIntents;
-        for (auto it = intents.begin(); it != intents.end(); ) {
+        for (auto it = intents.begin(); it != intents.end();) {
             if (it->first == meNpid && it->second == peerNpid) {
                 it = intents.erase(it);
                 ++removed;
@@ -1014,10 +1016,11 @@ ErrorType ClientSession::CmdSetRoomDataInternal(StreamExtractor& data, QByteArra
         shadnet::SetRoomDataInternalReply blob;
         blob.set_room_id(roomId);
         SendSelfNotification(NotificationType::RequestEvent,
-            MakeRequestEventPayload(m_matching.ctxId, m_matching.serverId, m_matching.worldId,
-                                    m_matching.lobbyId, 0x0109, reqId, 0, roomId,
-                                    m_matching.myMemberId, m_matching.maxSlots, newFlags,
-                                    m_matching.isRoomOwner, PbEncode(blob)));
+                             MakeRequestEventPayload(m_matching.ctxId, m_matching.serverId,
+                                                     m_matching.worldId, m_matching.lobbyId, 0x0109,
+                                                     reqId, 0, roomId, m_matching.myMemberId,
+                                                     m_matching.maxSlots, newFlags,
+                                                     m_matching.isRoomOwner, PbEncode(blob)));
         qDebug() << "  -> RequestEvent(0x0109/SetRoomDataInternal) to" << m_info.npid;
     }
 
@@ -1117,10 +1120,11 @@ ErrorType ClientSession::CmdSetRoomDataExternal(StreamExtractor& data, QByteArra
         shadnet::SetRoomDataExternalReply blob;
         blob.set_room_id(roomId);
         SendSelfNotification(NotificationType::RequestEvent,
-            MakeRequestEventPayload(m_matching.ctxId, m_matching.serverId, m_matching.worldId,
-                                    m_matching.lobbyId, 0x0004, reqId, 0, roomId,
-                                    m_matching.myMemberId, m_matching.maxSlots, m_matching.roomFlags,
-                                    m_matching.isRoomOwner, PbEncode(blob)));
+                             MakeRequestEventPayload(m_matching.ctxId, m_matching.serverId,
+                                                     m_matching.worldId, m_matching.lobbyId, 0x0004,
+                                                     reqId, 0, roomId, m_matching.myMemberId,
+                                                     m_matching.maxSlots, m_matching.roomFlags,
+                                                     m_matching.isRoomOwner, PbEncode(blob)));
         qDebug() << "  -> RequestEvent(0x0004/SetRoomDataExternal) to" << m_info.npid;
     }
 

@@ -76,8 +76,8 @@ enum class NotificationType : uint16_t {
 };
 
 // NpSignaling error codes (sent in NotifyNpSignalingEvent::error_code)
-static constexpr uint32_t NP_SIG_ERROR_TERMINATED_BY_PEER   = 0x80552710;
-static constexpr uint32_t NP_SIG_ERROR_TIMEOUT              = 0x80552711;
+static constexpr uint32_t NP_SIG_ERROR_TERMINATED_BY_PEER = 0x80552710;
+static constexpr uint32_t NP_SIG_ERROR_TIMEOUT = 0x80552711;
 static constexpr uint32_t NP_SIG_ERROR_TERMINATED_BY_MYSELF = 0x80552718;
 
 // Error codes for Reply packets
