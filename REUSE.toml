@@ -26,7 +26,9 @@ path = [
     "clientsample/samples/walkthrough-friends.bat",
     "clientsample/samples/walkthrough-scores.bat",
     "documentation/database.md",
+    "documentation/matching.md",
     "documentation/protocol.md",
+    "documentation/signaling.md",
     "externals/CMakeLists.txt",
 ]
 
