@@ -11,7 +11,7 @@
 const QString versionString = QStringLiteral("0.0.1");
 
 int main(int argc, char* argv[]) {
-    QLoggingCategory::setFilterRules(QStringLiteral("*.debug=false\n*.info=true"));
+    QLoggingCategory::setFilterRules(QStringLiteral("*.debug=false\n*.info=true\n*.warning=true"));
     qSetMessagePattern(QStringLiteral("%{time yyyy-MM-dd HH:mm:ss.zzz}  "
                                       "%{if-debug}DEBUG%{endif}"
                                       "%{if-info} INFO%{endif}"
