@@ -25,7 +25,7 @@ bool ScoreDb::SetBoard(const QString& comId, uint32_t boardId, const ScoreBoardC
     q.addBindValue(cfg.updateMode);
     q.addBindValue(cfg.sortMode);
     q.addBindValue(cfg.uploadNumLimit);
-    q.addBindValue(cfg.uploadSizeLimit);
+    q.addBindValue(static_cast<qulonglong>(cfg.uploadSizeLimit));
     if (!q.exec()) {
         qWarning() << "setBoard:" << q.lastError().text();
         return false;
