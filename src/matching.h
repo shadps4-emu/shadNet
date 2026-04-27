@@ -126,21 +126,13 @@ struct Room {
         return &members[mid];
     }
 
-    struct FormerMember {
-        QString npid;
-        uint16_t memberId;
-    };
-
     bool removeMember(uint16_t memberId) {
         auto it = members.find(memberId);
         if (it == members.end())
             return false;
-        formerMembers.append({it->npid, memberId});
         members.erase(it);
         return true;
     }
-
-    QVector<FormerMember> formerMembers; // accumulates members who left
 
     const RoomMember* findByNpid(const QString& npid) const {
         for (auto it = members.begin(); it != members.end(); ++it)
