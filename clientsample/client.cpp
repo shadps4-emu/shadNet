@@ -319,8 +319,7 @@ void ShadNetClient::activationConfirm(const std::string& meId, const std::string
     req.set_me_id(meId);
     req.set_initiator_ip(initiatorIp);
     req.set_ctx_tag(ctxTag);
-    conn.send(
-        buildPacket(CommandType::ActivationConfirm, packetCounter++, makeProtoPayload(req)));
+    conn.send(buildPacket(CommandType::ActivationConfirm, packetCounter++, makeProtoPayload(req)));
 }
 
 void ShadNetClient::setRoomDataInternal(const SetRoomDataInternalParams& p) {
@@ -369,8 +368,7 @@ void ShadNetClient::kickoutRoomMember(const KickoutRoomMemberParams& p) {
     req.set_req_id(p.reqId);
     req.set_target_member_id(p.targetMemberId);
     req.set_block_kick_flag(p.blockKickFlag);
-    conn.send(
-        buildPacket(CommandType::KickoutRoomMember, packetCounter++, makeProtoPayload(req)));
+    conn.send(buildPacket(CommandType::KickoutRoomMember, packetCounter++, makeProtoPayload(req)));
 }
 
 // ── Score wire helpers ────────────────────────────────────────────────────────
@@ -681,8 +679,8 @@ void ShadNetClient::handleNotification(const Packet& pkt) {
         n.flags = pb.flags();
         n.isOwner = pb.is_owner();
         n.responseBlob.assign(pb.response_blob().begin(), pb.response_blob().end());
-        printf("[notify] RequestEvent req=0x%04x roomId=%llu memberId=%u err=%u\n",
-               n.reqEvent, (unsigned long long)n.roomId, n.memberId, n.errorCode);
+        printf("[notify] RequestEvent req=0x%04x roomId=%llu memberId=%u err=%u\n", n.reqEvent,
+               (unsigned long long)n.roomId, n.memberId, n.errorCode);
         if (onRequestEvent)
             onRequestEvent(n);
         break;
@@ -718,8 +716,8 @@ void ShadNetClient::handleNotification(const Packet& pkt) {
         n.roomId = pb.room_id();
         n.memberId = pb.member_id();
         n.npid = pb.npid();
-        printf("[notify] MemberLeft roomId=%llu mid=%u npid=%s\n",
-               (unsigned long long)n.roomId, n.memberId, n.npid.c_str());
+        printf("[notify] MemberLeft roomId=%llu mid=%u npid=%s\n", (unsigned long long)n.roomId,
+               n.memberId, n.npid.c_str());
         if (onMemberLeft)
             onMemberLeft(n);
         break;
@@ -735,8 +733,8 @@ void ShadNetClient::handleNotification(const Packet& pkt) {
         n.memberId = pb.member_id();
         n.addr = pb.addr();
         n.port = pb.port();
-        printf("[notify] SignalingHelper npid=%s mid=%u addr=%s:%u\n",
-               n.npid.c_str(), n.memberId, n.addr.c_str(), n.port);
+        printf("[notify] SignalingHelper npid=%s mid=%u addr=%s:%u\n", n.npid.c_str(), n.memberId,
+               n.addr.c_str(), n.port);
         if (onSignalingHelper)
             onSignalingHelper(n);
         break;
@@ -752,8 +750,8 @@ void ShadNetClient::handleNotification(const Packet& pkt) {
         n.roomId = pb.room_id();
         n.memberId = pb.member_id();
         n.connId = pb.conn_id();
-        printf("[notify] SignalingEvent type=0x%04x roomId=%llu mid=%u connId=%u\n",
-               n.eventType, (unsigned long long)n.roomId, n.memberId, n.connId);
+        printf("[notify] SignalingEvent type=0x%04x roomId=%llu mid=%u connId=%u\n", n.eventType,
+               (unsigned long long)n.roomId, n.memberId, n.connId);
         if (onSignalingEvent)
             onSignalingEvent(n);
         break;
@@ -800,8 +798,8 @@ void ShadNetClient::handleNotification(const Packet& pkt) {
         n.roomId = pb.room_id();
         n.statusCode = pb.status_code();
         n.guardValue = pb.guard_value();
-        printf("[notify] KickedOut roomId=%llu statusCode=0x%x\n",
-               (unsigned long long)n.roomId, static_cast<unsigned>(n.statusCode));
+        printf("[notify] KickedOut roomId=%llu statusCode=0x%x\n", (unsigned long long)n.roomId,
+               static_cast<unsigned>(n.statusCode));
         if (onKickedOut)
             onKickedOut(n);
         break;
@@ -1002,8 +1000,8 @@ void ShadNetClient::handleCreateRoomReply(const std::vector<uint8_t>& payload) {
             res.flags = pb.flags();
             res.curMembers = pb.cur_members();
             res.details = FromProto(pb.details());
-            printf("[create-room] OK roomId=%llu memberId=%u\n",
-                   (unsigned long long)res.roomId, res.memberId);
+            printf("[create-room] OK roomId=%llu memberId=%u\n", (unsigned long long)res.roomId,
+                   res.memberId);
         } else {
             res.error = ErrorType::Malformed;
         }
@@ -1102,9 +1100,8 @@ void ShadNetClient::handleSignalingInfosReply(const std::vector<uint8_t>& payloa
             res.targetIp = pb.target_ip();
             res.targetPort = pb.target_port();
             res.targetMemberId = pb.target_member_id();
-            printf("[signaling-infos] %s => %s:%u mid=%u\n",
-                   res.targetNpid.c_str(), res.targetIp.c_str(), res.targetPort,
-                   res.targetMemberId);
+            printf("[signaling-infos] %s => %s:%u mid=%u\n", res.targetNpid.c_str(),
+                   res.targetIp.c_str(), res.targetPort, res.targetMemberId);
         } else {
             res.error = ErrorType::Malformed;
         }
@@ -1119,8 +1116,8 @@ void ShadNetClient::handleSimpleMatchingReply(CommandType cmd,
                                               const std::vector<uint8_t>& payload) {
     ErrorType err = payload.empty() ? ErrorType::Malformed : static_cast<ErrorType>(payload[0]);
     const char* name = cmd == CommandType::SignalingEstablished ? "signaling-established"
-                     : cmd == CommandType::ActivationConfirm    ? "activation-confirm"
-                                                                 : "matching";
+                       : cmd == CommandType::ActivationConfirm  ? "activation-confirm"
+                                                                : "matching";
     if (err == ErrorType::NoError)
         printf("[%s] OK\n", name);
     else
