@@ -14,6 +14,7 @@
 #include <QTcpSocket>
 #include <database.h>
 #include "config.h"
+#include "matching.h"
 #include "protocol.h"
 #include "score_cache.h"
 #include "score_db.h"
@@ -30,11 +31,16 @@ struct SharedState {
     struct ClientEntry {
         QString npid;
         std::function<void(QByteArray)> send;
+        std::function<void(uint64_t)> resetMatchingRoomState;
         // Online friends for this session: userId → npid.
         // Protected by clientsLock (same lock as the outer clients map).
         QHash<int64_t, QString> friends;
     };
     QHash<int64_t, ClientEntry> clients;
+    QHash<QString, int64_t> npidToUserId; // reverse lookup, protected by clientsLock
+
+    // Matchmaking shared state
+    MatchingSharedState matching;
 };
 
 // Per-connection session info
@@ -85,6 +91,20 @@ public:
     ErrorType CmdGetScoreAccountId(StreamExtractor& data, QByteArray& reply);
     ErrorType CmdGetScoreGameDataByAccId(StreamExtractor& data, QByteArray& reply);
 
+    // commands cmd_matching.cpp
+    ErrorType CmdRegisterHandlers(StreamExtractor& data);
+    ErrorType CmdCreateRoom(StreamExtractor& data, QByteArray& reply);
+    ErrorType CmdJoinRoom(StreamExtractor& data, QByteArray& reply);
+    ErrorType CmdLeaveRoom(StreamExtractor& data, QByteArray& reply);
+    ErrorType CmdGetRoomList(StreamExtractor& data, QByteArray& reply);
+    ErrorType CmdRequestSignalingInfos(StreamExtractor& data, QByteArray& reply);
+    ErrorType CmdSignalingEstablished(StreamExtractor& data);
+    ErrorType CmdActivationConfirm(StreamExtractor& data, QByteArray& reply);
+    ErrorType CmdCancelActivationIntent(StreamExtractor& data, QByteArray& reply);
+    ErrorType CmdSetRoomDataInternal(StreamExtractor& data, QByteArray& reply);
+    ErrorType CmdSetRoomDataExternal(StreamExtractor& data, QByteArray& reply);
+    ErrorType CmdKickoutRoomMember(StreamExtractor& data, QByteArray& reply);
+
 signals:
     void Disconnected();
 
@@ -101,6 +121,15 @@ private:
     void SendSelfNotification(NotificationType type, const QByteArray& payload);
     static QByteArray BuildNotification(NotificationType type, const QByteArray& payload);
 
+    // Matching helpers (cmd_matching.cpp)
+    void SendMatchingNotification(NotificationType type, const QByteArray& payload,
+                                  const QString& targetNpid);
+    void NotifyRoomMembers(NotificationType type, const QByteArray& payload, uint64_t roomId,
+                           const QString& excludeNpid = {});
+    void DoLeaveRoom(uint64_t roomId);
+    void CleanupMatchingOnDisconnect();
+    void ResetMatchingRoomState(uint64_t roomId);
+
     QTcpSocket* m_socket;
     bool m_isSsl = true;
     SharedState* m_shared;
@@ -108,6 +137,7 @@ private:
     QByteArray m_readBuf;
     std::unique_ptr<Database> m_db;
     ClientInfo m_info;
+    MatchingSessionState m_matching;
 };
 
 inline bool ClientSession::IsValidNpid(const QString& npid) {

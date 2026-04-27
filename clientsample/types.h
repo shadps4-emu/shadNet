@@ -23,7 +23,19 @@ enum class CommandType : uint16_t {
     RemoveFriend = 9,
     AddBlock = 10,
     RemoveBlock = 11,
-    // (12–29: room/lobby commands not implemented here)
+    // Matchmaking
+    RegisterHandlers = 12,
+    CreateRoom = 13,
+    JoinRoom = 14,
+    LeaveRoom = 15,
+    GetRoomList = 16,
+    RequestSignalingInfos = 17,
+    SignalingEstablished = 18,
+    ActivationConfirm = 19,
+    SetRoomDataInternal = 20,
+    SetRoomDataExternal = 21,
+    KickoutRoomMember = 22,
+    // Scores
     GetBoardInfos = 30,
     RecordScore = 31,
     RecordScoreData = 32,
@@ -40,6 +52,15 @@ enum class NotificationType : uint16_t {
     FriendNew = 6,
     FriendLost = 7,
     FriendStatus = 8,
+    // Matchmaking
+    RequestEvent = 9,
+    MemberJoined = 10,
+    MemberLeft = 11,
+    SignalingHelper = 12,
+    SignalingEvent = 13,
+    NpSignalingEvent = 14,
+    RoomDataInternalUpdated = 15,
+    KickedOut = 16,
 };
 
 enum class ErrorType : uint8_t {
@@ -57,6 +78,15 @@ enum class ErrorType : uint8_t {
     CreationExistingUsername = 11,
     CreationBannedEmail = 12,
     CreationExistingEmail = 13,
+    RoomMissing = 14,
+    RoomAlreadyJoined = 15,
+    RoomFull = 16,
+    RoomPasswordMismatch = 17,
+    RoomPasswordMissing = 18,
+    RoomGroupNoJoinLabel = 19,
+    RoomGroupFull = 20,
+    RoomGroupJoinLabelNotFound = 21,
+    RoomGroupMaxSlotMismatch = 22,
     Unauthorized = 23,
     DbFail = 24,
     NotFound = 26,
@@ -98,6 +128,24 @@ inline const char* errorName(ErrorType e) {
         return "CreationBannedEmail";
     case ErrorType::CreationExistingEmail:
         return "CreationExistingEmail";
+    case ErrorType::RoomMissing:
+        return "RoomMissing";
+    case ErrorType::RoomAlreadyJoined:
+        return "RoomAlreadyJoined";
+    case ErrorType::RoomFull:
+        return "RoomFull";
+    case ErrorType::RoomPasswordMismatch:
+        return "RoomPasswordMismatch";
+    case ErrorType::RoomPasswordMissing:
+        return "RoomPasswordMissing";
+    case ErrorType::RoomGroupNoJoinLabel:
+        return "RoomGroupNoJoinLabel";
+    case ErrorType::RoomGroupFull:
+        return "RoomGroupFull";
+    case ErrorType::RoomGroupJoinLabelNotFound:
+        return "RoomGroupJoinLabelNotFound";
+    case ErrorType::RoomGroupMaxSlotMismatch:
+        return "RoomGroupMaxSlotMismatch";
     case ErrorType::Unauthorized:
         return "Unauthorized";
     case ErrorType::DbFail:

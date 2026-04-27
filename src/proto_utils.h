@@ -20,3 +20,19 @@ template <typename T>
 inline bool PbDecode(T& msg, const QByteArray& bytes) {
     return msg.ParseFromArray(bytes.constData(), bytes.size());
 }
+
+// Read a u32-LE-prefixed blob from StreamExtractor and parse it into a proto message.
+template <typename T>
+inline bool decodeProto(T& msg, StreamExtractor& data) {
+    QByteArray blob = data.getRawData();
+    if (data.error())
+        return false;
+    return msg.ParseFromArray(blob.constData(), blob.size());
+}
+
+// Serialize a proto message and append it as a u32-LE-prefixed blob to buf.
+template <typename T>
+inline void appendProto(QByteArray& buf, const T& msg) {
+    std::string s = msg.SerializeAsString();
+    appendBlob(buf, QByteArray(s.data(), static_cast<int>(s.size())));
+}

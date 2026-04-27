@@ -31,7 +31,20 @@ enum class CommandType : uint16_t {
     RemoveFriend = 9,
     AddBlock = 10,
     RemoveBlock = 11,
-    // (12–29: room/lobby/ticket commands not implemented here)
+    // Matchmaking
+    RegisterHandlers = 12,
+    CreateRoom = 13,
+    JoinRoom = 14,
+    LeaveRoom = 15,
+    GetRoomList = 16,
+    RequestSignalingInfos = 17,
+    SignalingEstablished = 18,
+    ActivationConfirm = 19,
+    SetRoomDataInternal = 20,
+    SetRoomDataExternal = 21,
+    KickoutRoomMember = 22,
+    CancelActivationIntent = 23,
+    // Scores
     GetBoardInfos = 30,
     RecordScore = 31,
     RecordScoreData = 32,
@@ -51,7 +64,21 @@ enum class NotificationType : uint16_t {
     FriendNew = 6,    // Mutual friendship formed (request accepted)
     FriendLost = 7,   // Someone removed you from their friend list
     FriendStatus = 8, // A friend came online or went offline
+    // Matchmaking
+    RequestEvent = 9,             // Room request completed (create/join/leave/kickout)
+    MemberJoined = 10,            // A member joined the room
+    MemberLeft = 11,              // A member left the room
+    SignalingHelper = 12,         // Peer P2P address exchange
+    SignalingEvent = 13,          // NpMatching2-layer signaling event (0x5102 ESTABLISHED)
+    NpSignalingEvent = 14,        // NpSignaling-layer event (activation confirmed)
+    RoomDataInternalUpdated = 15, // Room internal data changed (broadcast to other members)
+    KickedOut = 16,               // Local room event (0x1103) for the member who was removed
 };
+
+// NpSignaling error codes (sent in NotifyNpSignalingEvent::error_code)
+static constexpr uint32_t NP_SIG_ERROR_TERMINATED_BY_PEER   = 0x80552710;
+static constexpr uint32_t NP_SIG_ERROR_TIMEOUT              = 0x80552711;
+static constexpr uint32_t NP_SIG_ERROR_TERMINATED_BY_MYSELF = 0x80552718;
 
 // Error codes for Reply packets
 enum class ErrorType : uint8_t {
