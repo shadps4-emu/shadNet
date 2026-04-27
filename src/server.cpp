@@ -8,8 +8,10 @@
 #include <QTextStream>
 #include <QThread>
 #ifdef Q_OS_WIN
-#include <mstcpip.h>
+// clang-format off
 #include <winsock2.h>
+#include <mstcpip.h>
+// clang-format on
 #else
 #include <netinet/in.h>
 #include <netinet/tcp.h>
