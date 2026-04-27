@@ -7,6 +7,7 @@
 #include <QLoggingCategory>
 #include "config.h"
 #include "server.h"
+#include "webapi_server.h"
 
 const QString versionString = QStringLiteral("0.0.2");
 
@@ -36,6 +37,12 @@ int main(int argc, char* argv[]) {
     if (!server.Start(&config)) {
         qCritical() << "Failed to start server";
         return 1;
+    }
+
+    // Start the HTTP/JSON WebAPI listener alongside the binary protocol.
+    WebApiServer webapi;
+    if (!webapi.Start(&config, "db/rpcn.db")) {
+        qWarning() << "WebApiServer failed to start; continuing without WebAPI";
     }
 
     return app.exec();

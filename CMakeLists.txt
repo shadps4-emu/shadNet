@@ -16,7 +16,7 @@ if(MSVC)
     # Remove /VERBOSE:LIB from link options (noisy, only needed for debugging)
 endif()
 
-find_package(Qt6 REQUIRED COMPONENTS Core Network Sql Concurrent)
+find_package(Qt6 REQUIRED COMPONENTS Core Network Sql Concurrent HttpServer)
 
 add_subdirectory(externals)
 
@@ -66,6 +66,11 @@ set(SOURCES
     src/cmd_matching.cpp
     src/stun_server.h
     src/stun_server.cpp
+    # WebAPI HTTP/JSON listener
+    src/webapi_server.h
+    src/webapi_server.cpp
+    src/webapi_auth.h
+    src/webapi_auth.cpp
 )
 
 add_executable(shadnet ${SOURCES})
@@ -81,6 +86,7 @@ target_link_libraries(shadnet PRIVATE
     Qt6::Network
     Qt6::Sql
     Qt6::Concurrent
+    Qt6::HttpServer
     libprotobuf
 )
 
