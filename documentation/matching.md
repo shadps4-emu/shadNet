@@ -265,12 +265,14 @@ Leave the current room.
 
 1. Remove self from room members
 2. If room is now empty, destroy it
-3. If leaving member was the owner, transfer ownership to the first remaining member
+3. If leaving member was the owner, transfer ownership to the first remaining member @TODO SCENPMATCHING2GRANTROOMOWNER 
 4. Clear all signaling pairs and activation intents related to the leaving member
 
 **Notifications pushed:**
 - **MemberLeft** (to remaining members) — leaver's roomId, memberId, npid
 - **RequestEvent** (to self) — `req_event = 0x0103` (LeaveRoom), `response_blob` carries serialized `LeaveRoomReply`
+- **SignalingEvent** (to all affected pairs, immediately) — `event_type = 0x5101` (DEAD) for every (leaver, remaining member) pair. Both directions are sent: the remaining member receives 0x5101 with the leaver's memberId, and the leaver receives 0x5101 with each remaining member's memberId.
+- **NpSignalingEvent** (delayed 2 seconds, to all affected pairs) — `event = 0` (DEAD). Each remaining member receives `error_code = NP_SIG_ERROR_TERMINATED_BY_PEER (0x80552710)` with the leaver's npid. The leaver receives `error_code = NP_SIG_ERROR_TERMINATED_BY_MYSELF (0x80552718)` with each remaining member's npid.
 
 **State cleanup:** session `roomId = 0`, `myMemberId = 0`, `isRoomOwner = false`.
 
@@ -438,6 +440,23 @@ Remove a member from the room. Only the room owner may call this.
 
 ---
 
+### CancelActivationIntent (23)
+
+Cancel a pending NpSignaling activation intent. Used when a peer-to-peer connection attempt is abandoned before the `ActivationConfirm` TCP command is sent.
+
+**Request:** `CancelActivationIntentRequest` proto
+
+| Field | Type | Description |
+|---|---|---|
+| `me_npid` | string | Own NP ID (the activation initiator) |
+| `peer_npid` | string | Target peer's NP ID |
+
+**Reply:** `ErrorType(u8)` only — no proto body.
+
+Removes all matching entries from `MatchingSharedState.activationIntents` where the initiator and peer match the provided NP IDs. Multiple matching entries may exist (e.g. from multiple UDP `HandleActivationIntent` datagrams) — all are removed.
+
+---
+
 ## Notifications
 
 Matchmaking notifications are server-initiated `PacketType::Notification` packets. They are pushed asynchronously and require no reply. Each notification payload is `u32-LE size` + serialized proto bytes.
@@ -449,10 +468,9 @@ Matchmaking notifications are server-initiated `PacketType::Notification` packet
 | `11` | `MemberLeft` | `NotifyMemberLeft` | A member left the room |
 | `12` | `SignalingHelper` | `NotifySignalingHelper` | Peer address exchange for P2P discovery |
 | `13` | `SignalingEvent` | `NotifySignalingEvent` | NpMatching2-layer signaling event |
-| `14` | `NpSignalingEvent` | `NotifyNpSignalingEvent` | NpSignaling-layer activation event |
+| `14` | `NpSignalingEvent` | `NotifyNpSignalingEvent` | NpSignaling-layer activation or teardown event |
 | `15` | `RoomDataInternalUpdated` | `NotifyRoomDataInternalUpdated` | Room internal binary attributes changed |
 | `16` | `KickedOut` | `NotifyKickedOut` | This client was kicked from the room |
-| `17` | `SignalingMute` | `NotifySignalingMute` | Peer mute event |
 
 ---
 
@@ -552,14 +570,19 @@ NpMatching2-layer signaling completion. Sent on a 2-second delay after a JoinRoo
 
 ### NpSignalingEvent (14)
 
-NpSignaling-layer activation confirmation. Sent after `ActivationConfirm` resolves a STUN activation intent.
+NpSignaling-layer event. Sent either to confirm activation after `ActivationConfirm` resolves a STUN intent, or to signal teardown when a peer leaves the room or disconnects.
 
 **Proto:** `NotifyNpSignalingEvent`
 
 | Field | Type | Description |
 |---|---|---|
-| `event` | uint32 | Always `1` (connection activated) |
-| `npid` | string | NP ID of the peer whose activation was confirmed |
+| `event` | uint32 | `1` = connection activated; `0` = connection dead (DEAD) |
+| `npid` | string | NP ID of the affected peer |
+| `error_code` | uint32 | Only set when `event = 0`. `0x80552710` = terminated by peer; `0x80552718` = terminated by myself |
+
+**event=1 (activation):** Sent to the initiator after `ActivationConfirm` resolves the STUN activation intent. `error_code` is omitted (proto3 default 0).
+
+**event=0 (DEAD):** Sent on a 2-second delay when a peer leaves or is kicked from the room, or when a peer disconnects. The remaining member receives `error_code = 0x80552710` (`NP_SIG_ERROR_TERMINATED_BY_PEER`) with the leaver's npid. The leaver receives `error_code = 0x80552718` (`NP_SIG_ERROR_TERMINATED_BY_MYSELF`) with each remaining member's npid.
 
 ---
 
@@ -591,23 +614,11 @@ Sent to a member that has been removed from the room by the owner.
 
 ---
 
-### SignalingMute (17)
-
-Peer mute event.
-
-**Proto:** `NotifySignalingMute`
-
-| Field | Type | Description |
-|---|---|---|
-| `npid` | string | NP ID of the peer to mute |
-
----
-
 ## Disconnect Cleanup
 
 When a client disconnects (TCP connection closed), the server automatically:
 
-1. Calls `DoLeaveRoom` if the client is in a room — notifying remaining members via `MemberLeft`
+1. Calls `DoLeaveRoom` if the client is in a room — notifying remaining members via `MemberLeft`, then sending `SignalingEvent 0x5101` immediately and `NpSignalingEvent event=0` (DEAD) after a 2-second delay for each affected peer pair
 2. Transfers room ownership if the disconnecting client was the owner
 3. Destroys the room if it becomes empty
 4. Purges stale signaling pairs and activation intents associated with the client

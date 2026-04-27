@@ -37,15 +37,15 @@ Set in `shadnet.cfg`. The STUN server binds to the same `Host` address as the TC
 │  │                  │         │                          │  │
 │  │  ClientSession   │         │  HandleStunPing      (1) │  │
 │  │  ├─ RegisterH.   │         │  HandleSignalingEst. (2) │  │
-│  │  ├─ CreateRoom    │         │  HandleActivationI. (4) │  │
-│  │  ├─ JoinRoom      │◄──────►│                          │  │
-│  │  ├─ RequestSig.   │ shared │                          │  │
-│  │  ├─ SignalingEst. │  state │                          │  │
+│  │  ├─ CreateRoom   │         │  HandleActivationI. (4)  │  │
+│  │  ├─ JoinRoom     │ ◄──────►│                          │  │
+│  │  ├─ RequestSig.  │ shared  │                          │  │
+│  │  ├─ SignalingEst.│ state   │                          │  │
 │  │  └─ ActivationC. │         │                          │  │
 │  └──────────────────┘         └──────────────────────────┘  │
 │                                                             │
 │  ┌────────────────────────────────────────────────────────┐ │
-│  │              MatchingSharedState                        │ │
+│  │              MatchingSharedState                       │ │
 │  │  udpExt:            npid → (external_ip, external_port)│ │
 │  │  signalingPairs:    (me, peer) → (peer_ip, peer_port)  │ │
 │  │  activationIntents: (ip_u32, ctx_tag) → (me, peer)     │ │
