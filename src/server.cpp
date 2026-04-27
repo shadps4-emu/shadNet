@@ -10,6 +10,8 @@
 #ifdef Q_OS_WIN
 #include <winsock2.h>
 #include <mstcpip.h>
+#else
+#include <netinet/tcp.h>
 #endif
 #include "score_db.h"
 #include "server.h"
