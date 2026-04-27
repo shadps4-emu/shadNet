@@ -163,7 +163,7 @@ bool ShadNetServer::LoadScoreboardsCfg(const QString& path) {
             cfg.uploadNumLimit = parts[5].trimmed().toUInt(&ok);
             if (!ok)
                 return false;
-            cfg.uploadSizeLimit = parts[6].trimmed().toUInt(&ok);
+            cfg.uploadSizeLimit = parts[6].trimmed().toULongLong(&ok);
             if (!ok)
                 return false;
 

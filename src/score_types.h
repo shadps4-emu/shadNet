@@ -15,7 +15,7 @@ struct ScoreBoardConfig {
     uint32_t updateMode = 0; // 0 = NORMAL_UPDATE (keep best), 1 = FORCE_UPDATE
     uint32_t sortMode = 0;   // 0 = DESCENDING (higher=better), 1 = ASCENDING (lower=better)
     uint32_t uploadNumLimit = 10;
-    uint32_t uploadSizeLimit = 6'000'000;
+    uint64_t uploadSizeLimit = 6'000'000;
 };
 
 // Score entry

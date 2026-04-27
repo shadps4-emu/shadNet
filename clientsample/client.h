@@ -40,7 +40,7 @@ struct BoardInfo {
     uint32_t updateMode = 0; // 0=NORMAL_UPDATE, 1=FORCE_UPDATE
     uint32_t sortMode = 0;   // 0=DESCENDING, 1=ASCENDING
     uint32_t uploadNumLimit = 0;
-    uint32_t uploadSizeLimit = 0;
+    uint64_t uploadSizeLimit = 0;
 };
 
 struct ScoreRankEntry {

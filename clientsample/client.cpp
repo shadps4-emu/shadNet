@@ -479,9 +479,9 @@ void ShadNetClient::handleBoardInfosReply(const std::vector<uint8_t>& payload) {
             info.uploadNumLimit = pb.uploadnumlimit();
             info.uploadSizeLimit = pb.uploadsizelimit();
         }
-        printf("[board-info] rankLimit=%u updateMode=%u sortMode=%u uploadNum=%u uploadSize=%u\n",
+        printf("[board-info] rankLimit=%u updateMode=%u sortMode=%u uploadNum=%u uploadSize=%llu\n",
                info.rankLimit, info.updateMode, info.sortMode, info.uploadNumLimit,
-               info.uploadSizeLimit);
+               static_cast<unsigned long long>(info.uploadSizeLimit));
     } else {
         printf("[board-info] FAILED: %s\n", errorName(info.error));
     }
