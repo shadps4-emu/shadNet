@@ -116,7 +116,7 @@ jobs:
         host: 'windows'
         target: 'desktop'
         arch: 'win64_msvc2022_64'
-        modules: 'qthttpserver'
+        modules: 'qthttpserver qtwebsockets'
         cache: true
 
     - name: Setup Visual Studio shell
@@ -196,7 +196,7 @@ jobs:
         version: ${{ needs.get-qt-version.outputs.version }}
         host: 'linux'
         target: 'desktop'
-        modules: 'qthttpserver'
+        modules: 'qthttpserver qtwebsockets'
         cache: true
 
     - name: Cache CMake configuration
