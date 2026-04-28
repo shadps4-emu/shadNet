@@ -5,10 +5,10 @@
 #include <QDebug>
 #include <QHostAddress>
 #include <QHttpServerRequest>
+#include <QHttpServerResponder>
 #include <QHttpServerResponse>
 #include <QJsonDocument>
 #include <QJsonObject>
-
 #include "webapi_auth.h"
 
 WebApiServer::WebApiServer(QObject* parent) : QObject(parent) {}
@@ -17,7 +17,6 @@ WebApiServer::~WebApiServer() = default;
 bool WebApiServer::Start(ConfigManager* config, const QString& dbPath) {
     m_config = config;
 
-    // Open a dedicated DB connection for this thread
     m_db = std::make_unique<Database>(QStringLiteral("webapi_main"));
     if (!m_db->Open(dbPath)) {
         qCritical() << "WebApiServer: failed to open database at" << dbPath;
@@ -26,6 +25,7 @@ bool WebApiServer::Start(ConfigManager* config, const QString& dbPath) {
 
     m_http = std::make_unique<QHttpServer>(this);
     RegisterRoutes();
+
     m_tcp = std::make_unique<QTcpServer>(this);
 
     const QString host = m_config->GetHost();
@@ -54,4 +54,21 @@ void WebApiServer::RegisterRoutes() {
                                    QJsonDocument(body).toJson(QJsonDocument::Compact),
                                    QHttpServerResponse::StatusCode::Ok};
     });
+
+    m_http->setMissingHandler(
+        this, [](const QHttpServerRequest& req, QHttpServerResponder& responder) {
+            qWarning() << "WebAPI: unhandled" << req.method() << req.url().path()
+                       << "(query:" << req.url().query() << ")";
+
+            QJsonObject errorObj;
+            errorObj.insert("code", static_cast<qint64>(0x80920005));
+            errorObj.insert("message", QStringLiteral("Endpoint not implemented"));
+            QJsonObject body;
+            body.insert("error", errorObj);
+            responder.sendResponse(QHttpServerResponse{
+                "application/json",
+                QJsonDocument(body).toJson(QJsonDocument::Compact),
+                QHttpServerResponder::StatusCode::NotFound,
+            });
+        });
 }
