@@ -884,6 +884,7 @@ void ShadNetClient::handlePacket(const Packet& pkt) {
         break;
     case CommandType::KickoutRoomMember:
         handleKickoutRoomMemberReply(pkt.payload);
+        break;
     case CommandType::GetScoreAccountId:
         handleScoreRangeReply(pkt.payload, onScoreAccountId);
         break;
