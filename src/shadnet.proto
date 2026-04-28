@@ -390,6 +390,13 @@ message SetRoomDataInternalReply  { uint64 room_id = 1; }
 message SetRoomDataExternalReply  { uint64 room_id = 1; }
 message KickoutRoomMemberReply    { uint64 room_id = 1; }
 
+
+message GetTokenReply {
+    string token = 1;
+    uint64 user_id = 2;
+    string npid = 3;
+}
+
 // Notification payloads
 
 // NotificationType::RequestEvent (9)

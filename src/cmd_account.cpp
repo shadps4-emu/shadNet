@@ -216,3 +216,20 @@ ErrorType ClientSession::CmdDelete(StreamExtractor& data) {
     QMetaObject::invokeMethod(m_socket, "disconnectFromHost", Qt::QueuedConnection);
     return ErrorType::NoError;
 }
+
+ErrorType ClientSession::CmdGetToken(QByteArray& reply) {
+    if (m_info.token.isEmpty()) {
+        qWarning() << "CmdGetToken: token empty for userId=" << m_info.userId
+                   << "npid=" << m_info.npid;
+        return ErrorType::DbFail;
+    }
+
+    shadnet::GetTokenReply pb;
+    pb.set_token(m_info.token.toStdString());
+    pb.set_user_id(static_cast<uint64_t>(m_info.userId));
+    pb.set_npid(m_info.npid.toStdString());
+    appendProto(reply, pb);
+
+    qInfo() << "CmdGetToken: served token for" << m_info.npid;
+    return ErrorType::NoError;
+}
