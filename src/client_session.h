@@ -90,6 +90,7 @@ public:
     ErrorType CmdGetScoreNpid(StreamExtractor& data, QByteArray& reply);
     ErrorType CmdGetScoreAccountId(StreamExtractor& data, QByteArray& reply);
     ErrorType CmdGetScoreGameDataByAccId(StreamExtractor& data, QByteArray& reply);
+    ErrorType CmdGetToken(QByteArray& reply);
 
     // commands cmd_matching.cpp
     ErrorType CmdRegisterHandlers(StreamExtractor& data);

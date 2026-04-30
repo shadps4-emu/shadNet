@@ -26,6 +26,10 @@ public:
         QReadLocker lk(&m_lock);
         return m_matchingUdpPort;
     }
+    QString GetWebApiPort() const {
+        QReadLocker lk(&m_lock);
+        return m_webapiPort;
+    }
     bool IsEmailValidated() const {
         QReadLocker lk(&m_lock);
         return m_emailValidated;
@@ -76,6 +80,7 @@ private:
     QString m_host = "0.0.0.0";
     QString m_unsecured_port = "31313";
     QString m_matchingUdpPort = "31314";
+    QString m_webapiPort = "31315";
     bool m_emailValidated = false;
     QStringList m_adminsList;
     QSet<QString> m_bannedDomains;

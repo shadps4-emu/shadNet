@@ -54,6 +54,7 @@ enum class CommandType : uint16_t {
     GetScoreNpid = 36,
     GetScoreAccountId = 37,
     GetScoreGameDataByAccId = 38,
+    GetToken = 39,
 };
 
 // Notification type IDs (u16 LE in Notification packet header).
