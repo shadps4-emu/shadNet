@@ -41,7 +41,7 @@ int main(int argc, char* argv[]) {
 
     // Start the HTTP/JSON WebAPI listener alongside the binary protocol.
     WebApiServer webapi;
-    if (!webapi.Start(&config, "db/rpcn.db")) {
+    if (!webapi.Start(&config, "db/shadnet.db")) {
         qWarning() << "WebApiServer failed to start; continuing without WebAPI";
     }
 
