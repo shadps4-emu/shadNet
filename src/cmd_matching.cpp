@@ -21,29 +21,6 @@ void ResetLocalMatchingRoomState(MatchingSessionState& matching) {
     matching.roomFlags = 0;
 }
 
-void ClearPeerMatchingArtifacts(SharedState* shared, const QString& npid) {
-    {
-        QWriteLocker lk(&shared->matching.signalingLock);
-        auto& pairs = shared->matching.signalingPairs;
-        for (auto it = pairs.begin(); it != pairs.end();) {
-            if (it.key().first == npid || it.key().second == npid)
-                it = pairs.erase(it);
-            else
-                ++it;
-        }
-    }
-    {
-        QWriteLocker lk(&shared->matching.activationLock);
-        auto& intents = shared->matching.activationIntents;
-        for (auto it = intents.begin(); it != intents.end();) {
-            if (it.value().first == npid || it.value().second == npid)
-                it = intents.erase(it);
-            else
-                ++it;
-        }
-    }
-}
-
 } // namespace
 
 // ── Proto builder helpers ─────────────────────────────────────────────────────
@@ -222,7 +199,6 @@ void ClientSession::ResetMatchingRoomState(uint64_t roomId) {
     if (roomId == 0 || m_matching.roomId != roomId)
         return;
     ResetLocalMatchingRoomState(m_matching);
-    ClearPeerMatchingArtifacts(m_shared, m_info.npid);
     qInfo() << "Matching room state reset for" << m_info.npid << "room=" << roomId;
 }
 
@@ -633,37 +609,6 @@ ErrorType ClientSession::CmdLeaveRoom(StreamExtractor& data, QByteArray& reply) 
                 qDebug() << "  -> 0x5101 to" << m_info.npid << "peer mid=" << rm.second;
             }
         }
-
-        // NpSignaling DEAD 2 seconds later
-        QString leaverNpid = m_info.npid;
-        QTimer::singleShot(2000, this, [=]() {
-            for (const auto& rm : remainingMembers) {
-                {
-                    shadnet::NotifyNpSignalingEvent dead;
-                    dead.set_event(0);
-                    dead.set_npid(leaverNpid.toStdString());
-                    dead.set_error_code(NP_SIG_ERROR_TERMINATED_BY_PEER);
-                    QByteArray deadPayload;
-                    appendProto(deadPayload, dead);
-                    SendMatchingNotification(NotificationType::NpSignalingEvent, deadPayload,
-                                             rm.first);
-                    qDebug() << "  -> NpSignaling DEAD(TERMINATED_BY_PEER) to" << rm.first
-                             << "peer=" << leaverNpid;
-                }
-                {
-                    shadnet::NotifyNpSignalingEvent dead;
-                    dead.set_event(0);
-                    dead.set_npid(rm.first.toStdString());
-                    dead.set_error_code(NP_SIG_ERROR_TERMINATED_BY_MYSELF);
-                    QByteArray deadPayload;
-                    appendProto(deadPayload, dead);
-                    SendMatchingNotification(NotificationType::NpSignalingEvent, deadPayload,
-                                             leaverNpid);
-                    qDebug() << "  -> NpSignaling DEAD(TERMINATED_BY_MYSELF) to" << leaverNpid
-                             << "peer=" << rm.first;
-                }
-            }
-        });
     }
 
     // RequestEvent (0x0103) to self
@@ -859,109 +804,6 @@ ErrorType ClientSession::CmdRequestSignalingInfos(StreamExtractor& data, QByteAr
                  << "mid=" << myMemberId;
     }
 
-    return ErrorType::NoError;
-}
-
-ErrorType ClientSession::CmdSignalingEstablished(StreamExtractor& data) {
-    shadnet::SignalingEstablishedRequest req;
-    if (!decodeProto(req, data) || data.error())
-        return ErrorType::Malformed;
-
-    QString targetNpid = QString::fromStdString(req.target_npid());
-    uint32_t connId = req.conn_id();
-
-    uint16_t myMemberId = 0;
-    uint16_t targetMemberId = 0;
-    uint64_t roomId = 0;
-    {
-        QReadLocker lk(&m_shared->matching.roomsLock);
-        for (auto it = m_shared->matching.rooms.begin(); it != m_shared->matching.rooms.end();
-             ++it) {
-            const RoomMember* mm = it->findByNpid(m_info.npid);
-            const RoomMember* tm = it->findByNpid(targetNpid);
-            if (mm && tm) {
-                myMemberId = mm->memberId;
-                targetMemberId = tm->memberId;
-                roomId = it.key();
-                break;
-            }
-        }
-    }
-
-    qInfo() << "SignalingEstablished:" << m_info.npid << "(mid=" << myMemberId << ") <->"
-            << targetNpid << "(mid=" << targetMemberId << ") room=" << roomId << "conn=" << connId;
-
-    return ErrorType::NoError;
-}
-
-ErrorType ClientSession::CmdActivationConfirm(StreamExtractor& data, QByteArray& reply) {
-    Q_UNUSED(reply);
-    shadnet::ActivationConfirmRequest req;
-    if (!decodeProto(req, data) || data.error())
-        return ErrorType::Malformed;
-
-    QString meId = QString::fromStdString(req.me_id());
-    QString initiatorIpStr = QString::fromStdString(req.initiator_ip());
-    uint32_t ctxTag = req.ctx_tag();
-
-    QHostAddress addr(initiatorIpStr);
-    if (addr.isNull())
-        return ErrorType::InvalidInput;
-    uint32_t initiatorIpInt = qToBigEndian(static_cast<uint32_t>(addr.toIPv4Address()));
-
-    QPair<uint32_t, uint32_t> key(initiatorIpInt, ctxTag);
-    qInfo() << "ActivationConfirm TCP: me=" << meId << "initiator_ip=" << initiatorIpStr
-            << "ctx_tag=0x" + QString::number(ctxTag, 16);
-
-    QString initiatorNpid;
-    {
-        QReadLocker lk(&m_shared->matching.activationLock);
-        auto it = m_shared->matching.activationIntents.find(key);
-        if (it == m_shared->matching.activationIntents.end()) {
-            qWarning() << "ActivationConfirm: no intent for key — replying error";
-            return ErrorType::NotFound;
-        }
-        initiatorNpid = it->first;
-    }
-
-    qInfo() << "ActivationConfirm: matched intent initiator=" << initiatorNpid
-            << "— sending NpSignalingEvent event=1, peer=" << meId;
-
-    shadnet::NotifyNpSignalingEvent pb;
-    pb.set_event(1);
-    pb.set_npid(meId.toStdString());
-    QByteArray payload;
-    appendProto(payload, pb);
-    SendMatchingNotification(NotificationType::NpSignalingEvent, payload, initiatorNpid);
-
-    return ErrorType::NoError;
-}
-
-ErrorType ClientSession::CmdCancelActivationIntent(StreamExtractor& data, QByteArray& reply) {
-    Q_UNUSED(reply);
-    shadnet::CancelActivationIntentRequest req;
-    if (!decodeProto(req, data) || data.error())
-        return ErrorType::Malformed;
-
-    const QString meNpid = QString::fromStdString(req.me_npid());
-    const QString peerNpid = QString::fromStdString(req.peer_npid());
-
-    int removed = 0;
-    {
-        QWriteLocker lk(&m_shared->matching.activationLock);
-        auto& intents = m_shared->matching.activationIntents;
-        for (auto it = intents.begin(); it != intents.end();) {
-            if (it->first == meNpid && it->second == peerNpid) {
-                it = intents.erase(it);
-                ++removed;
-            } else {
-                ++it;
-            }
-        }
-    }
-
-    qInfo() << "CancelActivationIntent: me=" << meNpid << "peer=" << peerNpid
-            << "removed=" << removed;
     return ErrorType::NoError;
 }
 
@@ -1190,8 +1032,6 @@ void ClientSession::CleanupMatchingOnDisconnect() {
 
     if (m_matching.roomId != 0)
         DoLeaveRoom(m_matching.roomId);
-
-    ClearPeerMatchingArtifacts(m_shared, m_info.npid);
 
     qInfo() << "Matching cleanup for" << m_info.npid;
 }

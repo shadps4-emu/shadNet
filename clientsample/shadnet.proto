@@ -297,8 +297,6 @@ message JoinRoomRequest {
 
 message LeaveRoomRequest        { uint64 room_id = 1; uint32 req_id = 2; }
 message RequestSignalingInfosRequest { string target_npid = 1; }
-message SignalingEstablishedRequest  { string target_npid = 1; uint32 conn_id = 2; }
-message ActivationConfirmRequest     { string me_id = 1; string initiator_ip = 2; uint32 ctx_tag = 3; }
 
 message SetRoomDataInternalRequest {
     uint32 req_id           = 1;
@@ -381,7 +379,6 @@ message NotifyMemberJoined {
 message NotifyMemberLeft         { uint64 room_id = 1; uint32 member_id = 2; string npid = 3; }
 message NotifySignalingHelper    { string npid = 1; uint32 member_id = 2; string addr = 3; uint32 port = 4; }
 message NotifySignalingEvent     { uint32 event_type = 1; uint64 room_id = 2; uint32 member_id = 3; uint32 conn_id = 4; }
-message NotifyNpSignalingEvent   { uint32 event = 1; string npid = 2; uint32 error_code = 3; }
 
 message NotifyRoomDataInternalUpdated {
     uint64                   room_id   = 1;
