@@ -52,7 +52,7 @@ bool ShadNetServer::Start(ConfigManager* config) {
 
     uint16_t plainPort = static_cast<uint16_t>(config->GetUnsecuredPort().toUInt());
     if (m_unsecuredServer->listen(addr, plainPort)) {
-        qInfo().nospace() << "Unsesured TCP listener on " << addr.toString() << ":" << plainPort
+        qInfo().nospace() << "Unsecured TCP listener on " << addr.toString() << ":" << plainPort
                           << " No encryption use it only on trusted networks";
     } else {
         qCritical() << "Plain TCP listen failed:" << m_unsecuredServer->errorString();
