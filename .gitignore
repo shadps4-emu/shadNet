@@ -6,3 +6,4 @@
 /clientsample/build2/*
 *.7z
 .vscode/settings.json
+.idea/*
