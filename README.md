@@ -48,20 +48,9 @@ sudo apt install qt6-base qt6-httpserver qt6-websockets
 
 ### 3. Configure & build
 ```bash
-# Linux
-cmake --fresh -G Ninja -B build \
-  -DCMAKE_BUILD_TYPE=Release \
-  -DCMAKE_INTERPROCEDURAL_OPTIMIZATION_RELEASE=ON \
-  -DCMAKE_C_COMPILER=clang-19 -DCMAKE_CXX_COMPILER=clang++-19 \
-  -DCMAKE_EXE_LINKER_FLAGS="-fuse-ld=mold"
-
-# Windows
-cmake --fresh -G Ninja -B build `
-  -DCMAKE_BUILD_TYPE=Release `
-  -DCMAKE_INTERPROCEDURAL_OPTIMIZATION_RELEASE=ON `
-  -DCMAKE_C_COMPILER=clang-cl -DCMAKE_CXX_COMPILER=clang-cl
+cmake -G Ninja -B build -DCMAKE_BUILD_TYPE=Release
+cmake --build build --config Release --parallel
 ```
-
 
 ### 4. Run
 
