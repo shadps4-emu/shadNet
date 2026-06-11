@@ -9,7 +9,9 @@
 #include <QHttpServerResponse>
 #include <QJsonDocument>
 #include <QJsonObject>
+
 #include "webapi_auth.h"
+#include "webapi_routes_users.h"
 
 WebApiServer::WebApiServer(QObject* parent) : QObject(parent) {}
 WebApiServer::~WebApiServer() = default;
@@ -54,6 +56,9 @@ void WebApiServer::RegisterRoutes() {
                                    QJsonDocument(body).toJson(QJsonDocument::Compact),
                                    QHttpServerResponse::StatusCode::Ok};
     });
+
+    // user routes
+    WebApiRoutes::RegisterUserRoutes(*m_http, *m_db);
 
     m_http->setMissingHandler(
         this, [](const QHttpServerRequest& req, QHttpServerResponder& responder) {

@@ -71,6 +71,8 @@ set(SOURCES
     src/webapi_server.cpp
     src/webapi_auth.h
     src/webapi_auth.cpp
+    src/webapi_routes_users.h
+    src/webapi_routes_users.cpp
 )
 
 add_executable(shadnet ${SOURCES})
