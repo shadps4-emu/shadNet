@@ -187,13 +187,4 @@ struct MatchingSharedState {
     // External UDP endpoints observed by STUN. Protected by udpLock.
     mutable QReadWriteLock udpLock;
     QHash<QString, QPair<QString, uint16_t>> udpExt; // npid -> (ip, port)
-
-    // Signaling pairs for MutualActivated. Protected by signalingLock.
-    mutable QReadWriteLock signalingLock;
-    QHash<QPair<QString, QString>, QPair<QString, uint16_t>> signalingPairs;
-
-    // Activation intents. Protected by activationLock.
-    mutable QReadWriteLock activationLock;
-    // Key: (initiator_ip_u32, ctx_tag), Value: (initiator_npid, peer_npid)
-    QHash<QPair<uint32_t, uint32_t>, QPair<QString, QString>> activationIntents;
 };

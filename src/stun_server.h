@@ -17,10 +17,6 @@ private slots:
 
 private:
     void HandleStunPing(const QByteArray& data, const QHostAddress& sender, uint16_t senderPort);
-    void HandleSignalingEstablished(const QByteArray& data, const QHostAddress& sender,
-                                    uint16_t senderPort);
-    void HandleActivationIntent(const QByteArray& data, const QHostAddress& sender,
-                                uint16_t senderPort);
 
     QUdpSocket* m_socket;
     SharedState* m_shared;

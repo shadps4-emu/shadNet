@@ -99,9 +99,6 @@ public:
     ErrorType CmdLeaveRoom(StreamExtractor& data, QByteArray& reply);
     ErrorType CmdGetRoomList(StreamExtractor& data, QByteArray& reply);
     ErrorType CmdRequestSignalingInfos(StreamExtractor& data, QByteArray& reply);
-    ErrorType CmdSignalingEstablished(StreamExtractor& data);
-    ErrorType CmdActivationConfirm(StreamExtractor& data, QByteArray& reply);
-    ErrorType CmdCancelActivationIntent(StreamExtractor& data, QByteArray& reply);
     ErrorType CmdSetRoomDataInternal(StreamExtractor& data, QByteArray& reply);
     ErrorType CmdSetRoomDataExternal(StreamExtractor& data, QByteArray& reply);
     ErrorType CmdKickoutRoomMember(StreamExtractor& data, QByteArray& reply);

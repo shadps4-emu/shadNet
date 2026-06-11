@@ -168,12 +168,6 @@ ErrorType ClientSession::DispatchCommand(CommandType cmd, StreamExtractor& se, Q
         return CmdGetRoomList(se, reply);
     case CommandType::RequestSignalingInfos:
         return CmdRequestSignalingInfos(se, reply);
-    case CommandType::SignalingEstablished:
-        return CmdSignalingEstablished(se);
-    case CommandType::ActivationConfirm:
-        return CmdActivationConfirm(se, reply);
-    case CommandType::CancelActivationIntent:
-        return CmdCancelActivationIntent(se, reply);
     case CommandType::SetRoomDataInternal:
         return CmdSetRoomDataInternal(se, reply);
     case CommandType::SetRoomDataExternal:
