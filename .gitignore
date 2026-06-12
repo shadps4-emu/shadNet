@@ -7,3 +7,5 @@
 *.7z
 .vscode/settings.json
 .idea/*
+clientsample/build
+cmake-build-debug/
