@@ -39,7 +39,7 @@ wget -qO - https://apt.llvm.org/llvm-snapshot.gpg.key | sudo apt-key add -
 sudo add-apt-repository 'deb http://apt.llvm.org/noble/ llvm-toolchain-noble-19 main'
 # Install dependencies
 sudo apt-get install -y ninja-build mold clang-19 qt6-base-dev libqt6sql6-sqlite
-sudo apt install qt6-base qt6-httpserver qt6-websockets
+sudo apt install qt6-base-dev qt6-httpserver-dev qt6-websockets-dev
 ```
 
 **Windows:** install Qt6 for `win64_msvc2022_64` (with the `qthttpserver` and
