@@ -77,6 +77,12 @@ QHttpServerResponse JsonErrorReply(QHttpServerResponse::StatusCode status, quint
                                QJsonDocument(body).toJson(QJsonDocument::Compact), status};
 }
 
+QHttpServerResponse JsonOkReply(const QJsonObject& body) {
+    return QHttpServerResponse{"application/json",
+                               QJsonDocument(body).toJson(QJsonDocument::Compact),
+                               QHttpServerResponse::StatusCode::Ok};
+}
+
 void LogUnsupportedQueryParams(const QHttpServerRequest& req, const QSet<QString>& known) {
     const QUrlQuery query(req.url());
     QStringList ignored;
@@ -175,6 +181,99 @@ void RegisterUserRoutes(QHttpServer& http, Database& db) {
             UserRelationships rels = db.GetRelationships(*auth.userId);
             return BuildListResponse(rels.blocked, QStringLiteral("blockList"), ParseLimit(req));
         });
+
+    // GET /v1/users/<userKey>/container/<label>  (np_commerce2 product container)
+    // Jetpack Joyride probes COINPACK / HIDDENINGAME at startup. We have no store
+    // products yet, so return a well-formed, empty container so sce::Json parses it
+    // cleanly and the title sees "no products" instead of a 404.
+    http.route("/v1/users/<arg>/container/<arg>",
+               [&db](const QString& userKey, const QString& label,
+                     const QHttpServerRequest& req) {
+                   static const QSet<QString> kKnown = {
+                       QStringLiteral("serviceLabel"), QStringLiteral("size"),
+                       QStringLiteral("start"),        QStringLiteral("category"),
+                       QStringLiteral("keepHtmlTag"),
+                   };
+                   LogUnsupportedQueryParams(req, kKnown);
+
+                   auto auth = WebApiAuth::Authenticate(req, db);
+                   if (!auth.userId.has_value()) {
+                       return std::move(auth.errorResponse);
+                   }
+                   const auto resolvedNpid = ResolveUserSegment(userKey, auth, db);
+                   if (!resolvedNpid.has_value()) {
+                       return JsonErrorReply(QHttpServerResponse::StatusCode::NotFound,
+                                             0x80920004, QStringLiteral("User not found"));
+                   }
+                   if (resolvedNpid->compare(auth.npid, Qt::CaseInsensitive) != 0) {
+                       return JsonErrorReply(QHttpServerResponse::StatusCode::Forbidden,
+                                             0x80920003, QStringLiteral("Forbidden"));
+                   }
+                   qInfo() << "WebAPI: container" << label
+                           << "-> empty (no products) for" << auth.npid;
+
+                   QJsonObject data;
+                   data.insert(QStringLiteral("items"), QJsonArray{});
+                   QJsonObject body;
+                   body.insert(QStringLiteral("size"), 0);
+                   body.insert(QStringLiteral("start"), 0);
+                   body.insert(QStringLiteral("totalResults"), 0);
+                   body.insert(QStringLiteral("data"), data);
+                   return JsonOkReply(body);
+               });
+
+    // GET /v1/users/<userKey>/entitlements  (owned DLC / service entitlements list)
+    http.route("/v1/users/<arg>/entitlements",
+               [&db](const QString& userKey, const QHttpServerRequest& req) {
+                   static const QSet<QString> kKnown = {
+                       QStringLiteral("service_label"),    QStringLiteral("entitlement_type"),
+                       QStringLiteral("size"),             QStringLiteral("start"),
+                       QStringLiteral("fields"),
+                   };
+                   LogUnsupportedQueryParams(req, kKnown);
+
+                   auto auth = WebApiAuth::Authenticate(req, db);
+                   if (!auth.userId.has_value()) {
+                       return std::move(auth.errorResponse);
+                   }
+                   const auto resolvedNpid = ResolveUserSegment(userKey, auth, db);
+                   if (!resolvedNpid.has_value()) {
+                       return JsonErrorReply(QHttpServerResponse::StatusCode::NotFound,
+                                             0x80920004, QStringLiteral("User not found"));
+                   }
+                   if (resolvedNpid->compare(auth.npid, Qt::CaseInsensitive) != 0) {
+                       return JsonErrorReply(QHttpServerResponse::StatusCode::Forbidden,
+                                             0x80920003, QStringLiteral("Forbidden"));
+                   }
+
+                   QJsonObject body;
+                   body.insert(QStringLiteral("start"), 0);
+                   body.insert(QStringLiteral("size"), 0);
+                   body.insert(QStringLiteral("totalResults"), 0);
+                   body.insert(QStringLiteral("entitlements"), QJsonArray{});
+                   return JsonOkReply(body);
+               });
+
+    // GET /v1/users/<userKey>/entitlements/<entitlementId>  (single entitlement lookup)
+    // Nothing owned yet -> 404 "not found", which titles read as "not entitled".
+    http.route("/v1/users/<arg>/entitlements/<arg>",
+               [&db](const QString& userKey, const QString& entitlementId,
+                     const QHttpServerRequest& req) {
+                   auto auth = WebApiAuth::Authenticate(req, db);
+                   if (!auth.userId.has_value()) {
+                       return std::move(auth.errorResponse);
+                   }
+                   const auto resolvedNpid = ResolveUserSegment(userKey, auth, db);
+                   if (!resolvedNpid.has_value() ||
+                       resolvedNpid->compare(auth.npid, Qt::CaseInsensitive) != 0) {
+                       return JsonErrorReply(QHttpServerResponse::StatusCode::Forbidden,
+                                             0x80920003, QStringLiteral("Forbidden"));
+                   }
+                   qInfo() << "WebAPI: entitlement" << entitlementId
+                           << "not owned for" << auth.npid;
+                   return JsonErrorReply(QHttpServerResponse::StatusCode::NotFound,
+                                         0x80920004, QStringLiteral("Entitlement not found"));
+               });
 }
 
 } // namespace WebApiRoutes
