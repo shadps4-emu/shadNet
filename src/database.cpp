@@ -203,6 +203,16 @@ bool Database::Migrate() {
         "  PRIMARY KEY(service_label, container_label, label))",
 
         "CREATE INDEX IF NOT EXISTS product_comm ON product(communication_id)",
+
+        // In-game presence (gameStatus) per user + service label.
+        "CREATE TABLE IF NOT EXISTS presence("
+        "  user_id          INTEGER NOT NULL,"
+        "  communication_id TEXT    NOT NULL DEFAULT '',"
+        "  service_label    INTEGER NOT NULL DEFAULT 0,"
+        "  game_status      TEXT    NOT NULL DEFAULT '',"
+        "  game_data        TEXT    NOT NULL DEFAULT '',"
+        "  updated_at       TEXT    NOT NULL DEFAULT '',"
+        "  PRIMARY KEY(user_id, service_label))",
     };
 
     for (const QString& s : stmts1)
@@ -872,4 +882,25 @@ std::optional<ProductRecord> Database::GetProduct(int serviceLabel, const QStrin
     r.useCount = q.value(11).toLongLong();
     r.entitlementId = q.value(12).toString();
     return r;
+}
+
+bool Database::SetPresence(int64_t userId, int serviceLabel, const QString& gameStatus,
+                           const QString& gameData) {
+    QSqlQuery q(m_db);
+    q.prepare("INSERT OR REPLACE INTO presence(user_id, service_label, game_status, "
+              "game_data, updated_at) VALUES(?, ?, ?, ?, ?)");
+    q.addBindValue(static_cast<qlonglong>(userId));
+    q.addBindValue(serviceLabel);
+    q.addBindValue(gameStatus);
+    q.addBindValue(gameData);
+    q.addBindValue(QDateTime::currentDateTimeUtc().toString(Qt::ISODate));
+    return Exec(q);
+}
+
+bool Database::ClearPresence(int64_t userId, int serviceLabel) {
+    QSqlQuery q(m_db);
+    q.prepare("DELETE FROM presence WHERE user_id=? AND service_label=?");
+    q.addBindValue(static_cast<qlonglong>(userId));
+    q.addBindValue(serviceLabel);
+    return Exec(q);
 }

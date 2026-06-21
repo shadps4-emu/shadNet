@@ -167,6 +167,12 @@ public:
     // Single product by label (for checkout grant lookup).
     std::optional<ProductRecord> GetProduct(int serviceLabel, const QString& label);
 
+    // In-game presence (gameStatus). Stored per user + service label; surfaced to
+    // friends later. SetPresence upserts; ClearPresence removes (presence DELETE).
+    bool SetPresence(int64_t userId, int serviceLabel, const QString& gameStatus,
+                     const QString& gameData);
+    bool ClearPresence(int64_t userId, int serviceLabel);
+
     QString lastError() const {
         return m_lastError;
     }

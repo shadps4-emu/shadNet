@@ -117,6 +117,11 @@ QHttpServerResponse MethodNotAllowed() {
                           EntErr::NotImplementedMethod, QStringLiteral("Method not allowed"));
 }
 
+// 204 No Content (presence set/clear).
+QHttpServerResponse NoContentReply() {
+    return QHttpServerResponse(QHttpServerResponse::StatusCode::NoContent);
+}
+
 QHttpServerResponse JsonOkReply(const QJsonObject& body) {
     return QHttpServerResponse{"application/json",
                                QJsonDocument(body).toJson(QJsonDocument::Compact),
@@ -305,6 +310,7 @@ void RegisterUserRoutes(QHttpServer& http, Database& db) {
                 QStringLiteral("fields"),
                 QStringLiteral("limit"),
                 QStringLiteral("offset"),
+                QStringLiteral("presenceType"),  // requests friends' presence (none yet)
             };
             LogUnsupportedQueryParams(req, kKnown);
 
@@ -353,6 +359,49 @@ void RegisterUserRoutes(QHttpServer& http, Database& db) {
             qInfo() << "WebAPI: blockList for" << auth.npid << "->" << rels.blocked.size();
             return BuildListResponse(rels.blocked, QStringLiteral("blockList"), ParseLimit(req));
         });
+
+    // PUT|DELETE /v1/users/<userKey>/presence/gameStatus  (in-game presence)
+    // Body (PUT): {"gameStatus":"..."[,"localizedGameStatus":[...]][,"gameData":"..."]}
+    // Stored per user + serviceLabel; returns 204. DELETE clears it.
+    http.route("/v1/users/<arg>/presence/gameStatus",
+               [&db](const QString& userKey, const QHttpServerRequest& req) {
+                   const auto method = req.method();
+                   if (method != QHttpServerRequest::Method::Put &&
+                       method != QHttpServerRequest::Method::Delete) {
+                       return MethodNotAllowed();
+                   }
+                   auto auth = WebApiAuth::Authenticate(req, db);
+                   if (!auth.userId.has_value()) {
+                       return std::move(auth.errorResponse);
+                   }
+                   const auto resolvedNpid = ResolveUserSegment(userKey, auth, db);
+                   if (!resolvedNpid.has_value()) {
+                       return JsonErrorReply(QHttpServerResponse::StatusCode::NotFound, 0x80920004,
+                                             QStringLiteral("User not found"));
+                   }
+                   if (resolvedNpid->compare(auth.npid, Qt::CaseInsensitive) != 0) {
+                       return JsonErrorReply(QHttpServerResponse::StatusCode::Forbidden, 0x80920003,
+                                             QStringLiteral("Forbidden"));
+                   }
+                   const int sl = ParseServiceLabel(req);
+                   if (method == QHttpServerRequest::Method::Delete) {
+                       db.ClearPresence(*auth.userId, sl);
+                       qInfo() << "WebAPI: presence cleared for" << auth.npid;
+                       return NoContentReply();
+                   }
+                   // PUT: lenient parse; gameStatus/gameData are optional strings.
+                   QString gameStatus;
+                   QString gameData;
+                   const QByteArray rawBody = req.body();
+                   if (!rawBody.isEmpty()) {
+                       const QJsonObject obj = QJsonDocument::fromJson(rawBody).object();
+                       gameStatus = obj.value(QStringLiteral("gameStatus")).toString();
+                       gameData = obj.value(QStringLiteral("gameData")).toString();
+                   }
+                   db.SetPresence(*auth.userId, sl, gameStatus, gameData);
+                   qInfo() << "WebAPI: presence gameStatus for" << auth.npid << "->" << gameStatus;
+                   return NoContentReply();
+               });
 
     // GET /v1/users/<userKey>/container/<label>  (np_commerce2 product container)
     http.route("/v1/users/<arg>/container/<arg>",
