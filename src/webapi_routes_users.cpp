@@ -69,12 +69,13 @@ void LogUnsupportedQueryParams(const QHttpServerRequest& req, const QSet<QString
     }
 }
 
-// npId = base64("<onlineId>.<region>"), per the User Profile schema.
+// npId = base64("<onlineId>"). sceNpWebApiUtilityParseNpId takes the part before
+// '@' as the handle; with no '@' the whole decoded string is the online-id handle.
 QString EncodeNpId(const QString& onlineId) {
-    QByteArray raw = onlineId.toUtf8();
-    raw.append('.');
-    raw.append(DefaultRegion);
-    return QString::fromLatin1(raw.toBase64());
+    return QString::fromLatin1(
+        onlineId.toUtf8()
+            .toBase64()); // TODO this is not the right behaviour base64("<onlineId>@domain") but we
+                          // don't have a domain.let's check if that works
 }
 
 // The authenticated user owns the resource when the path segment is "me", their
