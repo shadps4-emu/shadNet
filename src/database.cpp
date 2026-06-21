@@ -166,6 +166,43 @@ bool Database::Migrate() {
         "  data_id          INTEGER,"
         "  timestamp        INTEGER NOT NULL,"
         "  PRIMARY KEY(communication_id, board_id, user_id, character_id))",
+
+        // Owned entitlements, one row per (user, entitlement_id). communication_id
+        // groups by owning title for multi-title use; entitlement_id is globally
+        // unique (reverse-DNS) so a per-account query spans all titles.
+        "CREATE TABLE IF NOT EXISTS entitlement("
+        "  communication_id TEXT    NOT NULL DEFAULT '',"
+        "  service_label    INTEGER NOT NULL DEFAULT 0,"
+        "  user_id          INTEGER NOT NULL REFERENCES account(user_id) ON DELETE CASCADE,"
+        "  entitlement_id   TEXT    NOT NULL,"
+        "  entitlement_type TEXT    NOT NULL DEFAULT 'service',"
+        "  is_consumable    INTEGER NOT NULL DEFAULT 0,"
+        "  use_limit        INTEGER NOT NULL DEFAULT 0,"
+        "  use_count        INTEGER NOT NULL DEFAULT 0,"
+        "  active_date      TEXT    NOT NULL DEFAULT '2024-01-01T00:00:00Z',"
+        "  inactive_date    TEXT    NOT NULL DEFAULT '',"  // empty = no expiry
+        "  PRIMARY KEY(user_id, service_label, entitlement_id))",
+
+        "CREATE INDEX IF NOT EXISTS entitlement_comm ON entitlement(communication_id)",
+
+        // Commerce container products (reverse-engineered schema; see ProductRecord).
+        "CREATE TABLE IF NOT EXISTS product("
+        "  communication_id TEXT    NOT NULL DEFAULT '',"
+        "  service_label    INTEGER NOT NULL DEFAULT 0,"
+        "  container_label  TEXT    NOT NULL,"
+        "  label            TEXT    NOT NULL,"
+        "  name             TEXT    NOT NULL DEFAULT '',"
+        "  long_desc        TEXT    NOT NULL DEFAULT '',"
+        "  provider_name    TEXT    NOT NULL DEFAULT '',"
+        "  price            INTEGER NOT NULL DEFAULT 0,"
+        "  original_price   INTEGER NOT NULL DEFAULT 0,"
+        "  display_price    TEXT    NOT NULL DEFAULT '',"
+        "  display_original_price TEXT NOT NULL DEFAULT '',"
+        "  use_count        INTEGER NOT NULL DEFAULT 0,"
+        "  entitlement_id   TEXT    NOT NULL DEFAULT '',"
+        "  PRIMARY KEY(service_label, container_label, label))",
+
+        "CREATE INDEX IF NOT EXISTS product_comm ON product(communication_id)",
     };
 
     for (const QString& s : stmts1)
@@ -608,4 +645,231 @@ UserRelationships Database::GetRelationships(int64_t userId) {
     }
 
     return result;
+}
+
+// ── Entitlements ──────────────────────────────────────────────────────────────
+QList<EntitlementRecord> Database::GetEntitlements(int64_t userId, int serviceLabel) {
+    QList<EntitlementRecord> out;
+    QSqlQuery q(m_db);
+    q.prepare("SELECT communication_id, entitlement_id, entitlement_type, is_consumable, "
+              "use_limit, use_count, active_date, inactive_date, service_label "
+              "FROM entitlement WHERE user_id=? AND service_label=?");
+    q.addBindValue(static_cast<qlonglong>(userId));
+    q.addBindValue(serviceLabel);
+    if (!Exec(q))
+        return out;
+    while (q.next()) {
+        EntitlementRecord r;
+        r.communicationId = q.value(0).toString();
+        r.entitlementId = q.value(1).toString();
+        r.entitlementType = q.value(2).toString();
+        r.isConsumable = q.value(3).toBool();
+        r.useLimit = q.value(4).toLongLong();
+        r.useCount = q.value(5).toLongLong();
+        r.activeDate = q.value(6).toString();
+        r.inactiveDate = q.value(7).toString();
+        r.serviceLabel = q.value(8).toInt();
+        out.append(r);
+    }
+    return out;
+}
+
+std::optional<EntitlementRecord> Database::GetEntitlement(int64_t userId,
+                                                          const QString& entitlementId,
+                                                          int serviceLabel) {
+    QSqlQuery q(m_db);
+    q.prepare("SELECT communication_id, entitlement_id, entitlement_type, is_consumable, "
+              "use_limit, use_count, active_date, inactive_date, service_label "
+              "FROM entitlement WHERE user_id=? AND entitlement_id=? AND service_label=?");
+    q.addBindValue(static_cast<qlonglong>(userId));
+    q.addBindValue(entitlementId);
+    q.addBindValue(serviceLabel);
+    if (!Exec(q) || !q.next())
+        return std::nullopt;
+    EntitlementRecord r;
+    r.communicationId = q.value(0).toString();
+    r.entitlementId = q.value(1).toString();
+    r.entitlementType = q.value(2).toString();
+    r.isConsumable = q.value(3).toBool();
+    r.useLimit = q.value(4).toLongLong();
+    r.useCount = q.value(5).toLongLong();
+    r.activeDate = q.value(6).toString();
+    r.inactiveDate = q.value(7).toString();
+    r.serviceLabel = q.value(8).toInt();
+    return r;
+}
+
+bool Database::GrantEntitlement(int64_t userId, const EntitlementRecord& rec) {
+    QSqlQuery q(m_db);
+    q.prepare("INSERT OR REPLACE INTO entitlement(communication_id, service_label, user_id, "
+              "entitlement_id, entitlement_type, is_consumable, use_limit, use_count, "
+              "active_date, inactive_date) VALUES(?,?,?,?,?,?,?,?,?,?)");
+    q.addBindValue(rec.communicationId);
+    q.addBindValue(rec.serviceLabel);
+    q.addBindValue(static_cast<qlonglong>(userId));
+    q.addBindValue(rec.entitlementId);
+    q.addBindValue(rec.entitlementType);
+    q.addBindValue(rec.isConsumable);
+    q.addBindValue(static_cast<qlonglong>(rec.useLimit));
+    q.addBindValue(static_cast<qlonglong>(rec.useCount));
+    q.addBindValue(rec.activeDate);
+    q.addBindValue(rec.inactiveDate);
+    return Exec(q);
+}
+
+// Consume `count` uses of an entitlement. Per the entitlement webapi consumption spec,
+// use_limit holds the REMAINING uses and use_count the consumed uses: one consumption
+// decrements use_limit and increments use_count, and their sum (the original maximum) is
+// invariant. A durable/unified entitlement has use_limit=0 and therefore cannot be
+// consumed. Fails with Exhausted when count exceeds the remaining use_limit.
+Database::ConsumeResult Database::ConsumeEntitlement(int64_t userId,
+                                                     const QString& entitlementId,
+                                                     int serviceLabel, int count,
+                                                     EntitlementRecord* out) {
+    if (count <= 0)
+        return ConsumeResult::Error;
+    auto cur = GetEntitlement(userId, entitlementId, serviceLabel);
+    if (!cur.has_value())
+        return ConsumeResult::NotFound;
+    if (cur->useLimit < count)
+        return ConsumeResult::Exhausted;
+
+    QSqlQuery q(m_db);
+    q.prepare("UPDATE entitlement SET use_limit = use_limit - ?, use_count = use_count + ? "
+              "WHERE user_id=? AND entitlement_id=? AND service_label=?");
+    q.addBindValue(count);
+    q.addBindValue(count);
+    q.addBindValue(static_cast<qlonglong>(userId));
+    q.addBindValue(entitlementId);
+    q.addBindValue(serviceLabel);
+    if (!Exec(q))
+        return ConsumeResult::Error;
+
+    cur->useLimit -= count;
+    cur->useCount += count;
+    if (out)
+        *out = *cur;
+    return ConsumeResult::Ok;
+}
+
+// Grant additional uses. use_count is left unchanged so the sum (use_limit + use_count)
+// rises by `count`, marking a grant rather than a use (see Tracking Entitlement Changes).
+bool Database::AddCounts(int64_t userId, const QString& entitlementId, int serviceLabel,
+                         int count, EntitlementRecord* out) {
+    if (count <= 0)
+        return false;
+    auto cur = GetEntitlement(userId, entitlementId, serviceLabel);
+    if (cur.has_value()) {
+        QSqlQuery q(m_db);
+        q.prepare("UPDATE entitlement SET use_limit = use_limit + ? "
+                  "WHERE user_id=? AND entitlement_id=? AND service_label=?");
+        q.addBindValue(count);
+        q.addBindValue(static_cast<qlonglong>(userId));
+        q.addBindValue(entitlementId);
+        q.addBindValue(serviceLabel);
+        if (!Exec(q))
+            return false;
+        cur->useLimit += count;
+        if (out)
+            *out = *cur;
+        return true;
+    }
+    // Absent: create as a service consumable carrying `count` uses.
+    EntitlementRecord rec;
+    rec.entitlementId = entitlementId;
+    rec.entitlementType = QStringLiteral("service");
+    rec.isConsumable = true;
+    rec.serviceLabel = serviceLabel;
+    rec.useLimit = count;
+    rec.useCount = 0;
+    if (!GrantEntitlement(userId, rec))
+        return false;
+    if (out)
+        *out = rec;
+    return true;
+}
+
+// Revoke uses (e.g. a refund): use_limit drops by `count` (clamped at 0) while use_count
+// stays the same, so the sum decreases -- distinguishing a revocation from a consumption.
+bool Database::RevokeCounts(int64_t userId, const QString& entitlementId, int serviceLabel,
+                            int count, EntitlementRecord* out) {
+    if (count <= 0)
+        return false;
+    auto cur = GetEntitlement(userId, entitlementId, serviceLabel);
+    if (!cur.has_value())
+        return false;
+    int64_t newLimit = cur->useLimit - count;
+    if (newLimit < 0)
+        newLimit = 0;
+    QSqlQuery q(m_db);
+    q.prepare("UPDATE entitlement SET use_limit = ? "
+              "WHERE user_id=? AND entitlement_id=? AND service_label=?");
+    q.addBindValue(static_cast<qlonglong>(newLimit));
+    q.addBindValue(static_cast<qlonglong>(userId));
+    q.addBindValue(entitlementId);
+    q.addBindValue(serviceLabel);
+    if (!Exec(q))
+        return false;
+    cur->useLimit = newLimit;
+    if (out)
+        *out = *cur;
+    return true;
+}
+
+// Products within a commerce container (category). Ordered by label for stable output.
+QList<ProductRecord> Database::GetAllProducts(int serviceLabel) {
+    QList<ProductRecord> out;
+    QSqlQuery q(m_db);
+    q.prepare("SELECT communication_id, service_label, container_label, label, name, "
+              "long_desc, provider_name, price, original_price, display_price, "
+              "display_original_price, use_count, entitlement_id "
+              "FROM product WHERE service_label=? ORDER BY container_label, label");
+    q.addBindValue(serviceLabel);
+    if (!Exec(q))
+        return out;
+    while (q.next()) {
+        ProductRecord r;
+        r.communicationId = q.value(0).toString();
+        r.serviceLabel = q.value(1).toInt();
+        r.containerLabel = q.value(2).toString();
+        r.label = q.value(3).toString();
+        r.name = q.value(4).toString();
+        r.longDesc = q.value(5).toString();
+        r.providerName = q.value(6).toString();
+        r.price = q.value(7).toLongLong();
+        r.originalPrice = q.value(8).toLongLong();
+        r.displayPrice = q.value(9).toString();
+        r.displayOriginalPrice = q.value(10).toString();
+        r.useCount = q.value(11).toLongLong();
+        r.entitlementId = q.value(12).toString();
+        out.append(r);
+    }
+    return out;
+}
+
+std::optional<ProductRecord> Database::GetProduct(int serviceLabel, const QString& label) {
+    QSqlQuery q(m_db);
+    q.prepare("SELECT communication_id, service_label, container_label, label, name, "
+              "long_desc, provider_name, price, original_price, display_price, "
+              "display_original_price, use_count, entitlement_id "
+              "FROM product WHERE service_label=? AND label=? LIMIT 1");
+    q.addBindValue(serviceLabel);
+    q.addBindValue(label);
+    if (!Exec(q) || !q.next())
+        return std::nullopt;
+    ProductRecord r;
+    r.communicationId = q.value(0).toString();
+    r.serviceLabel = q.value(1).toInt();
+    r.containerLabel = q.value(2).toString();
+    r.label = q.value(3).toString();
+    r.name = q.value(4).toString();
+    r.longDesc = q.value(5).toString();
+    r.providerName = q.value(6).toString();
+    r.price = q.value(7).toLongLong();
+    r.originalPrice = q.value(8).toLongLong();
+    r.displayPrice = q.value(9).toString();
+    r.displayOriginalPrice = q.value(10).toString();
+    r.useCount = q.value(11).toLongLong();
+    r.entitlementId = q.value(12).toString();
+    return r;
 }
