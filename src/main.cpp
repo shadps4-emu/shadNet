@@ -9,7 +9,7 @@
 #include "server.h"
 #include "webapi_server.h"
 
-const QString versionString = QStringLiteral("0.0.3");
+const QString versionString = QStringLiteral("0.0.4");
 
 int main(int argc, char* argv[]) {
     QLoggingCategory::setFilterRules(QStringLiteral("*.debug=false\n*.info=true\n*.warning=true"));
