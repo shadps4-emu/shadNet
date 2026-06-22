@@ -176,6 +176,8 @@ bool Database::Migrate() {
     Exec(ins);
 
     qInfo() << "Database migrations complete";
+
+    RunMaintenance();
     return true;
 }
 
@@ -493,6 +495,24 @@ void Database::CleanNeverUsedAccounts() {
               "  SELECT user_id FROM account_timestamp WHERE creation < ? AND last_login IS NULL)");
     q.addBindValue(static_cast<qint64>(cutoff));
     Exec(q);
+}
+
+void Database::RunMaintenance() {
+    // Remove score rows whose communication_id is blank. An empty com id is
+    // stored as 12 NUL bytes (GetNpCommId pads a missing id), so a plain '=' '''
+    // check would miss them; strip NULs (and coalesce NULL) before comparing.
+    const QString blank =
+        QStringLiteral("replace(coalesce(communication_id, ''), char(0), '') = ''");
+    for (const QString& table : {QStringLiteral("score"), QStringLiteral("score_table")}) {
+        QSqlQuery q(m_db);
+        q.prepare(QStringLiteral("DELETE FROM %1 WHERE %2").arg(table, blank));
+        if (Exec(q)) {
+            const int n = q.numRowsAffected();
+            if (n > 0) {
+                qInfo() << "Maintenance: removed" << n << "empty-comId row(s) from" << table;
+            }
+        }
+    }
 }
 
 // Friendship DB methods

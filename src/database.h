@@ -83,6 +83,9 @@ public:
     bool SetAdmin(int64_t userId, bool admin);
     int TotalUsers();
     void CleanNeverUsedAccounts();
+    // Maintenance: purge score rows recorded with an empty NP communication id
+    // (left behind when GetNpCommId had no trophy/com id and returned blanks).
+    void RunMaintenance();
 
     // Friendship
     // Returns (status_caller, status_other). Empty = no row exists yet.
