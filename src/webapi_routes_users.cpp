@@ -133,20 +133,22 @@ QJsonObject BuildUserList(const QList<QPair<int64_t, QString>>& users, const QSt
 }
 
 // friendList entries carry the requested members directly (not wrapped in user:{} like
-// the block/profile shape). shadNet stores only (accountId, npid), so onlineId and
-// personalDetail.displayName are both the npid, avatarUrl is omitted (PSN omits fields it
-// can't fill), and isOfficiallyVerified defaults to false.
-QJsonObject BuildFriendList(const QList<QPair<int64_t, QString>>& friends,
+// the block/profile shape). shadNet stores only (accountId, npid) per relationship, so
+// onlineId and personalDetail.displayName are both the npid; avatarUrl is looked up from
+// the account table; isOfficiallyVerified defaults to false.
+QJsonObject BuildFriendList(Database& db, const QList<QPair<int64_t, QString>>& friends,
                             const QStringList& fields, bool isDefault, int offset, int limit) {
     const bool wantOnlineId = isDefault || fields.contains(QStringLiteral("onlineId"));
     const bool wantRegion = isDefault || fields.contains(QStringLiteral("region"));
     const bool wantDetail = isDefault || fields.contains(QStringLiteral("personalDetail")) ||
                             fields.contains(QStringLiteral("personalDetail.displayName"));
+    const bool wantAvatar = isDefault || fields.contains(QStringLiteral("avatarUrl"));
     const bool wantVerified = fields.contains(QStringLiteral("isOfficiallyVerified"));
 
     const int total = static_cast<int>(friends.size());
     QJsonArray arr;
     for (int i = offset; i < total && static_cast<int>(arr.size()) < limit; ++i) {
+        const int64_t accountId = friends[i].first;
         const QString& npid = friends[i].second;
         QJsonObject entry;
         if (wantOnlineId) {
@@ -159,6 +161,12 @@ QJsonObject BuildFriendList(const QList<QPair<int64_t, QString>>& friends,
             QJsonObject pd;
             pd.insert(QStringLiteral("displayName"), npid);
             entry.insert(QStringLiteral("personalDetail"), pd);
+        }
+        if (wantAvatar) {
+            const auto avatar = db.GetAvatarUrl(accountId);
+            if (avatar && !avatar->isEmpty()) {
+                entry.insert(QStringLiteral("avatarUrl"), *avatar);
+            }
         }
         if (wantVerified) {
             entry.insert(QStringLiteral("isOfficiallyVerified"), false);
@@ -240,7 +248,7 @@ void RegisterUserRoutes(QHttpServer& http, Database& db) {
             ParsePaging(query, 100, 500, limit, offset);
 
             const auto friends = db.GetRelationships(*auth.userId).friends;
-            const QJsonObject body = BuildFriendList(friends, fields, isDefault, offset, limit);
+            const QJsonObject body = BuildFriendList(db, friends, fields, isDefault, offset, limit);
             qInfo() << "WebAPI: friendList for" << auth.npid << "-> total" << friends.size();
             return JsonOk(body);
         });

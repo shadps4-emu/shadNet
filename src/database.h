@@ -76,6 +76,7 @@ public:
                                         const QString& token, bool checkToken);
     std::optional<int64_t> GetUserId(const QString& npid);
     std::optional<QString> GetUsername(int64_t userId);
+    std::optional<QString> GetAvatarUrl(int64_t userId);
     QList<QPair<int64_t, QString>> GetUsernamesFromIds(const QSet<int64_t>& ids);
     bool UpdateLoginTime(int64_t userId);
     bool BanUser(int64_t userId, bool ban);

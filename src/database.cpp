@@ -428,6 +428,15 @@ std::optional<QString> Database::GetUsername(int64_t userId) {
     return q.value(0).toString();
 }
 
+std::optional<QString> Database::GetAvatarUrl(int64_t userId) {
+    QSqlQuery q(m_db);
+    q.prepare("SELECT avatar_url FROM account WHERE user_id=?");
+    q.addBindValue(static_cast<qlonglong>(userId));
+    if (!Exec(q) || !q.next())
+        return std::nullopt;
+    return q.value(0).toString();
+}
+
 QList<QPair<int64_t, QString>> Database::GetUsernamesFromIds(const QSet<int64_t>& ids) {
     QList<QPair<int64_t, QString>> result;
     if (ids.isEmpty())
