@@ -74,7 +74,7 @@ bool ShadNetServer::Start(ConfigManager* config) {
     // Read-only stats HTTP server (live usage + public leaderboards), own port.
     if (config->IsStatsEnabled()) {
         m_statsServer = std::make_unique<StatsServer>(this);
-        if (!m_statsServer->Start(config, m_scoreCache.get(), &m_shared)) {
+        if (!m_statsServer->Start(config, m_scoreCache.get(), &m_shared, m_dbPath)) {
             qWarning() << "StatsServer failed to start; continuing without stats";
             m_statsServer.reset();
         }

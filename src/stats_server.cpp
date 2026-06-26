@@ -12,7 +12,8 @@
 #include <QJsonObject>
 #include <QMutexLocker>
 #include <QReadLocker>
-#include "client_session.h"
+#include "client_session.h" // SharedState
+#include "database.h"
 #include "score_cache.h"
 
 namespace {
@@ -50,10 +51,12 @@ QJsonArray ranksToJson(const shadnet::GetScoreResponse& resp) {
 StatsServer::StatsServer(QObject* parent) : QObject(parent) {}
 StatsServer::~StatsServer() = default;
 
-bool StatsServer::Start(ConfigManager* config, ScoreCache* scoreCache, const SharedState* shared) {
+bool StatsServer::Start(ConfigManager* config, ScoreCache* scoreCache, const SharedState* shared,
+                        const QString& dbPath) {
     m_config = config;
     m_scoreCache = scoreCache;
     m_shared = shared;
+    m_dbPath = dbPath;
     m_cacheLife = config->GetStatsCacheLife();
     m_path = config->GetStatsPath();
 
@@ -84,6 +87,12 @@ void StatsServer::RegisterRoutes() {
     m_http->route(base + "/usage", [this](const QHttpServerRequest&) {
         return jsonResponse(
             CachedOrBuild(QStringLiteral("usage"), [this] { return BuildUsageJson(); }));
+    });
+
+    // GET /<path>/registered  -> total registered accounts in the DB
+    m_http->route(base + "/registered", [this](const QHttpServerRequest&) {
+        return jsonResponse(
+            CachedOrBuild(QStringLiteral("registered"), [this] { return BuildRegisteredJson(); }));
     });
 
     // GET /<path>/score/<comId>
@@ -135,6 +144,19 @@ QByteArray StatsServer::CachedOrBuild(const QString& key,
         m_cache[key] = CacheEntry{json, now.addSecs(m_cacheLife)};
     }
     return json;
+}
+
+QByteArray StatsServer::BuildRegisteredJson() const {
+    QJsonObject root;
+    Database db(QString{});
+    if (!db.Open(m_dbPath)) {
+        qWarning() << "StatsServer: cannot open DB for registered-user count";
+        root.insert("error", QStringLiteral("db unavailable"));
+        root.insert("registered_users", 0);
+        return toJson(root);
+    }
+    root.insert("registered_users", db.TotalUsers());
+    return toJson(root);
 }
 
 QByteArray StatsServer::BuildUsageJson() const {
