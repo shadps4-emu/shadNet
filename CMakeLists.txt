@@ -71,6 +71,9 @@ set(SOURCES
     src/webapi_server.cpp
     src/webapi_auth.h
     src/webapi_auth.cpp
+    # Read-only stats HTTP/JSON listener
+    src/stats_server.h
+    src/stats_server.cpp
 )
 
 add_executable(shadnet ${SOURCES})

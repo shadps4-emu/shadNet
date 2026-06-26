@@ -71,6 +71,15 @@ bool ShadNetServer::Start(ConfigManager* config) {
     if (!m_stunServer->Start(addr, udpPort))
         qWarning() << "STUN UDP listen failed on port" << udpPort;
 
+    // Read-only stats HTTP server (live usage + public leaderboards), own port.
+    if (config->IsStatsEnabled()) {
+        m_statsServer = std::make_unique<StatsServer>(this);
+        if (!m_statsServer->Start(config, m_scoreCache.get(), &m_shared)) {
+            qWarning() << "StatsServer failed to start; continuing without stats";
+            m_statsServer.reset();
+        }
+    }
+
     return true;
 }
 

@@ -220,3 +220,27 @@ std::pair<bool, uint64_t> ScoreCache::GetGameDataId(const QString& comId, uint32
         return {false, 0};
     return {true, *e.dataId};
 }
+
+QVector<QString> ScoreCache::ListComIds() const {
+    QReadLocker lk(&m_lock);
+    QVector<QString> out;
+    out.reserve(m_tables.size());
+    for (auto it = m_tables.constBegin(); it != m_tables.constEnd(); ++it) {
+        out.push_back(it.key());
+    }
+    return out;
+}
+
+QVector<uint32_t> ScoreCache::ListBoards(const QString& comId) const {
+    QReadLocker lk(&m_lock);
+    QVector<uint32_t> out;
+    auto it = m_tables.constFind(comId);
+    if (it == m_tables.constEnd())
+        return out;
+    out.reserve(it->size());
+    for (auto b = it->constBegin(); b != it->constEnd(); ++b) {
+        out.push_back(b.key());
+    }
+    std::sort(out.begin(), out.end());
+    return out;
+}

@@ -63,6 +63,14 @@ public:
         return out;
     }
 
+    // Non-consuming read of n bytes at the current position (e.g. to inspect a
+    // leading ComId in the dispatcher without disturbing the handler's own parse).
+    QByteArray peekBytes(int n) const {
+        if (m_pos + n > m_data.size())
+            return {};
+        return QByteArray(m_data.constData() + m_pos, n);
+    }
+
     QByteArray getRawData() {
         uint32_t size = get<uint32_t>();
         if (m_error)

@@ -158,6 +158,9 @@ ErrorType ClientSession::CmdLogin(StreamExtractor& data, QByteArray& reply) {
         m_shared->npidToUserId[npid] = user.userId;
     }
 
+    // Count this authenticated session in live usage stats
+    m_shared->UsageOnLogin();
+
     // Notify online friends: FriendStatus notification (we just came online).
     if (!onlineFriendSenders.isEmpty()) {
         shadnet::NotifyFriendStatus ns;
