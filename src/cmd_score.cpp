@@ -27,7 +27,7 @@ ErrorType ClientSession::CmdGetBoardInfos(StreamExtractor& data, QByteArray& rep
         return ErrorType::Malformed;
 
     auto sdb = scoreDb(m_db.get());
-    auto cfg = sdb.GetBoard(comIdStr(comId), boardId, false);
+    auto cfg = sdb.GetBoard(comIdStr(comId), boardId, true);
     if (!cfg)
         return ErrorType::NotFound;
 

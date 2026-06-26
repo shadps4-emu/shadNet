@@ -30,6 +30,23 @@ public:
         QReadLocker lk(&m_lock);
         return m_webapiPort;
     }
+    bool IsStatsEnabled() const {
+        QReadLocker lk(&m_lock);
+        return m_statsEnabled;
+    }
+    QString GetStatsPort() const {
+        QReadLocker lk(&m_lock);
+        return m_statsPort;
+    }
+    QString GetStatsPath() const {
+        QReadLocker lk(&m_lock);
+        return m_statsPath;
+    }
+    int GetStatsCacheLife() const {
+        QReadLocker lk(&m_lock);
+        return m_statsCacheLife;
+    }
+
     bool IsEmailValidated() const {
         QReadLocker lk(&m_lock);
         return m_emailValidated;
@@ -81,6 +98,10 @@ private:
     QString m_unsecured_port = "31313";
     QString m_matchingUdpPort = "31314";
     QString m_webapiPort = "31315";
+    bool m_statsEnabled = true;
+    QString m_statsPort = "31320";
+    QString m_statsPath = "stats";
+    int m_statsCacheLife = 30; // seconds the stats JSON is cached before recompute
     bool m_emailValidated = false;
     QStringList m_adminsList;
     QSet<QString> m_bannedDomains;

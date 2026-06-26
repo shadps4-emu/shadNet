@@ -46,6 +46,10 @@ public:
     std::pair<bool, uint64_t> GetGameDataId(const QString& comId, uint32_t boardId, int64_t userId,
                                             int32_t charId);
 
+    // Read-only enumeration for the stats server: which com_ids / boards are loaded.
+    QVector<QString> ListComIds() const;
+    QVector<uint32_t> ListBoards(const QString& comId) const;
+
 private:
     static bool RanksBefore(const ScoreEntry& a, const ScoreEntry& b, uint32_t sortMode);
     static void Reindex(ScoreTableCache& t, int from);

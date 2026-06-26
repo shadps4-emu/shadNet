@@ -17,6 +17,7 @@
 #include <netinet/tcp.h>
 #include <sys/socket.h>
 #endif
+#include "database.h"
 #include "score_db.h"
 #include "server.h"
 
@@ -36,6 +37,12 @@ bool ShadNetServer::Start(ConfigManager* config) {
 
     m_dbPath = "db/shadnet.db";
     QDir().mkpath("db");
+
+    Database schemaInit(QStringLiteral("shadnet_schema_init"));
+    if (!schemaInit.Open(m_dbPath)) {
+        qCritical() << "Start: DB schema initialisation failed";
+        return false;
+    }
 
     // Score subsystem should run after DB path is set.
     if (!InitScoreSystem()) {
@@ -63,6 +70,15 @@ bool ShadNetServer::Start(ConfigManager* config) {
     uint16_t udpPort = static_cast<uint16_t>(config->GetMatchingUdpPort().toUInt());
     if (!m_stunServer->Start(addr, udpPort))
         qWarning() << "STUN UDP listen failed on port" << udpPort;
+
+    // Read-only stats HTTP server (live usage + public leaderboards), own port.
+    if (config->IsStatsEnabled()) {
+        m_statsServer = std::make_unique<StatsServer>(this);
+        if (!m_statsServer->Start(config, m_scoreCache.get(), &m_shared, m_dbPath)) {
+            qWarning() << "StatsServer failed to start; continuing without stats";
+            m_statsServer.reset();
+        }
+    }
 
     return true;
 }

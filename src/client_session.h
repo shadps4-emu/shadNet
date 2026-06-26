@@ -41,6 +41,46 @@ struct SharedState {
 
     // Matchmaking shared state
     MatchingSharedState matching;
+
+    // Live usage stats for the read-only stats HTTP server
+    mutable QReadWriteLock usageLock;
+    int usageTotalOnline = 0;                // authenticated sessions currently online
+    QHash<QString, int> usageGameUsers;      // comId -> active session count
+    QHash<int64_t, QString> usageClientGame; // userId -> last-seen comId
+
+    void UsageOnLogin() {
+        QWriteLocker lk(&usageLock);
+        ++usageTotalOnline;
+    }
+    void UsageOnLogout(int64_t userId) {
+        QWriteLocker lk(&usageLock);
+        if (usageTotalOnline > 0)
+            --usageTotalOnline;
+        auto it = usageClientGame.find(userId);
+        if (it != usageClientGame.end()) {
+            auto g = usageGameUsers.find(it.value());
+            if (g != usageGameUsers.end() && --g.value() <= 0)
+                usageGameUsers.erase(g);
+            usageClientGame.erase(it);
+        }
+    }
+    void UsageTouchGame(int64_t userId, const QString& comId) {
+        if (comId.isEmpty())
+            return;
+        QWriteLocker lk(&usageLock);
+        auto it = usageClientGame.find(userId);
+        if (it != usageClientGame.end()) {
+            if (it.value() == comId)
+                return;
+            auto old = usageGameUsers.find(it.value());
+            if (old != usageGameUsers.end() && --old.value() <= 0)
+                usageGameUsers.erase(old);
+            it.value() = comId;
+        } else {
+            usageClientGame.insert(userId, comId);
+        }
+        ++usageGameUsers[comId];
+    }
 };
 
 // Per-connection session info

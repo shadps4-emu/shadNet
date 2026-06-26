@@ -102,6 +102,24 @@ void ClientSession::ProcessPacket(uint16_t command, uint64_t packetId, const QBy
     }
 }
 
+// True for authenticated commands whose payload begins with a 12-byte ComId
+// score. Used to attribute live-usage game activity in the dispatcher.
+static bool LeadsWithComId(CommandType cmd) {
+    switch (cmd) {
+    case CommandType::GetBoardInfos:
+    case CommandType::RecordScore:
+    case CommandType::RecordScoreData:
+    case CommandType::GetScoreData:
+    case CommandType::GetScoreRange:
+    case CommandType::GetScoreFriends:
+    case CommandType::GetScoreNpid:
+    case CommandType::GetScoreAccountId:
+    case CommandType::GetScoreGameDataByAccId:
+        return true;
+    default:
+        return false;
+    }
+}
 ErrorType ClientSession::DispatchCommand(CommandType cmd, StreamExtractor& se, QByteArray& reply) {
     qDebug() << "Command:" << static_cast<uint16_t>(cmd);
 
@@ -124,7 +142,14 @@ ErrorType ClientSession::DispatchCommand(CommandType cmd, StreamExtractor& se, Q
             return ErrorType::Unauthorized;
         }
     }
-
+    // Attribute live-usage game activity: score payloads lead with a 12-byte
+    // ComId; peek it (non-consuming) so the handler's own parse is undisturbed.
+    if (LeadsWithComId(cmd)) {
+        const QByteArray cid = se.peekBytes(12);
+        if (cid.size() == 12)
+            m_shared->UsageTouchGame(m_info.userId,
+                                     QString::fromLatin1(cid.constData(), cid.size()));
+    }
     // Authenticated commands.
     switch (cmd) {
     case CommandType::Login:
@@ -211,6 +236,9 @@ void ClientSession::CleanupOnDisconnect() {
             m_shared->npidToUserId.remove(m_info.npid);
         }
     }
+
+    // Drop this session from live usage stats (decrements total + its game tally).
+    m_shared->UsageOnLogout(m_info.userId);
 
     // Build FriendStatus offline notification using the NotifyFriendStatus
     shadnet::NotifyFriendStatus ns;
