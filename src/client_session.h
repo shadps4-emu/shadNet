@@ -159,6 +159,18 @@ private:
     void SendSelfNotification(NotificationType type, const QByteArray& payload);
     static QByteArray BuildNotification(NotificationType type, const QByteArray& payload);
 
+    // Build the length-prefixed payload for a WebApiPushEvent notification. Exposed so
+    // fan-out sites that already hold per-recipient send() lambdas (presence) can reuse it.
+    static QByteArray BuildWebApiPushPayload(const QString& npServiceName, quint32 npServiceLabel,
+                                             const QString& dataType, const QByteArray& data,
+                                             const QString& fromNpid, const QString& toNpid);
+    // Push a generic NP WebApi push event to one online user. The emulator forwards it
+    // verbatim to libSceNpWebApi push-event callbacks. data may be empty (the listener
+    // re-fetches via the REST routes); from/to npids may be empty.
+    void PushWebApiEvent(const QString& npServiceName, quint32 npServiceLabel,
+                         const QString& dataType, const QByteArray& data, const QString& fromNpid,
+                         const QString& toNpid, int64_t targetUserId);
+
     // Matching helpers (cmd_matching.cpp)
     void SendMatchingNotification(NotificationType type, const QByteArray& payload,
                                   const QString& targetNpid);

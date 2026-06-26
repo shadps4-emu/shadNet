@@ -70,6 +70,11 @@ enum class NotificationType : uint16_t {
     SignalingEvent = 13,          // NpMatching2-layer signaling event (0x5102 ESTABLISHED)
     RoomDataInternalUpdated = 15, // Room internal data changed (broadcast to other members)
     KickedOut = 16,               // Local room event (0x1103) for the member who was removed
+    // Generic NP WebApi push event, forwarded verbatim to the emulator's
+    // libSceNpWebApi push-event callbacks. Payload (length-prefixed, see
+    // ClientSession::BuildWebApiPushPayload): npServiceName, npServiceLabel(u32 LE),
+    // dataType, data, fromNpid, toNpid.
+    WebApiPushEvent = 17,
 };
 
 // Error codes for Reply packets

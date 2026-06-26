@@ -174,9 +174,18 @@ ErrorType ClientSession::CmdLogin(StreamExtractor& data, QByteArray& reply) {
         appendProto(notifPayload, ns);
         QByteArray pkt =
             ClientSession::BuildNotification(NotificationType::FriendStatus, notifPayload);
+        // WebApi: tell each friend's push listener our presence changed (it re-fetches
+        // presence via the friendList route). Empty service name + exact dataType match
+        // the system "npweblis" listener's filter.
+        QByteArray webApiPkt = ClientSession::BuildNotification(
+            NotificationType::WebApiPushEvent,
+            ClientSession::BuildWebApiPushPayload(
+                QString(), 0, QStringLiteral("np:service:presence:onlineStatus"), QByteArray(), npid,
+                QString()));
         for (const auto& [send, friendNpid] : onlineFriendSenders) {
             Q_UNUSED(friendNpid);
             send(pkt);
+            send(webApiPkt);
         }
     }
 

@@ -18,6 +18,13 @@ static QByteArray buildNotifPayload(const T& msg) {
     return buf;
 }
 
+// WebApi push-event dataTypes the system "npweblis" listener subscribes to (empty
+// service name, exact dataType match). Emitted alongside the binary friend/block
+// notifications so libSceNpWebApi consumers re-fetch via the friendList/blockingUsers
+// routes. See ClientSession::PushWebApiEvent.
+static const QString kWebApiFriendDataType = QStringLiteral("np:service:friendlist:friend");
+static const QString kWebApiBlockDataType = QStringLiteral("np:service:blocklist");
+
 ErrorType ClientSession::CmdAddFriend(StreamExtractor& data) {
     shadnet::FriendCommandRequest req;
     if (!decodeProto(req, data) || data.error())
@@ -86,12 +93,22 @@ ErrorType ClientSession::CmdAddFriend(StreamExtractor& data) {
             SendNotification(NotificationType::FriendNew, buildNotifPayload(n), friendId);
         }
 
+        // WebApi: both friend lists changed -> tell each side's push listener to refresh.
+        PushWebApiEvent(QString(), 0, kWebApiFriendDataType, QByteArray(), friendNpid, QString(),
+                        m_info.userId);
+        PushWebApiEvent(QString(), 0, kWebApiFriendDataType, QByteArray(), m_info.npid, QString(),
+                        friendId);
+
         qInfo() << "Friendship formed:" << m_info.npid << "<->" << friendNpid;
     } else {
         // Outgoing friend request notify the target.
         shadnet::NotifyFriendQuery q;
         q.set_from_npid(m_info.npid.toStdString());
         SendNotification(NotificationType::FriendQuery, buildNotifPayload(q), friendId);
+
+        // WebApi: the requestee's friend data changed (incoming request).
+        PushWebApiEvent(QString(), 0, kWebApiFriendDataType, QByteArray(), m_info.npid, QString(),
+                        friendId);
 
         qInfo() << "Friend request sent:" << m_info.npid << "->" << friendNpid;
     }
@@ -155,6 +172,12 @@ ErrorType ClientSession::CmdRemoveFriend(StreamExtractor& data) {
         SendNotification(NotificationType::FriendLost, buildNotifPayload(toFriend), friendId);
     }
 
+    // WebApi: both friend lists changed.
+    PushWebApiEvent(QString(), 0, kWebApiFriendDataType, QByteArray(), friendNpid, QString(),
+                    m_info.userId);
+    PushWebApiEvent(QString(), 0, kWebApiFriendDataType, QByteArray(), m_info.npid, QString(),
+                    friendId);
+
     qInfo() << "Friend removed:" << m_info.npid << "removed" << friendNpid;
     return ErrorType::NoError;
 }
@@ -211,7 +234,17 @@ ErrorType ClientSession::CmdAddBlock(StreamExtractor& data) {
         shadnet::NotifyFriendLost toTarget;
         toTarget.set_npid(m_info.npid.toStdString());
         SendNotification(NotificationType::FriendLost, buildNotifPayload(toTarget), targetId);
+
+        // WebApi: blocking also removed the friendship on both sides.
+        PushWebApiEvent(QString(), 0, kWebApiFriendDataType, QByteArray(), targetNpid, QString(),
+                        m_info.userId);
+        PushWebApiEvent(QString(), 0, kWebApiFriendDataType, QByteArray(), m_info.npid, QString(),
+                        targetId);
     }
+
+    // WebApi: our block list changed.
+    PushWebApiEvent(QString(), 0, kWebApiBlockDataType, QByteArray(), targetNpid, QString(),
+                    m_info.userId);
 
     qInfo() << m_info.npid << "blocked" << targetNpid;
     return ErrorType::NoError;
@@ -250,6 +283,10 @@ ErrorType ClientSession::CmdRemoveBlock(StreamExtractor& data) {
                   : m_db->SetRelStatus(m_info.userId, targetId, newCaller, newOther);
     if (!ok)
         return ErrorType::DbFail;
+
+    // WebApi: our block list changed.
+    PushWebApiEvent(QString(), 0, kWebApiBlockDataType, QByteArray(), targetNpid, QString(),
+                    m_info.userId);
 
     qInfo() << m_info.npid << "unblocked" << targetNpid;
     return ErrorType::NoError;

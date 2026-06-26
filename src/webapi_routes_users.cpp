@@ -132,6 +132,47 @@ QJsonObject BuildUserList(const QList<QPair<int64_t, QString>>& users, const QSt
     return body;
 }
 
+// friendList entries carry the requested members directly (not wrapped in user:{} like
+// the block/profile shape). shadNet stores only (accountId, npid), so onlineId and
+// personalDetail.displayName are both the npid, avatarUrl is omitted (PSN omits fields it
+// can't fill), and isOfficiallyVerified defaults to false.
+QJsonObject BuildFriendList(const QList<QPair<int64_t, QString>>& friends,
+                            const QStringList& fields, bool isDefault, int offset, int limit) {
+    const bool wantOnlineId = isDefault || fields.contains(QStringLiteral("onlineId"));
+    const bool wantRegion = isDefault || fields.contains(QStringLiteral("region"));
+    const bool wantDetail = isDefault || fields.contains(QStringLiteral("personalDetail")) ||
+                            fields.contains(QStringLiteral("personalDetail.displayName"));
+    const bool wantVerified = fields.contains(QStringLiteral("isOfficiallyVerified"));
+
+    const int total = static_cast<int>(friends.size());
+    QJsonArray arr;
+    for (int i = offset; i < total && static_cast<int>(arr.size()) < limit; ++i) {
+        const QString& npid = friends[i].second;
+        QJsonObject entry;
+        if (wantOnlineId) {
+            entry.insert(QStringLiteral("onlineId"), npid);
+        }
+        if (wantRegion) {
+            entry.insert(QStringLiteral("region"), QString::fromLatin1(DefaultRegion));
+        }
+        if (wantDetail) {
+            QJsonObject pd;
+            pd.insert(QStringLiteral("displayName"), npid);
+            entry.insert(QStringLiteral("personalDetail"), pd);
+        }
+        if (wantVerified) {
+            entry.insert(QStringLiteral("isOfficiallyVerified"), false);
+        }
+        arr.append(entry);
+    }
+    QJsonObject body;
+    body.insert(QStringLiteral("friendList"), arr);
+    body.insert(QStringLiteral("start"), offset);
+    body.insert(QStringLiteral("size"), static_cast<int>(arr.size()));
+    body.insert(QStringLiteral("totalResults"), total);
+    return body;
+}
+
 } // namespace
 
 // GET /v1/users/<accountId|onlineId|me>/friendList
@@ -199,11 +240,7 @@ void RegisterUserRoutes(QHttpServer& http, Database& db) {
             ParsePaging(query, 100, 500, limit, offset);
 
             const auto friends = db.GetRelationships(*auth.userId).friends;
-            const QJsonObject body =
-                BuildUserList(friends, QStringLiteral("friendList"),
-                              isDefault || fields.contains(QStringLiteral("user")),
-                              isDefault || fields.contains(QStringLiteral("region")),
-                              isDefault || fields.contains(QStringLiteral("npId")), offset, limit);
+            const QJsonObject body = BuildFriendList(friends, fields, isDefault, offset, limit);
             qInfo() << "WebAPI: friendList for" << auth.npid << "-> total" << friends.size();
             return JsonOk(body);
         });
@@ -250,6 +287,51 @@ void RegisterUserRoutes(QHttpServer& http, Database& db) {
                    qInfo() << "WebAPI: blockList for" << auth.npid << "-> total" << blocked.size();
                    return JsonOk(body);
                });
+
+    // GET /v1/users/<accountId|onlineId|me>/blockingUsers
+    // Distinct endpoint from blockList; returns the users this account blocks. Self-only.
+    http.route(
+        "/v1/users/<arg>/blockingUsers",
+        [&db](const QString& userKey, const QHttpServerRequest& req) -> QHttpServerResponse {
+            static const QSet<QString> kKnown = {
+                QStringLiteral("fields"),
+                QStringLiteral("limit"),
+                QStringLiteral("offset"),
+            };
+            LogUnsupportedQueryParams(req, kKnown);
+
+            auto auth = WebApiAuth::Authenticate(req, db);
+            if (!auth.userId.has_value()) {
+                return std::move(auth.errorResponse);
+            }
+            if (!IsSelf(userKey, auth)) {
+                return JsonError(QHttpServerResponse::StatusCode::Forbidden,
+                                 UP_ACCESS_DENIED_OWNERSHIP,
+                                 QStringLiteral("Access denied by resource ownership"));
+            }
+
+            const QUrlQuery query(req.url());
+
+            QString fieldsStr = query.queryItemValue(QStringLiteral("fields"));
+            if (fieldsStr.isEmpty()) {
+                fieldsStr = QStringLiteral("@default");
+            }
+            const QStringList fields = fieldsStr.split(QLatin1Char(','), Qt::SkipEmptyParts);
+            const bool isDefault = fields.contains(QStringLiteral("@default"));
+
+            int limit = 0;
+            int offset = 0;
+            ParsePaging(query, 2000, 2000, limit, offset);
+
+            const auto blocked = db.GetRelationships(*auth.userId).blocked;
+            const QJsonObject body =
+                BuildUserList(blocked, QStringLiteral("blockingUsers"),
+                              isDefault || fields.contains(QStringLiteral("user")),
+                              /*wantRegion=*/false, fields.contains(QStringLiteral("npId")), offset,
+                              limit);
+            qInfo() << "WebAPI: blockingUsers for" << auth.npid << "-> total" << blocked.size();
+            return JsonOk(body);
+        });
 }
 
 } // namespace WebApiRoutes

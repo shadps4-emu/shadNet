@@ -251,8 +251,15 @@ void ClientSession::CleanupOnDisconnect() {
     const std::string s = ns.SerializeAsString();
     appendBlob(payload, QByteArray(s.data(), static_cast<int>(s.size())));
     QByteArray pkt = BuildNotification(NotificationType::FriendStatus, payload);
-    for (const auto& send : friendSenders)
+    // WebApi: presence changed (went offline) -> notify friends' push listeners.
+    QByteArray webApiPkt = BuildNotification(
+        NotificationType::WebApiPushEvent,
+        BuildWebApiPushPayload(QString(), 0, QStringLiteral("np:service:presence:onlineStatus"),
+                               QByteArray(), m_info.npid, QString()));
+    for (const auto& send : friendSenders) {
         send(pkt);
+        send(webApiPkt);
+    }
 
     qInfo() << "Client disconnected:" << m_info.npid;
 }
@@ -286,6 +293,30 @@ void ClientSession::SendNotification(NotificationType type, const QByteArray& pa
 // Send a notification to this session's own socket.
 void ClientSession::SendSelfNotification(NotificationType type, const QByteArray& payload) {
     SendPacket(BuildNotification(type, payload));
+}
+
+QByteArray ClientSession::BuildWebApiPushPayload(const QString& npServiceName,
+                                                 quint32 npServiceLabel, const QString& dataType,
+                                                 const QByteArray& data, const QString& fromNpid,
+                                                 const QString& toNpid) {
+    QByteArray payload;
+    appendBlob(payload, npServiceName.toUtf8());
+    appendU32LE(payload, npServiceLabel);
+    appendBlob(payload, dataType.toUtf8());
+    appendBlob(payload, data);
+    appendBlob(payload, fromNpid.toUtf8());
+    appendBlob(payload, toNpid.toUtf8());
+    return payload;
+}
+
+void ClientSession::PushWebApiEvent(const QString& npServiceName, quint32 npServiceLabel,
+                                    const QString& dataType, const QByteArray& data,
+                                    const QString& fromNpid, const QString& toNpid,
+                                    int64_t targetUserId) {
+    SendNotification(NotificationType::WebApiPushEvent,
+                     BuildWebApiPushPayload(npServiceName, npServiceLabel, dataType, data, fromNpid,
+                                            toNpid),
+                     targetUserId);
 }
 
 void ClientSession::SendPacket(const QByteArray& pkt) {
