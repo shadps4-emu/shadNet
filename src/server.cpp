@@ -17,6 +17,7 @@
 #include <netinet/tcp.h>
 #include <sys/socket.h>
 #endif
+#include "database.h"
 #include "score_db.h"
 #include "server.h"
 
@@ -36,6 +37,12 @@ bool ShadNetServer::Start(ConfigManager* config) {
 
     m_dbPath = "db/shadnet.db";
     QDir().mkpath("db");
+
+    Database schemaInit(QStringLiteral("shadnet_schema_init"));
+    if (!schemaInit.Open(m_dbPath)) {
+        qCritical() << "Start: DB schema initialisation failed";
+        return false;
+    }
 
     // Score subsystem should run after DB path is set.
     if (!InitScoreSystem()) {
