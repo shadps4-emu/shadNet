@@ -313,10 +313,10 @@ void ClientSession::PushWebApiEvent(const QString& npServiceName, quint32 npServ
                                     const QString& dataType, const QByteArray& data,
                                     const QString& fromNpid, const QString& toNpid,
                                     int64_t targetUserId) {
-    SendNotification(NotificationType::WebApiPushEvent,
-                     BuildWebApiPushPayload(npServiceName, npServiceLabel, dataType, data, fromNpid,
-                                            toNpid),
-                     targetUserId);
+    SendNotification(
+        NotificationType::WebApiPushEvent,
+        BuildWebApiPushPayload(npServiceName, npServiceLabel, dataType, data, fromNpid, toNpid),
+        targetUserId);
 }
 
 void ClientSession::SendPacket(const QByteArray& pkt) {
