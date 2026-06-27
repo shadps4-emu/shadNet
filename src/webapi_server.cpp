@@ -44,7 +44,7 @@ bool WebApiServer::Start(ConfigManager* config, const QString& dbPath) {
         return false;
     }
 
-    qInfo() << "WebApiServer listening on" << host << ":" << port;
+    qInfo().nospace().noquote() << "WebApiServer listening on: " << host << ":" << port;
     return true;
 }
 
