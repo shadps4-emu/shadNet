@@ -144,6 +144,7 @@ QJsonObject BuildFriendList(Database& db, const QList<QPair<int64_t, QString>>& 
                             fields.contains(QStringLiteral("personalDetail.displayName"));
     const bool wantAvatar = isDefault || fields.contains(QStringLiteral("avatarUrl"));
     const bool wantVerified = fields.contains(QStringLiteral("isOfficiallyVerified"));
+    const bool wantNpId = isDefault || fields.contains(QStringLiteral("npId"));
 
     const int total = static_cast<int>(friends.size());
     QJsonArray arr;
@@ -153,6 +154,9 @@ QJsonObject BuildFriendList(Database& db, const QList<QPair<int64_t, QString>>& 
         QJsonObject entry;
         if (wantOnlineId) {
             entry.insert(QStringLiteral("onlineId"), npid);
+        }
+        if (wantNpId) {
+            entry.insert(QStringLiteral("npId"), EncodeNpId(npid));
         }
         if (wantRegion) {
             entry.insert(QStringLiteral("region"), QString::fromLatin1(DefaultRegion));
