@@ -12,6 +12,10 @@
 #include <QSet>
 #include <QString>
 
+#include <QDateTime>
+#include <QJsonValue>
+
+#include "client_session.h" // SharedState, ClientSession push helpers, NotificationType
 #include "database.h"
 #include "webapi_auth.h"
 #include "webapi_routes_common.h"
@@ -23,8 +27,8 @@ namespace {
 // There is no REST presence sink yet (presence is broadcast over the binary path), so these
 // accept-and-acknowledge the write with 204 and log the payload for later wiring into the
 // presence broadcast.
-QHttpServerResponse HandlePresenceWrite(Database& db, const char* leaf, const QString& userKey,
-                                        const QHttpServerRequest& req) {
+QHttpServerResponse HandlePresenceWrite(Database& db, SharedState& shared, const char* leaf,
+                                        const QString& userKey, const QHttpServerRequest& req) {
     static const QSet<QString> kKnown = {
         QStringLiteral("notificationWithData"),
     };
@@ -42,17 +46,57 @@ QHttpServerResponse HandlePresenceWrite(Database& db, const char* leaf, const QS
                          QStringLiteral("Access denied by resource ownership"));
     }
 
-    // Best-effort parse of the presence body so it shows up in the log; a malformed or empty
-    // body is not an error for an accept-and-acknowledge write.
+    // Best-effort parse of the presence body; a malformed or empty body is not an error
+    // for an accept-and-acknowledge write.
     const QByteArray body = req.body();
     QJsonParseError perr{};
     const QJsonDocument doc = QJsonDocument::fromJson(body, &perr);
-    if (perr.error == QJsonParseError::NoError && doc.isObject()) {
+    const QJsonObject obj = (perr.error == QJsonParseError::NoError && doc.isObject())
+                                ? doc.object()
+                                : QJsonObject{};
+    if (!obj.isEmpty()) {
         qInfo() << "WebAPI:" << leaf << "for" << auth.npid << "->"
-                << QString::fromUtf8(QJsonDocument(doc.object()).toJson(QJsonDocument::Compact));
+                << QString::fromUtf8(QJsonDocument(obj).toJson(QJsonDocument::Compact));
     } else {
         qInfo() << "WebAPI:" << leaf << "for" << auth.npid << "(" << body.size()
                 << "bytes, unparsed)";
+    }
+
+    // Write the published detail into the caller's live presence entry, then collect the
+    // online friends to notify. Online status is implicit by membership in the clients map;
+    // these fields add the in-game detail that friendList?presenceType=... reads back.
+    QList<std::function<void(QByteArray)>> friendSenders;
+    {
+        QWriteLocker lk(&shared.clientsLock);
+        auto it = shared.clients.find(*auth.userId);
+        if (it != shared.clients.end()) {
+            if (obj.contains(QStringLiteral("gameStatus")))
+                it->gameStatus = obj.value(QStringLiteral("gameStatus")).toString();
+            if (obj.contains(QStringLiteral("npTitleId")))
+                it->npTitleId = obj.value(QStringLiteral("npTitleId")).toString();
+            if (obj.contains(QStringLiteral("titleName")))
+                it->titleName = obj.value(QStringLiteral("titleName")).toString();
+            if (obj.contains(QStringLiteral("platform")))
+                it->platform = obj.value(QStringLiteral("platform")).toString();
+            it->presenceUpdatedAt = QDateTime::currentSecsSinceEpoch();
+            for (auto fr = it->friends.cbegin(); fr != it->friends.cend(); ++fr) {
+                auto fit = shared.clients.find(fr.key());
+                if (fit != shared.clients.end() && fit->send)
+                    friendSenders.append(fit->send);
+            }
+        }
+    }
+
+    // Tell each online friend's push listener our presence changed; it re-fetches via
+    // friendList?presenceType=... (same empty-body trigger the connect/disconnect path uses).
+    if (!friendSenders.isEmpty()) {
+        const QByteArray pkt = ClientSession::BuildNotification(
+            NotificationType::WebApiPushEvent,
+            ClientSession::BuildWebApiPushPayload(
+                QString(), 0, QStringLiteral("np:service:presence:onlineStatus"), QByteArray(),
+                auth.npid, QString()));
+        for (const auto& send : friendSenders)
+            send(pkt);
     }
 
     // presence writes return 204 No Content.
@@ -61,17 +105,19 @@ QHttpServerResponse HandlePresenceWrite(Database& db, const char* leaf, const QS
 
 } // namespace
 
-void RegisterPresenceRoutes(QHttpServer& http, Database& db) {
+void RegisterPresenceRoutes(QHttpServer& http, Database& db, SharedState& shared) {
     // PUT /v1/users/<arg>/presence/inGamePresence
     http.route("/v1/users/<arg>/presence/inGamePresence", QHttpServerRequest::Method::Put,
-               [&db](const QString& userKey, const QHttpServerRequest& req) -> QHttpServerResponse {
-                   return HandlePresenceWrite(db, "inGamePresence", userKey, req);
+               [&db, &shared](const QString& userKey,
+                              const QHttpServerRequest& req) -> QHttpServerResponse {
+                   return HandlePresenceWrite(db, shared, "inGamePresence", userKey, req);
                });
 
     // PUT /v1/users/<arg>/presence/gameStatus
     http.route("/v1/users/<arg>/presence/gameStatus", QHttpServerRequest::Method::Put,
-               [&db](const QString& userKey, const QHttpServerRequest& req) -> QHttpServerResponse {
-                   return HandlePresenceWrite(db, "gameStatus", userKey, req);
+               [&db, &shared](const QString& userKey,
+                              const QHttpServerRequest& req) -> QHttpServerResponse {
+                   return HandlePresenceWrite(db, shared, "gameStatus", userKey, req);
                });
 }
 

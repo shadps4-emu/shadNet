@@ -35,6 +35,14 @@ struct SharedState {
         // Online friends for this session: userId → npid.
         // Protected by clientsLock (same lock as the outer clients map).
         QHash<int64_t, QString> friends;
+        // Presence detail published via the WebAPI presence PUTs (gameStatus /
+        // inGamePresence). Online status is implicit by membership in the clients map;
+        // these carry the in-game detail. Also protected by clientsLock.
+        QString gameStatus;
+        QString npTitleId;
+        QString titleName;
+        QString platform = QStringLiteral("PS4");
+        qint64 presenceUpdatedAt = 0;
     };
     QHash<int64_t, ClientEntry> clients;
     QHash<QString, int64_t> npidToUserId; // reverse lookup, protected by clientsLock
@@ -157,13 +165,16 @@ private:
     // Notification helpers
     void SendNotification(NotificationType type, const QByteArray& payload, int64_t targetUserId);
     void SendSelfNotification(NotificationType type, const QByteArray& payload);
-    static QByteArray BuildNotification(NotificationType type, const QByteArray& payload);
 
-    // Build the length-prefixed payload for a WebApiPushEvent notification. Exposed so
-    // fan-out sites that already hold per-recipient send() lambdas (presence) can reuse it.
+public:
+    // Static packet builders (no instance state). Public so WebAPI fan-out sites can build
+    // notification / push packets without a ClientSession instance.
+    static QByteArray BuildNotification(NotificationType type, const QByteArray& payload);
     static QByteArray BuildWebApiPushPayload(const QString& npServiceName, quint32 npServiceLabel,
                                              const QString& dataType, const QByteArray& data,
                                              const QString& fromNpid, const QString& toNpid);
+
+private:
     // Push a generic NP WebApi push event to one online user. The emulator forwards it
     // verbatim to libSceNpWebApi push-event callbacks. data may be empty (the listener
     // re-fetches via the REST routes); from/to npids may be empty.

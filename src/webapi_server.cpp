@@ -62,7 +62,7 @@ void WebApiServer::RegisterRoutes() {
     // user routes
     WebApiRoutes::RegisterUserRoutes(*m_http, *m_db, *m_shared);
     WebApiRoutes::RegisterProfileRoutes(*m_http, *m_db);
-    WebApiRoutes::RegisterPresenceRoutes(*m_http, *m_db);
+    WebApiRoutes::RegisterPresenceRoutes(*m_http, *m_db, *m_shared);
 
     m_http->setMissingHandler(
         this, [](const QHttpServerRequest& req, QHttpServerResponder& responder) {

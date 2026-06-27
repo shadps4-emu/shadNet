@@ -4,9 +4,10 @@
 
 class QHttpServer;
 class Database;
+struct SharedState;
 
 namespace WebApiRoutes {
 
-void RegisterPresenceRoutes(QHttpServer& http, Database& db);
+void RegisterPresenceRoutes(QHttpServer& http, Database& db, SharedState& shared);
 
 } // namespace WebApiRoutes

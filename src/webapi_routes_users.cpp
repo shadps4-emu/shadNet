@@ -85,15 +85,23 @@ QJsonObject BuildFriendList(Database& db, SharedState& shared,
 
     const int total = static_cast<int>(friends.size());
 
-    // Snapshot which friends are currently online (membership in the shared clients
-    // map == online). Done once under the read lock so we don't hold it across the
-    // per-entry DB lookups below.
-    QSet<int64_t> onlineFriends;
+    // Snapshot each friend's presence (online == membership in the shared clients map,
+    // plus the in-game detail the presence PUTs stored). Done once under the read lock so
+    // we don't hold it across the per-entry DB lookups below.
+    struct PresenceSnap {
+        QString gameStatus;
+        QString npTitleId;
+        QString titleName;
+        QString platform;
+    };
+    QHash<int64_t, PresenceSnap> onlineFriends;
     if (wantPresence) {
         QReadLocker lk(&shared.clientsLock);
         for (const auto& fr : friends) {
-            if (shared.clients.contains(fr.first)) {
-                onlineFriends.insert(fr.first);
+            auto it = shared.clients.find(fr.first);
+            if (it != shared.clients.end()) {
+                onlineFriends.insert(fr.first,
+                                     {it->gameStatus, it->npTitleId, it->titleName, it->platform});
             }
         }
     }
@@ -127,12 +135,26 @@ QJsonObject BuildFriendList(Database& db, SharedState& shared,
             entry.insert(QStringLiteral("isOfficiallyVerified"), false);
         }
         if (wantPresence) {
-            const bool online = onlineFriends.contains(accountId);
+            const auto snap = onlineFriends.constFind(accountId);
+            const bool online = (snap != onlineFriends.constEnd());
             QJsonObject primary;
             primary.insert(QStringLiteral("onlineStatus"),
                            online ? QStringLiteral("online") : QStringLiteral("offline"));
             if (online) {
-                primary.insert(QStringLiteral("platform"), QStringLiteral("PS4"));
+                primary.insert(QStringLiteral("platform"),
+                               snap->platform.isEmpty() ? QStringLiteral("PS4")
+                                                        : snap->platform);
+                if (!snap->gameStatus.isEmpty()) {
+                    primary.insert(QStringLiteral("gameStatus"), snap->gameStatus);
+                }
+                if (!snap->npTitleId.isEmpty() || !snap->titleName.isEmpty()) {
+                    QJsonObject gti;
+                    if (!snap->npTitleId.isEmpty())
+                        gti.insert(QStringLiteral("npTitleId"), snap->npTitleId);
+                    if (!snap->titleName.isEmpty())
+                        gti.insert(QStringLiteral("titleName"), snap->titleName);
+                    primary.insert(QStringLiteral("gameTitleInfo"), gti);
+                }
             }
             QJsonObject presence;
             presence.insert(QStringLiteral("primaryInfo"), primary);
