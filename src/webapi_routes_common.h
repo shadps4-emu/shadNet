@@ -81,4 +81,31 @@ inline void ParsePaging(const QUrlQuery& query, int fallbackDefault, int maxLimi
     }
 }
 
+// Build a presence resource object: {"primaryInfo":{...}}. Pure (no locking) so both
+// the friendList batch path and the standalone presence route share one shape. When
+// offline, only onlineStatus is emitted; detail fields are omitted when empty.
+inline QJsonObject MakePresenceObject(bool online, const QString& platform,
+                                      const QString& gameStatus, const QString& npTitleId,
+                                      const QString& titleName) {
+    QJsonObject primary;
+    primary.insert(QStringLiteral("onlineStatus"),
+                   online ? QStringLiteral("online") : QStringLiteral("offline"));
+    if (online) {
+        primary.insert(QStringLiteral("platform"),
+                       platform.isEmpty() ? QStringLiteral("PS4") : platform);
+        if (!gameStatus.isEmpty()) {
+            primary.insert(QStringLiteral("gameStatus"), gameStatus);
+        }
+        if (!npTitleId.isEmpty() || !titleName.isEmpty()) {
+            QJsonObject gti;
+            if (!npTitleId.isEmpty()) gti.insert(QStringLiteral("npTitleId"), npTitleId);
+            if (!titleName.isEmpty()) gti.insert(QStringLiteral("titleName"), titleName);
+            primary.insert(QStringLiteral("gameTitleInfo"), gti);
+        }
+    }
+    QJsonObject presence;
+    presence.insert(QStringLiteral("primaryInfo"), primary);
+    return presence;
+}
+
 } // namespace WebApiRoutes

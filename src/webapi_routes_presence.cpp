@@ -119,6 +119,63 @@ void RegisterPresenceRoutes(QHttpServer& http, Database& db, SharedState& shared
                               const QHttpServerRequest& req) -> QHttpServerResponse {
                    return HandlePresenceWrite(db, shared, "gameStatus", userKey, req);
                });
+
+    // GET /v1/users/<arg>/presence -- read a user's live presence. Resolves self or any
+    // other user (by accountId or onlineId); returns offline when the target is not in the
+    // shared clients map. Detail (gameStatus / gameTitleInfo) comes from the presence PUTs.
+    http.route("/v1/users/<arg>/presence",
+               [&db, &shared](const QString& userKey,
+                              const QHttpServerRequest& req) -> QHttpServerResponse {
+                   static const QSet<QString> kKnown = {
+                       QStringLiteral("fields"),
+                       QStringLiteral("platform"),
+                       QStringLiteral("npLanguage"),
+                       QStringLiteral("type"),
+                   };
+                   LogUnsupportedQueryParams(req, kKnown);
+
+                   auto auth = WebApiAuth::Authenticate(req, db);
+                   if (!auth.userId.has_value()) {
+                       return std::move(auth.errorResponse);
+                   }
+
+                   // Resolve target: self ("me" / own onlineId / own accountId), else look
+                   // up by numeric accountId or onlineId. Unresolvable -> id 0 -> offline.
+                   int64_t targetId = 0;
+                   const bool self =
+                       userKey.compare(QStringLiteral("me"), Qt::CaseInsensitive) == 0 ||
+                       userKey.compare(auth.npid, Qt::CaseInsensitive) == 0 ||
+                       userKey == QString::number(*auth.userId);
+                   if (self) {
+                       targetId = *auth.userId;
+                   } else {
+                       bool numeric = false;
+                       const qlonglong asId = userKey.toLongLong(&numeric);
+                       if (numeric) {
+                           targetId = asId;
+                       } else if (const auto byName = db.GetUserId(userKey)) {
+                           targetId = *byName;
+                       }
+                   }
+
+                   bool online = false;
+                   QString platform, gameStatus, npTitleId, titleName;
+                   {
+                       QReadLocker lk(&shared.clientsLock);
+                       auto it = shared.clients.constFind(targetId);
+                       if (it != shared.clients.constEnd()) {
+                           online = true;
+                           platform = it->platform;
+                           gameStatus = it->gameStatus;
+                           npTitleId = it->npTitleId;
+                           titleName = it->titleName;
+                       }
+                   }
+                   qInfo() << "WebAPI: presence for" << userKey
+                           << (online ? "-> online" : "-> offline");
+                   return JsonOk(
+                       MakePresenceObject(online, platform, gameStatus, npTitleId, titleName));
+               });
 }
 
 } // namespace WebApiRoutes

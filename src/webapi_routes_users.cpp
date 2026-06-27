@@ -137,28 +137,10 @@ QJsonObject BuildFriendList(Database& db, SharedState& shared,
         if (wantPresence) {
             const auto snap = onlineFriends.constFind(accountId);
             const bool online = (snap != onlineFriends.constEnd());
-            QJsonObject primary;
-            primary.insert(QStringLiteral("onlineStatus"),
-                           online ? QStringLiteral("online") : QStringLiteral("offline"));
-            if (online) {
-                primary.insert(QStringLiteral("platform"),
-                               snap->platform.isEmpty() ? QStringLiteral("PS4")
-                                                        : snap->platform);
-                if (!snap->gameStatus.isEmpty()) {
-                    primary.insert(QStringLiteral("gameStatus"), snap->gameStatus);
-                }
-                if (!snap->npTitleId.isEmpty() || !snap->titleName.isEmpty()) {
-                    QJsonObject gti;
-                    if (!snap->npTitleId.isEmpty())
-                        gti.insert(QStringLiteral("npTitleId"), snap->npTitleId);
-                    if (!snap->titleName.isEmpty())
-                        gti.insert(QStringLiteral("titleName"), snap->titleName);
-                    primary.insert(QStringLiteral("gameTitleInfo"), gti);
-                }
-            }
-            QJsonObject presence;
-            presence.insert(QStringLiteral("primaryInfo"), primary);
-            entry.insert(QStringLiteral("presence"), presence);
+            entry.insert(QStringLiteral("presence"),
+                         online ? MakePresenceObject(true, snap->platform, snap->gameStatus,
+                                                     snap->npTitleId, snap->titleName)
+                                : MakePresenceObject(false, {}, {}, {}, {}));
         }
         arr.append(entry);
     }
