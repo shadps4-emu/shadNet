@@ -180,8 +180,8 @@ ErrorType ClientSession::CmdLogin(StreamExtractor& data, QByteArray& reply) {
         QByteArray webApiPkt = ClientSession::BuildNotification(
             NotificationType::WebApiPushEvent,
             ClientSession::BuildWebApiPushPayload(
-                QString(), 0, QStringLiteral("np:service:presence:onlineStatus"), QByteArray(), npid,
-                QString()));
+                QString(), 0, QStringLiteral("np:service:presence:onlineStatus"), QByteArray(),
+                npid, QString()));
         for (const auto& [send, friendNpid] : onlineFriendSenders) {
             Q_UNUSED(friendNpid);
             send(pkt);

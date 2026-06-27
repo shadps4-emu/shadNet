@@ -302,48 +302,48 @@ void RegisterUserRoutes(QHttpServer& http, Database& db) {
 
     // GET /v1/users/<accountId|onlineId|me>/blockingUsers
     // Distinct endpoint from blockList; returns the users this account blocks. Self-only.
-    http.route(
-        "/v1/users/<arg>/blockingUsers",
-        [&db](const QString& userKey, const QHttpServerRequest& req) -> QHttpServerResponse {
-            static const QSet<QString> kKnown = {
-                QStringLiteral("fields"),
-                QStringLiteral("limit"),
-                QStringLiteral("offset"),
-            };
-            LogUnsupportedQueryParams(req, kKnown);
+    http.route("/v1/users/<arg>/blockingUsers",
+               [&db](const QString& userKey, const QHttpServerRequest& req) -> QHttpServerResponse {
+                   static const QSet<QString> kKnown = {
+                       QStringLiteral("fields"),
+                       QStringLiteral("limit"),
+                       QStringLiteral("offset"),
+                   };
+                   LogUnsupportedQueryParams(req, kKnown);
 
-            auto auth = WebApiAuth::Authenticate(req, db);
-            if (!auth.userId.has_value()) {
-                return std::move(auth.errorResponse);
-            }
-            if (!IsSelf(userKey, auth)) {
-                return JsonError(QHttpServerResponse::StatusCode::Forbidden,
-                                 UP_ACCESS_DENIED_OWNERSHIP,
-                                 QStringLiteral("Access denied by resource ownership"));
-            }
+                   auto auth = WebApiAuth::Authenticate(req, db);
+                   if (!auth.userId.has_value()) {
+                       return std::move(auth.errorResponse);
+                   }
+                   if (!IsSelf(userKey, auth)) {
+                       return JsonError(QHttpServerResponse::StatusCode::Forbidden,
+                                        UP_ACCESS_DENIED_OWNERSHIP,
+                                        QStringLiteral("Access denied by resource ownership"));
+                   }
 
-            const QUrlQuery query(req.url());
+                   const QUrlQuery query(req.url());
 
-            QString fieldsStr = query.queryItemValue(QStringLiteral("fields"));
-            if (fieldsStr.isEmpty()) {
-                fieldsStr = QStringLiteral("@default");
-            }
-            const QStringList fields = fieldsStr.split(QLatin1Char(','), Qt::SkipEmptyParts);
-            const bool isDefault = fields.contains(QStringLiteral("@default"));
+                   QString fieldsStr = query.queryItemValue(QStringLiteral("fields"));
+                   if (fieldsStr.isEmpty()) {
+                       fieldsStr = QStringLiteral("@default");
+                   }
+                   const QStringList fields = fieldsStr.split(QLatin1Char(','), Qt::SkipEmptyParts);
+                   const bool isDefault = fields.contains(QStringLiteral("@default"));
 
-            int limit = 0;
-            int offset = 0;
-            ParsePaging(query, 2000, 2000, limit, offset);
+                   int limit = 0;
+                   int offset = 0;
+                   ParsePaging(query, 2000, 2000, limit, offset);
 
-            const auto blocked = db.GetRelationships(*auth.userId).blocked;
-            const QJsonObject body =
-                BuildUserList(blocked, QStringLiteral("blockingUsers"),
-                              isDefault || fields.contains(QStringLiteral("user")),
-                              /*wantRegion=*/false, fields.contains(QStringLiteral("npId")), offset,
-                              limit);
-            qInfo() << "WebAPI: blockingUsers for" << auth.npid << "-> total" << blocked.size();
-            return JsonOk(body);
-        });
+                   const auto blocked = db.GetRelationships(*auth.userId).blocked;
+                   const QJsonObject body =
+                       BuildUserList(blocked, QStringLiteral("blockingUsers"),
+                                     isDefault || fields.contains(QStringLiteral("user")),
+                                     /*wantRegion=*/false, fields.contains(QStringLiteral("npId")),
+                                     offset, limit);
+                   qInfo() << "WebAPI: blockingUsers for" << auth.npid << "-> total"
+                           << blocked.size();
+                   return JsonOk(body);
+               });
 }
 
 } // namespace WebApiRoutes
