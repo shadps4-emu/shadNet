@@ -2,6 +2,8 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
 #include "webapi_routes_presence.h"
 
+#include <cstring>
+
 #include <QByteArray>
 #include <QDebug>
 #include <QHttpServer>
@@ -63,6 +65,13 @@ QHttpServerResponse HandlePresenceWrite(Database& db, SharedState& shared, const
                 << "bytes, unparsed)";
     }
 
+    // gameStatus is required for the gameStatus endpoint (optional for inGamePresence,
+    // which may set gameStatus and/or gameData).
+    if (std::strcmp(leaf, "gameStatus") == 0 && !obj.contains(QStringLiteral("gameStatus"))) {
+        return JsonError(QHttpServerResponse::StatusCode::BadRequest, UP_QUERY_PARAM_REQUIRED,
+                         QStringLiteral("'gameStatus' is required in the request body"));
+    }
+
     // Write the published detail into the caller's live presence entry, then collect the
     // online friends to notify. Online status is implicit by membership in the clients map;
     // these fields add the in-game detail that friendList?presenceType=... reads back.
@@ -71,14 +80,24 @@ QHttpServerResponse HandlePresenceWrite(Database& db, SharedState& shared, const
         QWriteLocker lk(&shared.clientsLock);
         auto it = shared.clients.find(*auth.userId);
         if (it != shared.clients.end()) {
+            // Body schema (both PUTs): gameStatus (string), gameData (base64 string,
+            // inGamePresence only), localizedGameStatus ([{npLanguage, gameStatus}]).
             if (obj.contains(QStringLiteral("gameStatus")))
                 it->gameStatus = obj.value(QStringLiteral("gameStatus")).toString();
-            if (obj.contains(QStringLiteral("npTitleId")))
-                it->npTitleId = obj.value(QStringLiteral("npTitleId")).toString();
-            if (obj.contains(QStringLiteral("titleName")))
-                it->titleName = obj.value(QStringLiteral("titleName")).toString();
-            if (obj.contains(QStringLiteral("platform")))
-                it->platform = obj.value(QStringLiteral("platform")).toString();
+            if (obj.contains(QStringLiteral("gameData")))
+                it->gameData = obj.value(QStringLiteral("gameData")).toString();
+            if (obj.contains(QStringLiteral("localizedGameStatus"))) {
+                it->localizedGameStatus.clear();
+                const QJsonArray loc =
+                    obj.value(QStringLiteral("localizedGameStatus")).toArray();
+                for (const QJsonValue& v : loc) {
+                    const QJsonObject le = v.toObject();
+                    const QString lang = le.value(QStringLiteral("npLanguage")).toString();
+                    if (!lang.isEmpty())
+                        it->localizedGameStatus.insert(
+                            lang, le.value(QStringLiteral("gameStatus")).toString());
+                }
+            }
             it->presenceUpdatedAt = QDateTime::currentSecsSinceEpoch();
             for (auto fr = it->friends.cbegin(); fr != it->friends.cend(); ++fr) {
                 auto fit = shared.clients.find(fr.key());
@@ -204,6 +223,7 @@ void RegisterPresenceRoutes(QHttpServer& http, Database& db, SharedState& shared
 
                    bool online = false;
                    QString platform, gameStatus, npTitleId, titleName;
+                   QHash<QString, QString> localized;
                    {
                        QReadLocker lk(&shared.clientsLock);
                        auto it = shared.clients.constFind(targetId);
@@ -213,10 +233,25 @@ void RegisterPresenceRoutes(QHttpServer& http, Database& db, SharedState& shared
                            gameStatus = it->gameStatus;
                            npTitleId = it->npTitleId;
                            titleName = it->titleName;
+                           localized = it->localizedGameStatus;
                        }
                    }
                    const QString onlineId = db.GetUsername(targetId).value_or(
                        self ? auth.npid : userKey);
+
+                   // gameStatus is the only multilingual field: pick the first npLanguages
+                   // match, else fall back to the default gameStatus.
+                   const QString npLangs = query.queryItemValue(QStringLiteral("npLanguages"));
+                   if (!npLangs.isEmpty() && !localized.isEmpty()) {
+                       for (const QString& lang :
+                            npLangs.split(QLatin1Char(','), Qt::SkipEmptyParts)) {
+                           const auto lit = localized.constFind(lang);
+                           if (lit != localized.constEnd()) {
+                               gameStatus = lit.value();
+                               break;
+                           }
+                       }
+                   }
 
                    QJsonObject presence;
                    presence.insert(QStringLiteral("onlineStatus"),

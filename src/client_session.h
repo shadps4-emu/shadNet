@@ -38,9 +38,11 @@ struct SharedState {
         // Presence detail published via the WebAPI presence PUTs (gameStatus /
         // inGamePresence). Online status is implicit by membership in the clients map;
         // these carry the in-game detail. Also protected by clientsLock.
-        QString gameStatus;
-        QString npTitleId;
-        QString titleName;
+        QString gameStatus;                          // default gameStatus (<=191 bytes UTF-8)
+        QString gameData;                            // base64 free-form data (<=172 chars)
+        QHash<QString, QString> localizedGameStatus; // npLanguage -> localized gameStatus
+        QString npTitleId;                           // title context (not set by the PUTs)
+        QString titleName;                           // title context (not set by the PUTs)
         QString platform = QStringLiteral("PS4");
         qint64 presenceUpdatedAt = 0;
     };
