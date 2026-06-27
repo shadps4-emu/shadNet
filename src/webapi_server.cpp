@@ -11,6 +11,7 @@
 #include <QJsonObject>
 #include <webapi_routes_users.h>
 #include "webapi_auth.h"
+#include "webapi_routes_presence.h"
 #include "webapi_routes_profile.h"
 
 WebApiServer::WebApiServer(QObject* parent) : QObject(parent) {}
@@ -60,6 +61,7 @@ void WebApiServer::RegisterRoutes() {
     // user routes
     WebApiRoutes::RegisterUserRoutes(*m_http, *m_db);
     WebApiRoutes::RegisterProfileRoutes(*m_http, *m_db);
+    WebApiRoutes::RegisterPresenceRoutes(*m_http, *m_db);
 
     m_http->setMissingHandler(
         this, [](const QHttpServerRequest& req, QHttpServerResponder& responder) {
