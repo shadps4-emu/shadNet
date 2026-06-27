@@ -8,6 +8,7 @@
 #include <QHttpServerRequest>
 #include <QHttpServerResponse>
 #include <QJsonDocument>
+#include <QJsonArray>
 #include <QJsonObject>
 #include <QSet>
 #include <QString>
@@ -120,17 +121,19 @@ void RegisterPresenceRoutes(QHttpServer& http, Database& db, SharedState& shared
                    return HandlePresenceWrite(db, shared, "gameStatus", userKey, req);
                });
 
-    // GET /v1/users/<arg>/presence -- read a user's live presence. Resolves self or any
-    // other user (by accountId or onlineId); returns offline when the target is not in the
-    // shared clients map. Detail (gameStatus / gameTitleInfo) comes from the presence PUTs.
+    // GET /v1/users/<arg>/presence -- read a user's live presence. Self or a friend only
+    // (non-friend -> 2107904). 'type' selects the member: primary -> primaryInfo,
+    // platform -> platformInfoList, incontext -> incontextInfoList (stubbed empty: shadNet
+    // does not track per-NP-Comm-Id presence). presenceDetail=true gates gameStatus /
+    // gameTitleInfo. Detail/online come from the presence PUTs + clients-map membership.
     http.route("/v1/users/<arg>/presence",
                [&db, &shared](const QString& userKey,
                               const QHttpServerRequest& req) -> QHttpServerResponse {
                    static const QSet<QString> kKnown = {
-                       QStringLiteral("fields"),
-                       QStringLiteral("platform"),
-                       QStringLiteral("npLanguage"),
                        QStringLiteral("type"),
+                       QStringLiteral("platform"),
+                       QStringLiteral("presenceDetail"),
+                       QStringLiteral("npLanguages"),
                    };
                    LogUnsupportedQueryParams(req, kKnown);
 
@@ -139,8 +142,33 @@ void RegisterPresenceRoutes(QHttpServer& http, Database& db, SharedState& shared
                        return std::move(auth.errorResponse);
                    }
 
-                   // Resolve target: self ("me" / own onlineId / own accountId), else look
-                   // up by numeric accountId or onlineId. Unresolvable -> id 0 -> offline.
+                   const QUrlQuery query(req.url());
+
+                   // 'type' is required: primary | platform | incontext.
+                   const QString type = query.queryItemValue(QStringLiteral("type"));
+                   if (type.isEmpty()) {
+                       return JsonError(QHttpServerResponse::StatusCode::BadRequest,
+                                        UP_QUERY_PARAM_REQUIRED,
+                                        QStringLiteral("'type' parameter required in query string"));
+                   }
+                   if (type != QStringLiteral("primary") && type != QStringLiteral("platform") &&
+                       type != QStringLiteral("incontext")) {
+                       return JsonError(
+                           QHttpServerResponse::StatusCode::BadRequest, UP_INVALID_QUERY_PARAM,
+                           QStringLiteral("Invalid parameter in query string (parameter: 'type')"));
+                   }
+                   // 'platform' is only legal with type=platform|incontext.
+                   const QString platReq = query.queryItemValue(QStringLiteral("platform"));
+                   if (!platReq.isEmpty() && type == QStringLiteral("primary")) {
+                       return JsonError(
+                           QHttpServerResponse::StatusCode::BadRequest, UP_INVALID_QUERY_PARAM,
+                           QStringLiteral("Invalid parameter in query string (parameter: 'platform')"));
+                   }
+                   const bool detail =
+                       query.queryItemValue(QStringLiteral("presenceDetail")) ==
+                       QStringLiteral("true");
+
+                   // Resolve target: self, else by numeric accountId or onlineId.
                    int64_t targetId = 0;
                    const bool self =
                        userKey.compare(QStringLiteral("me"), Qt::CaseInsensitive) == 0 ||
@@ -158,6 +186,22 @@ void RegisterPresenceRoutes(QHttpServer& http, Database& db, SharedState& shared
                        }
                    }
 
+                   // Presence is visible only to the owner or a friend.
+                   bool allowed = self;
+                   if (!allowed && targetId != 0) {
+                       for (const auto& fr : db.GetRelationships(*auth.userId).friends) {
+                           if (fr.first == targetId) {
+                               allowed = true;
+                               break;
+                           }
+                       }
+                   }
+                   if (!allowed) {
+                       return JsonError(QHttpServerResponse::StatusCode::Forbidden,
+                                        UP_NON_FRIEND_NOT_ALLOWED,
+                                        QStringLiteral("Non-friend not allowed"));
+                   }
+
                    bool online = false;
                    QString platform, gameStatus, npTitleId, titleName;
                    {
@@ -171,10 +215,36 @@ void RegisterPresenceRoutes(QHttpServer& http, Database& db, SharedState& shared
                            titleName = it->titleName;
                        }
                    }
-                   qInfo() << "WebAPI: presence for" << userKey
+                   const QString onlineId = db.GetUsername(targetId).value_or(
+                       self ? auth.npid : userKey);
+
+                   QJsonObject presence;
+                   presence.insert(QStringLiteral("onlineStatus"),
+                                   online ? QStringLiteral("online") : QStringLiteral("offline"));
+                   if (type == QStringLiteral("primary")) {
+                       presence.insert(
+                           QStringLiteral("primaryInfo"),
+                           MakePresenceEntry(online, platform, gameStatus, npTitleId, titleName,
+                                             detail, /*forcePlatform=*/false));
+                   } else if (type == QStringLiteral("platform")) {
+                       QJsonArray list;
+                       // shadNet has a single platform (PS4); honor platform-narrowing.
+                       if (platReq.isEmpty() || platReq == QStringLiteral("PS4")) {
+                           list.append(MakePresenceEntry(online, QStringLiteral("PS4"), gameStatus,
+                                                         npTitleId, titleName, detail,
+                                                         /*forcePlatform=*/true));
+                       }
+                       presence.insert(QStringLiteral("platformInfoList"), list);
+                   } else { // incontext -- not tracked; return an empty list.
+                       presence.insert(QStringLiteral("incontextInfoList"), QJsonArray());
+                   }
+
+                   QJsonObject body;
+                   body.insert(QStringLiteral("npId"), EncodeNpId(onlineId));
+                   body.insert(QStringLiteral("presence"), presence);
+                   qInfo() << "WebAPI: presence(" << type << ") for" << userKey
                            << (online ? "-> online" : "-> offline");
-                   return JsonOk(
-                       MakePresenceObject(online, platform, gameStatus, npTitleId, titleName));
+                   return JsonOk(body);
                });
 }
 

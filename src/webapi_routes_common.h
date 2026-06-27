@@ -20,6 +20,7 @@ namespace WebApiRoutes {
 inline constexpr quint32 UP_INVALID_QUERY_PARAM = 2105601;     // bad value in query string
 inline constexpr quint32 UP_QUERY_PARAM_REQUIRED = 2105605;    // required query param missing
 inline constexpr quint32 UP_ACCESS_DENIED_OWNERSHIP = 2105358; // non-owner accessed the resource
+inline constexpr quint32 UP_NON_FRIEND_NOT_ALLOWED = 2107904;  // non-owner/non-friend access
 
 // Region is not stored per account yet. The User Profile API encodes npId as
 // base64("<onlineId>.<region>"), so we default the region here. Change this (or
@@ -81,30 +82,44 @@ inline void ParsePaging(const QUrlQuery& query, int fallbackDefault, int maxLimi
     }
 }
 
-// Build a presence resource object: {"primaryInfo":{...}}. Pure (no locking) so both
-// the friendList batch path and the standalone presence route share one shape. When
-// offline, only onlineStatus is emitted; detail fields are omitted when empty.
-inline QJsonObject MakePresenceObject(bool online, const QString& platform,
-                                      const QString& gameStatus, const QString& npTitleId,
-                                      const QString& titleName) {
-    QJsonObject primary;
-    primary.insert(QStringLiteral("onlineStatus"),
-                   online ? QStringLiteral("online") : QStringLiteral("offline"));
-    if (online) {
-        primary.insert(QStringLiteral("platform"),
-                       platform.isEmpty() ? QStringLiteral("PS4") : platform);
+// One presence entry: {onlineStatus, [platform], [gameTitleInfo], [gameStatus]}. Used as
+// primaryInfo and as a platformInfoList/incontextInfoList element. Detail (gameStatus /
+// gameTitleInfo) is included only when includeDetail is set; platform is emitted when the
+// user is online, or when forcePlatform is set (per-platform lists name the platform even
+// when offline). gameStatus is the only multilingual field (npLanguages applies to it).
+inline QJsonObject MakePresenceEntry(bool online, const QString& platform,
+                                     const QString& gameStatus, const QString& npTitleId,
+                                     const QString& titleName, bool includeDetail,
+                                     bool forcePlatform) {
+    QJsonObject e;
+    e.insert(QStringLiteral("onlineStatus"),
+             online ? QStringLiteral("online") : QStringLiteral("offline"));
+    if (online || forcePlatform) {
+        e.insert(QStringLiteral("platform"),
+                 platform.isEmpty() ? QStringLiteral("PS4") : platform);
+    }
+    if (online && includeDetail) {
         if (!gameStatus.isEmpty()) {
-            primary.insert(QStringLiteral("gameStatus"), gameStatus);
+            e.insert(QStringLiteral("gameStatus"), gameStatus);
         }
         if (!npTitleId.isEmpty() || !titleName.isEmpty()) {
             QJsonObject gti;
             if (!npTitleId.isEmpty()) gti.insert(QStringLiteral("npTitleId"), npTitleId);
             if (!titleName.isEmpty()) gti.insert(QStringLiteral("titleName"), titleName);
-            primary.insert(QStringLiteral("gameTitleInfo"), gti);
+            e.insert(QStringLiteral("gameTitleInfo"), gti);
         }
     }
+    return e;
+}
+
+// friendList embeds presence as {"primaryInfo": <entry>} (detail always included).
+inline QJsonObject MakePresenceObject(bool online, const QString& platform,
+                                      const QString& gameStatus, const QString& npTitleId,
+                                      const QString& titleName) {
     QJsonObject presence;
-    presence.insert(QStringLiteral("primaryInfo"), primary);
+    presence.insert(QStringLiteral("primaryInfo"),
+                    MakePresenceEntry(online, platform, gameStatus, npTitleId, titleName,
+                                      /*includeDetail=*/true, /*forcePlatform=*/false));
     return presence;
 }
 
