@@ -40,7 +40,7 @@ bool StunServer::Start(const QHostAddress& addr, uint16_t port) {
                     << m_socket->errorString();
         return false;
     }
-    qInfo().nospace() << "STUN UDP listener on " << addr.toString() << ":" << port;
+    qInfo().nospace().noquote() << "STUN UDP listener on: " << addr.toString() << ":" << port;
     return true;
 }
 
