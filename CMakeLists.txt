@@ -73,6 +73,9 @@ set(SOURCES
     src/webapi_auth.cpp
     src/webapi_routes_users.h
     src/webapi_routes_users.cpp
+    src/webapi_routes_profile.h
+    src/webapi_routes_profile.cpp
+    src/webapi_routes_common.h
     # Read-only stats HTTP/JSON listener
     src/stats_server.h
     src/stats_server.cpp
