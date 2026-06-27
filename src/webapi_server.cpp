@@ -17,8 +17,9 @@
 WebApiServer::WebApiServer(QObject* parent) : QObject(parent) {}
 WebApiServer::~WebApiServer() = default;
 
-bool WebApiServer::Start(ConfigManager* config, const QString& dbPath) {
+bool WebApiServer::Start(ConfigManager* config, const QString& dbPath, SharedState* shared) {
     m_config = config;
+    m_shared = shared;
 
     m_db = std::make_unique<Database>(QStringLiteral("webapi_main"));
     if (!m_db->Open(dbPath)) {
