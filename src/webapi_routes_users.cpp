@@ -17,8 +17,10 @@
 #include <QSet>
 #include <QString>
 #include <QStringList>
+#include <QReadWriteLock>
 #include <QUrlQuery>
 
+#include "client_session.h" // SharedState
 #include "database.h"
 #include "webapi_auth.h"
 #include "webapi_routes_common.h"
@@ -69,8 +71,10 @@ QJsonObject BuildUserList(const QList<QPair<int64_t, QString>>& users, const QSt
 // the block/profile shape). shadNet stores only (accountId, npid) per relationship, so
 // onlineId and personalDetail.displayName are both the npid; avatarUrl is looked up from
 // the account table; isOfficiallyVerified defaults to false.
-QJsonObject BuildFriendList(Database& db, const QList<QPair<int64_t, QString>>& friends,
-                            const QStringList& fields, bool isDefault, int offset, int limit) {
+QJsonObject BuildFriendList(Database& db, SharedState& shared,
+                            const QList<QPair<int64_t, QString>>& friends,
+                            const QStringList& fields, bool isDefault, int offset, int limit,
+                            bool wantPresence) {
     const bool wantOnlineId = isDefault || fields.contains(QStringLiteral("onlineId"));
     const bool wantRegion = isDefault || fields.contains(QStringLiteral("region"));
     const bool wantDetail = isDefault || fields.contains(QStringLiteral("personalDetail")) ||
@@ -80,6 +84,20 @@ QJsonObject BuildFriendList(Database& db, const QList<QPair<int64_t, QString>>& 
     const bool wantNpId = isDefault || fields.contains(QStringLiteral("npId"));
 
     const int total = static_cast<int>(friends.size());
+
+    // Snapshot which friends are currently online (membership in the shared clients
+    // map == online). Done once under the read lock so we don't hold it across the
+    // per-entry DB lookups below.
+    QSet<int64_t> onlineFriends;
+    if (wantPresence) {
+        QReadLocker lk(&shared.clientsLock);
+        for (const auto& fr : friends) {
+            if (shared.clients.contains(fr.first)) {
+                onlineFriends.insert(fr.first);
+            }
+        }
+    }
+
     QJsonArray arr;
     for (int i = offset; i < total && static_cast<int>(arr.size()) < limit; ++i) {
         const int64_t accountId = friends[i].first;
@@ -108,6 +126,18 @@ QJsonObject BuildFriendList(Database& db, const QList<QPair<int64_t, QString>>& 
         if (wantVerified) {
             entry.insert(QStringLiteral("isOfficiallyVerified"), false);
         }
+        if (wantPresence) {
+            const bool online = onlineFriends.contains(accountId);
+            QJsonObject primary;
+            primary.insert(QStringLiteral("onlineStatus"),
+                           online ? QStringLiteral("online") : QStringLiteral("offline"));
+            if (online) {
+                primary.insert(QStringLiteral("platform"), QStringLiteral("PS4"));
+            }
+            QJsonObject presence;
+            presence.insert(QStringLiteral("primaryInfo"), primary);
+            entry.insert(QStringLiteral("presence"), presence);
+        }
         arr.append(entry);
     }
     QJsonObject body;
@@ -135,15 +165,17 @@ QJsonObject BuildFriendList(Database& db, const QList<QPair<int64_t, QString>>& 
 // Supported: fields=[@default,user,npId] (@default == user; default when omitted),
 //   limit=[0-2000] (default 2000; 0 == count-only), offset=[0-2147483647] (default 0).
 // Block list is always self-only ("can only be obtained for the current user").
-void RegisterUserRoutes(QHttpServer& http, Database& db) {
+void RegisterUserRoutes(QHttpServer& http, Database& db, SharedState& shared) {
     http.route(
         "/v1/users/<arg>/friendList",
-        [&db](const QString& userKey, const QHttpServerRequest& req) -> QHttpServerResponse {
+        [&db, &shared](const QString& userKey, const QHttpServerRequest& req) -> QHttpServerResponse {
             static const QSet<QString> kKnown = {
                 QStringLiteral("friendStatus"),
                 QStringLiteral("fields"),
                 QStringLiteral("limit"),
                 QStringLiteral("offset"),
+                QStringLiteral("presenceType"),
+                QStringLiteral("presenceDetail"),
             };
             LogUnsupportedQueryParams(req, kKnown);
 
@@ -184,8 +216,13 @@ void RegisterUserRoutes(QHttpServer& http, Database& db) {
             int offset = 0;
             ParsePaging(query, 100, 500, limit, offset);
 
+            const bool wantPresence =
+                query.hasQueryItem(QStringLiteral("presenceType")) ||
+                query.hasQueryItem(QStringLiteral("presenceDetail")) ||
+                fields.contains(QStringLiteral("presence"));
             const auto friends = db.GetRelationships(*auth.userId).friends;
-            const QJsonObject body = BuildFriendList(db, friends, fields, isDefault, offset, limit);
+            const QJsonObject body = BuildFriendList(db, shared, friends, fields, isDefault,
+                                                     offset, limit, wantPresence);
             qInfo() << "WebAPI: friendList for" << auth.npid << "-> total" << friends.size();
             return JsonOk(body);
         });
