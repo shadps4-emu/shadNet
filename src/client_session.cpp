@@ -226,10 +226,12 @@ void ClientSession::CleanupOnDisconnect() {
     // Collect send functions for every online friend before releasing the lock,
     // then remove ourselves from the map.
     QVector<QPair<std::function<void(QByteArray)>, QString>> friendSenders; // (send, npid)
+    bool selfAppearOffline = false;
     {
         QWriteLocker lk(&m_shared->clientsLock);
         auto self = m_shared->clients.find(m_info.userId);
         if (self != m_shared->clients.end()) {
+            selfAppearOffline = self->appearOffline;
             for (auto it = self->friends.begin(); it != self->friends.end(); ++it) {
                 auto friendEntry = m_shared->clients.find(it.key());
                 if (friendEntry != m_shared->clients.end())
@@ -256,13 +258,16 @@ void ClientSession::CleanupOnDisconnect() {
     QByteArray pkt = BuildNotification(NotificationType::FriendStatus, payload);
     // WebApi onlineStatus presence update (went offline): service name None (basic push).
     // from = us, to = each recipient (per SDK event content), so build per-recipient.
-    for (const auto& [send, friendNpid] : friendSenders) {
-        send(pkt);
-        send(BuildNotification(
-            NotificationType::WebApiPushEvent,
-            BuildWebApiPushPayload(QString(), 0,
-                                   QStringLiteral("np:service:presence:onlineStatus"),
-                                   QByteArray(), m_info.npid, friendNpid)));
+    // Suppressed entirely if we were Appear-Offline (friends already see us as offline).
+    if (!selfAppearOffline) {
+        for (const auto& [send, friendNpid] : friendSenders) {
+            send(pkt);
+            send(BuildNotification(
+                NotificationType::WebApiPushEvent,
+                BuildWebApiPushPayload(QString(), 0,
+                                       QStringLiteral("np:service:presence:onlineStatus"),
+                                       QByteArray(), m_info.npid, friendNpid)));
+        }
     }
 
     qInfo() << "Client disconnected:" << m_info.npid;
@@ -326,6 +331,13 @@ void ClientSession::EmitPresenceGameTitleInfo() {
     // GET presence / friendList. from = self, to = recipient.
     QString myComId;
     QSet<int64_t> sameComId;
+    {
+        // Appear-Offline: suppress outgoing presence while invisible.
+        QReadLocker lk(&m_shared->clientsLock);
+        auto self = m_shared->clients.constFind(m_info.userId);
+        if (self != m_shared->clients.constEnd() && self->appearOffline)
+            return;
+    }
     {
         QReadLocker ul(&m_shared->usageLock);
         myComId = m_shared->usageClientGame.value(m_info.userId);

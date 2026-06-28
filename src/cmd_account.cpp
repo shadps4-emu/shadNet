@@ -116,7 +116,9 @@ ErrorType ClientSession::CmdLogin(StreamExtractor& data, QByteArray& reply) {
         for (const auto& [friendId, friendNpid] : rels.friends) {
             auto* fe = pb.add_friends();
             fe->set_npid(friendNpid.toStdString());
-            fe->set_online(m_shared->clients.contains(friendId));
+            // Appear-Offline friends are reported offline.
+            const auto fit = m_shared->clients.constFind(friendId);
+            fe->set_online(fit != m_shared->clients.constEnd() && !fit->appearOffline);
             // presence field intentionally left empty
         }
     }
@@ -138,6 +140,7 @@ ErrorType ClientSession::CmdLogin(StreamExtractor& data, QByteArray& reply) {
         QWriteLocker lk(&m_shared->clientsLock);
         SharedState::ClientEntry entry;
         entry.npid = npid;
+        entry.appearOffline = req.appear_offline();
         // Title context reported by the emulator at login -> presence gameTitleInfo.
         entry.npTitleId = QString::fromStdString(req.np_title_id());
         entry.titleName = QString::fromStdString(req.title_name());
@@ -164,8 +167,9 @@ ErrorType ClientSession::CmdLogin(StreamExtractor& data, QByteArray& reply) {
     // Count this authenticated session in live usage stats
     m_shared->UsageOnLogin();
 
-    // Notify online friends: FriendStatus notification (we just came online).
-    if (!onlineFriendSenders.isEmpty()) {
+    // Notify online friends we came online -- unless Appear-Offline is set, in which case
+    // we stay invisible (handled as offline by everyone else).
+    if (!onlineFriendSenders.isEmpty() && !req.appear_offline()) {
         shadnet::NotifyFriendStatus ns;
         ns.set_npid(npid.toStdString());
         ns.set_online(true);

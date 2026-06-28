@@ -83,11 +83,15 @@ QHttpServerResponse HandlePresenceWrite(Database& db, SharedState& shared, const
                                         "'localizedGameStatus' is specified"));
     }
 
-    // Write the published detail into the caller's live presence entry.
+    // Write the published detail into the caller's live presence entry. Per the SDK the
+    // status/data may be set even while Appear-Offline; it just isn't observable until the
+    // user disables it -- so we store unconditionally but suppress the update events below.
+    bool updaterAppearOffline = false;
     {
         QWriteLocker lk(&shared.clientsLock);
         auto it = shared.clients.find(*auth.userId);
         if (it != shared.clients.end()) {
+            updaterAppearOffline = it->appearOffline;
             // Body schema (both PUTs): gameStatus (string), gameData (base64 string,
             // inGamePresence only), localizedGameStatus ([{npLanguage, gameStatus}]).
             if (obj.contains(QStringLiteral("gameStatus")))
@@ -109,6 +113,10 @@ QHttpServerResponse HandlePresenceWrite(Database& db, SharedState& shared, const
             it->presenceUpdatedAt = QDateTime::currentSecsSinceEpoch();
         }
     }
+
+    // Appear-Offline: stored above, but no one can observe it -> emit nothing.
+    if (updaterAppearOffline)
+        return QHttpServerResponse{QHttpServerResponse::StatusCode::NoContent};
 
     // SDK: game-status / game-data presence update events are received ONLY by users on a
     // title with the same NP Communication ID as the updater. Snapshot the updater's comId
@@ -291,7 +299,8 @@ void RegisterPresenceRoutes(QHttpServer& http, Database& db, SharedState& shared
                    {
                        QReadLocker lk(&shared.clientsLock);
                        auto it = shared.clients.constFind(targetId);
-                       if (it != shared.clients.constEnd()) {
+                       // Appear-Offline target is reported offline with no in-game detail.
+                       if (it != shared.clients.constEnd() && !it->appearOffline) {
                            online = true;
                            platform = it->platform;
                            gameStatus = it->gameStatus;

@@ -16,6 +16,7 @@ message LoginRequest {
     string token       = 3;
     string np_title_id = 4;  // running title serial (param.sfo TITLE_ID), for presence gameTitleInfo
     string title_name  = 5;  // running title name (param.sfo TITLE)
+    bool appear_offline = 6; // user's Appear-Offline preference (handled as offline by others)
 }
 
 message FriendEntry {

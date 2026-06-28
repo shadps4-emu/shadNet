@@ -47,6 +47,9 @@ struct SharedState {
         QString titleName;                           // title context (not set by the PUTs)
         QString platform = QStringLiteral("PS4");
         qint64 presenceUpdatedAt = 0;
+        // Appear-Offline: while true the user is handled as offline by everyone else
+        // (reads report offline + hide detail; outgoing presence events are suppressed).
+        bool appearOffline = false;
     };
     QHash<int64_t, ClientEntry> clients;
     QHash<QString, int64_t> npidToUserId; // reverse lookup, protected by clientsLock

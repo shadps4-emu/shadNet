@@ -99,7 +99,8 @@ QJsonObject BuildFriendList(Database& db, SharedState& shared,
         QReadLocker lk(&shared.clientsLock);
         for (const auto& fr : friends) {
             auto it = shared.clients.find(fr.first);
-            if (it != shared.clients.end()) {
+            // Appear-Offline friends are omitted -> uniformly treated as offline (no detail).
+            if (it != shared.clients.end() && !it->appearOffline) {
                 onlineFriends.insert(fr.first,
                                      {it->gameStatus, it->npTitleId, it->titleName, it->platform});
             }
