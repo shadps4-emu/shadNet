@@ -117,9 +117,9 @@ ErrorType ClientSession::CmdAddFriend(StreamExtractor& data) {
         }
 
         // WebApi: both friend lists changed -> tell each side's push listener to refresh.
-        PushWebApiEvent(QString(), 0, kWebApiFriendDataType, QByteArray(), friendNpid, QString(),
+        PushWebApiEvent(QString(), 0, kWebApiFriendDataType, QByteArray(), QString(), m_info.npid,
                         m_info.userId, FriendExtd(friendNpid, friendId, "add"));
-        PushWebApiEvent(QString(), 0, kWebApiFriendDataType, QByteArray(), m_info.npid, QString(),
+        PushWebApiEvent(QString(), 0, kWebApiFriendDataType, QByteArray(), QString(), friendNpid,
                         friendId, FriendExtd(m_info.npid, m_info.userId, "add"));
 
         qInfo() << "Friendship formed:" << m_info.npid << "<->" << friendNpid;
@@ -130,7 +130,7 @@ ErrorType ClientSession::CmdAddFriend(StreamExtractor& data) {
         SendNotification(NotificationType::FriendQuery, buildNotifPayload(q), friendId);
 
         // WebApi: the requestee's friend data changed (incoming request).
-        PushWebApiEvent(QString(), 0, kWebApiFriendDataType, QByteArray(), m_info.npid, QString(),
+        PushWebApiEvent(QString(), 0, kWebApiFriendDataType, QByteArray(), QString(), friendNpid,
                         friendId);
 
         qInfo() << "Friend request sent:" << m_info.npid << "->" << friendNpid;
@@ -196,9 +196,9 @@ ErrorType ClientSession::CmdRemoveFriend(StreamExtractor& data) {
     }
 
     // WebApi: both friend lists changed.
-    PushWebApiEvent(QString(), 0, kWebApiFriendDataType, QByteArray(), friendNpid, QString(),
+    PushWebApiEvent(QString(), 0, kWebApiFriendDataType, QByteArray(), QString(), m_info.npid,
                     m_info.userId, FriendExtd(friendNpid, friendId, "remove"));
-    PushWebApiEvent(QString(), 0, kWebApiFriendDataType, QByteArray(), m_info.npid, QString(),
+    PushWebApiEvent(QString(), 0, kWebApiFriendDataType, QByteArray(), QString(), friendNpid,
                     friendId, FriendExtd(m_info.npid, m_info.userId, "remove"));
 
     qInfo() << "Friend removed:" << m_info.npid << "removed" << friendNpid;
@@ -259,9 +259,9 @@ ErrorType ClientSession::CmdAddBlock(StreamExtractor& data) {
         SendNotification(NotificationType::FriendLost, buildNotifPayload(toTarget), targetId);
 
         // WebApi: blocking also removed the friendship on both sides.
-        PushWebApiEvent(QString(), 0, kWebApiFriendDataType, QByteArray(), targetNpid, QString(),
+        PushWebApiEvent(QString(), 0, kWebApiFriendDataType, QByteArray(), QString(), m_info.npid,
                         m_info.userId, FriendExtd(targetNpid, targetId, "remove"));
-        PushWebApiEvent(QString(), 0, kWebApiFriendDataType, QByteArray(), m_info.npid, QString(),
+        PushWebApiEvent(QString(), 0, kWebApiFriendDataType, QByteArray(), QString(), targetNpid,
                         targetId, FriendExtd(m_info.npid, m_info.userId, "remove"));
     }
 
