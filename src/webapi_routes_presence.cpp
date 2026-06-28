@@ -86,12 +86,20 @@ QHttpServerResponse HandlePresenceWrite(Database& db, SharedState& shared, const
     // Write the published detail into the caller's live presence entry. Per the SDK the
     // status/data may be set even while Appear-Offline; it just isn't observable until the
     // user disables it -- so we store unconditionally but suppress the update events below.
+    // notificationWithData is sticky: once specified it persists across subsequent update
+    // events (cleared on game-end / offline / game-data DELETE), per the SDK.
+    const bool reqNotify = QUrlQuery(req.url()).queryItemValue(
+                               QStringLiteral("notificationWithData")) == QStringLiteral("true");
     bool updaterAppearOffline = false;
+    bool notify = false;
     {
         QWriteLocker lk(&shared.clientsLock);
         auto it = shared.clients.find(*auth.userId);
         if (it != shared.clients.end()) {
             updaterAppearOffline = it->appearOffline;
+            if (reqNotify)
+                it->notifyWithData = true; // latch sticky mode
+            notify = it->notifyWithData;
             // Body schema (both PUTs): gameStatus (string), gameData (base64 string,
             // inGamePresence only), localizedGameStatus ([{npLanguage, gameStatus}]).
             if (obj.contains(QStringLiteral("gameStatus")))
@@ -156,9 +164,8 @@ QHttpServerResponse HandlePresenceWrite(Database& db, SharedState& shared, const
     // Emit the per-field presence update events (SDK): gameStatus -> np:service:presence:
     // gameStatus, gameData -> np:service:presence:gameData, both with NP service name
     // 'inGamePresence'. The JSON body ({"gameStatus":..} / {"gameData":..}) is included only
-    // when notificationWithData=true; otherwise the event fires with no body (re-fetch).
-    const bool notify = QUrlQuery(req.url()).queryItemValue(
-                            QStringLiteral("notificationWithData")) == QStringLiteral("true");
+    // when notify (sticky notificationWithData) is set; otherwise the event fires with no
+    // body (re-fetch). 'notify' was latched in the write block above.
     QList<QPair<QString, QByteArray>> events; // (dataType, body)
     if (obj.contains(QStringLiteral("gameStatus"))) {
         QByteArray body;

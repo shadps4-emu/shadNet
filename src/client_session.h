@@ -50,6 +50,10 @@ struct SharedState {
         // Appear-Offline: while true the user is handled as offline by everyone else
         // (reads report offline + hide detail; outgoing presence events are suppressed).
         bool appearOffline = false;
+        // Sticky notificationWithData: once a presence PUT sets notificationWithData=true,
+        // game-status/game-data update events carry the current status/data until the user
+        // ends the game, goes offline, or DELETEs game data (SDK PUT gameStatus semantics).
+        bool notifyWithData = false;
     };
     QHash<int64_t, ClientEntry> clients;
     QHash<QString, int64_t> npidToUserId; // reverse lookup, protected by clientsLock
