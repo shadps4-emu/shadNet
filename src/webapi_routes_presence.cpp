@@ -411,7 +411,7 @@ void RegisterPresenceRoutes(QHttpServer& http, Database& db, SharedState& shared
                    }
 
                    bool online = false;
-                   QString platform, gameStatus, npTitleId, titleName;
+                   QString platform, gameStatus, gameData, npTitleId, titleName;
                    QHash<QString, QString> localized;
                    {
                        QReadLocker lk(&shared.clientsLock);
@@ -421,6 +421,7 @@ void RegisterPresenceRoutes(QHttpServer& http, Database& db, SharedState& shared
                            online = true;
                            platform = it->platform;
                            gameStatus = it->gameStatus;
+                           gameData = it->gameData;
                            npTitleId = it->npTitleId;
                            titleName = it->titleName;
                            localized = it->localizedGameStatus;
@@ -443,43 +444,18 @@ void RegisterPresenceRoutes(QHttpServer& http, Database& db, SharedState& shared
                        }
                    }
 
-                   QJsonObject presence;
-                   presence.insert(QStringLiteral("onlineStatus"),
-                                   online ? QStringLiteral("online") : QStringLiteral("offline"));
-                   if (type == QStringLiteral("primary")) {
-                       presence.insert(
-                           QStringLiteral("primaryInfo"),
-                           MakePresenceEntry(online, platform, gameStatus, npTitleId, titleName,
-                                             detail, /*forcePlatform=*/false));
-                   } else if (type == QStringLiteral("platform")) {
-                       QJsonArray list;
-                       // shadNet has a single platform (PS4); honor platform-narrowing.
-                       if (platReq.isEmpty() || platReq == QStringLiteral("PS4")) {
-                           list.append(MakePresenceEntry(online, QStringLiteral("PS4"), gameStatus,
-                                                         npTitleId, titleName, detail,
-                                                         /*forcePlatform=*/true));
-                       }
-                       presence.insert(QStringLiteral("platformInfoList"), list);
-                   } else { // incontext: the target's presence in games sharing the
-                            // caller's NP Communication ID (the requesting app's title).
-                       QJsonArray list;
-                       if (online && (platReq.isEmpty() ||
-                                      platReq == QStringLiteral("PS4"))) {
-                           QString callerComId, targetComId;
-                           {
-                               QReadLocker ul(&shared.usageLock);
-                               callerComId = shared.usageClientGame.value(*auth.userId);
-                               targetComId = shared.usageClientGame.value(targetId);
-                           }
-                           // Only list the entry when both run the same (non-empty) comId.
-                           if (!callerComId.isEmpty() && callerComId == targetComId) {
-                               list.append(MakePresenceEntry(
-                                   online, QStringLiteral("PS4"), gameStatus, npTitleId,
-                                   titleName, detail, /*forcePlatform=*/true));
-                           }
-                       }
-                       presence.insert(QStringLiteral("incontextInfoList"), list);
+                   // incontext: does the target share the caller's NP Comm ID?
+                   bool inSameGame = false;
+                   if (online && type == QStringLiteral("incontext")) {
+                       QReadLocker ul(&shared.usageLock);
+                       const QString callerComId =
+                           shared.usageClientGame.value(*auth.userId);
+                       inSameGame = !callerComId.isEmpty() &&
+                                    callerComId == shared.usageClientGame.value(targetId);
                    }
+                   const QJsonObject presence =
+                       MakePresence(type, online, platform, gameStatus, gameData, npTitleId,
+                                    titleName, detail, inSameGame, platReq);
 
                    QJsonObject body;
                    body.insert(QStringLiteral("npId"), EncodeNpId(onlineId));

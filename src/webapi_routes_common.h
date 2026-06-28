@@ -6,6 +6,7 @@
 #include <QHttpServerResponse>
 #include <QJsonDocument>
 #include <QJsonObject>
+#include <QJsonArray>
 #include <QSet>
 #include <QString>
 #include <QStringList>
@@ -82,15 +83,16 @@ inline void ParsePaging(const QUrlQuery& query, int fallbackDefault, int maxLimi
     }
 }
 
-// One presence entry: {onlineStatus, [platform], [gameTitleInfo], [gameStatus]}. Used as
-// primaryInfo and as a platformInfoList/incontextInfoList element. Detail (gameStatus /
-// gameTitleInfo) is included only when includeDetail is set; platform is emitted when the
-// user is online, or when forcePlatform is set (per-platform lists name the platform even
-// when offline). gameStatus is the only multilingual field (npLanguages applies to it).
+// One presence entry: {onlineStatus, [platform], [gameTitleInfo], [gameStatus], [gameData]}.
+// Used as primaryInfo and as a platformInfoList/incontextInfoList element. Detail (gameStatus,
+// gameData, gameTitleInfo) is included only when includeDetail is set; platform is emitted when
+// online, or when forcePlatform is set (per-platform lists name the platform even when offline).
+// gameData (free-form data) is surfaced only for same-game (incontext) entries -- callers pass
+// an empty gameData for primary/platform. gameStatus is the only multilingual field.
 inline QJsonObject MakePresenceEntry(bool online, const QString& platform,
-                                     const QString& gameStatus, const QString& npTitleId,
-                                     const QString& titleName, bool includeDetail,
-                                     bool forcePlatform) {
+                                     const QString& gameStatus, const QString& gameData,
+                                     const QString& npTitleId, const QString& titleName,
+                                     bool includeDetail, bool forcePlatform) {
     QJsonObject e;
     e.insert(QStringLiteral("onlineStatus"),
              online ? QStringLiteral("online") : QStringLiteral("offline"));
@@ -102,6 +104,9 @@ inline QJsonObject MakePresenceEntry(bool online, const QString& platform,
         if (!gameStatus.isEmpty()) {
             e.insert(QStringLiteral("gameStatus"), gameStatus);
         }
+        if (!gameData.isEmpty()) {
+            e.insert(QStringLiteral("gameData"), gameData);
+        }
         if (!npTitleId.isEmpty() || !titleName.isEmpty()) {
             QJsonObject gti;
             if (!npTitleId.isEmpty()) gti.insert(QStringLiteral("npTitleId"), npTitleId);
@@ -112,14 +117,36 @@ inline QJsonObject MakePresenceEntry(bool online, const QString& platform,
     return e;
 }
 
-// friendList embeds presence as {"primaryInfo": <entry>} (detail always included).
-inline QJsonObject MakePresenceObject(bool online, const QString& platform,
-                                      const QString& gameStatus, const QString& npTitleId,
-                                      const QString& titleName) {
+// Full presence object: {onlineStatus, <primaryInfo | platformInfoList | incontextInfoList>}
+// selected by presenceType (default primary). detail gates gameStatus/gameData/gameTitleInfo.
+// inSameGame: for incontext, whether this user shares the caller's NP Comm ID. platReq narrows
+// the platform/incontext lists (shadNet is PS4-only). Shared by friendList and GET presence.
+inline QJsonObject MakePresence(const QString& presenceType, bool online,
+                                const QString& platform, const QString& gameStatus,
+                                const QString& gameData, const QString& npTitleId,
+                                const QString& titleName, bool detail, bool inSameGame,
+                                const QString& platReq) {
     QJsonObject presence;
-    presence.insert(QStringLiteral("primaryInfo"),
-                    MakePresenceEntry(online, platform, gameStatus, npTitleId, titleName,
-                                      /*includeDetail=*/true, /*forcePlatform=*/false));
+    presence.insert(QStringLiteral("onlineStatus"),
+                    online ? QStringLiteral("online") : QStringLiteral("offline"));
+    const bool platOk = platReq.isEmpty() || platReq == QStringLiteral("PS4");
+    if (presenceType == QStringLiteral("platform")) {
+        QJsonArray list;
+        if (platOk)
+            list.append(MakePresenceEntry(online, QStringLiteral("PS4"), gameStatus, QString(),
+                                          npTitleId, titleName, detail, /*forcePlatform=*/true));
+        presence.insert(QStringLiteral("platformInfoList"), list);
+    } else if (presenceType == QStringLiteral("incontext")) {
+        QJsonArray list;
+        if (online && inSameGame && platOk)
+            list.append(MakePresenceEntry(online, QStringLiteral("PS4"), gameStatus, gameData,
+                                          npTitleId, titleName, detail, /*forcePlatform=*/true));
+        presence.insert(QStringLiteral("incontextInfoList"), list);
+    } else { // primary (default)
+        presence.insert(QStringLiteral("primaryInfo"),
+                        MakePresenceEntry(online, platform, gameStatus, QString(), npTitleId,
+                                          titleName, detail, /*forcePlatform=*/false));
+    }
     return presence;
 }
 

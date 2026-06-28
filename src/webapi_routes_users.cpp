@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
 #include "webapi_routes_users.h"
 
+#include <algorithm>
 #include <optional>
 
 #include <QByteArray>
@@ -72,9 +73,11 @@ QJsonObject BuildUserList(const QList<QPair<int64_t, QString>>& users, const QSt
 // onlineId and personalDetail.displayName are both the npid; avatarUrl is looked up from
 // the account table; isOfficiallyVerified defaults to false.
 QJsonObject BuildFriendList(Database& db, SharedState& shared,
-                            const QList<QPair<int64_t, QString>>& friends,
+                            QList<QPair<int64_t, QString>> friends, // by value: sorted/filtered
                             const QStringList& fields, bool isDefault, int offset, int limit,
-                            bool wantPresence) {
+                            bool wantPresence, const QString& presenceType, bool presenceDetail,
+                            const QString& filter, const QString& sortKey,
+                            const QString& direction, int64_t callerUserId) {
     const bool wantOnlineId = isDefault || fields.contains(QStringLiteral("onlineId"));
     const bool wantRegion = isDefault || fields.contains(QStringLiteral("region"));
     const bool wantDetail = isDefault || fields.contains(QStringLiteral("personalDetail")) ||
@@ -83,29 +86,79 @@ QJsonObject BuildFriendList(Database& db, SharedState& shared,
     const bool wantVerified = fields.contains(QStringLiteral("isOfficiallyVerified"));
     const bool wantNpId = isDefault || fields.contains(QStringLiteral("npId"));
 
-    const int total = static_cast<int>(friends.size());
-
-    // Snapshot each friend's presence (online == membership in the shared clients map,
-    // plus the in-game detail the presence PUTs stored). Done once under the read lock so
-    // we don't hold it across the per-entry DB lookups below.
+    // Snapshot each friend's presence (online == membership in the shared clients map, minus
+    // Appear-Offline, plus the in-game detail the presence PUTs stored). Also capture comId
+    // (for incontext / same-game) under the separate usageLock. Done once up front so we don't
+    // hold a lock across the per-entry DB lookups below.
     struct PresenceSnap {
         QString gameStatus;
+        QString gameData;
         QString npTitleId;
         QString titleName;
         QString platform;
+        QString comId;
     };
     QHash<int64_t, PresenceSnap> onlineFriends;
+    QString callerComId;
     if (wantPresence) {
-        QReadLocker lk(&shared.clientsLock);
-        for (const auto& fr : friends) {
-            auto it = shared.clients.find(fr.first);
-            // Appear-Offline friends are omitted -> uniformly treated as offline (no detail).
-            if (it != shared.clients.end() && !it->appearOffline) {
-                onlineFriends.insert(fr.first,
-                                     {it->gameStatus, it->npTitleId, it->titleName, it->platform});
+        {
+            QReadLocker lk(&shared.clientsLock);
+            for (const auto& fr : friends) {
+                auto it = shared.clients.find(fr.first);
+                if (it != shared.clients.end() && !it->appearOffline) {
+                    onlineFriends.insert(fr.first, {it->gameStatus, it->gameData, it->npTitleId,
+                                                    it->titleName, it->platform, QString()});
+                }
             }
         }
+        {
+            QReadLocker ul(&shared.usageLock);
+            callerComId = shared.usageClientGame.value(callerUserId);
+            for (auto sit = onlineFriends.begin(); sit != onlineFriends.end(); ++sit)
+                sit.value().comId = shared.usageClientGame.value(sit.key());
+        }
     }
+    const bool inSameGame_caller = !callerComId.isEmpty();
+
+    // filter=online -> only online friends; filter=incontext -> only same-comId friends.
+    if (wantPresence && (filter == QStringLiteral("online") ||
+                         filter == QStringLiteral("incontext"))) {
+        QList<QPair<int64_t, QString>> kept;
+        for (const auto& fr : friends) {
+            const auto snap = onlineFriends.constFind(fr.first);
+            const bool online = (snap != onlineFriends.constEnd());
+            if (filter == QStringLiteral("online")) {
+                if (online) kept.append(fr);
+            } else { // incontext
+                if (online && inSameGame_caller && snap->comId == callerComId)
+                    kept.append(fr);
+            }
+        }
+        friends = kept;
+    }
+
+    // sort=onlineId | onlineStatus | onlineStatus+onlineId ; direction asc|desc.
+    if (!sortKey.isEmpty()) {
+        const bool desc = (direction == QStringLiteral("desc"));
+        const bool byStatus = sortKey.startsWith(QStringLiteral("onlineStatus"));
+        const bool thenId = sortKey == QStringLiteral("onlineStatus+onlineId");
+        auto rank = [&](int64_t id) { // 0 = online, 1 = offline (asc puts online first)
+            return onlineFriends.contains(id) ? 0 : 1;
+        };
+        std::stable_sort(friends.begin(), friends.end(),
+                         [&](const QPair<int64_t, QString>& a, const QPair<int64_t, QString>& b) {
+                             if (byStatus) {
+                                 const int ra = rank(a.first), rb = rank(b.first);
+                                 if (ra != rb)
+                                     return desc ? ra > rb : ra < rb;
+                                 if (!thenId)
+                                     return false; // stable: keep relative order
+                             }
+                             const int c = a.second.compare(b.second, Qt::CaseInsensitive);
+                             return desc ? c > 0 : c < 0;
+                         });
+    }
+    const int total = static_cast<int>(friends.size());
 
     QJsonArray arr;
     for (int i = offset; i < total && static_cast<int>(arr.size()) < limit; ++i) {
@@ -138,10 +191,17 @@ QJsonObject BuildFriendList(Database& db, SharedState& shared,
         if (wantPresence) {
             const auto snap = onlineFriends.constFind(accountId);
             const bool online = (snap != onlineFriends.constEnd());
-            entry.insert(QStringLiteral("presence"),
-                         online ? MakePresenceObject(true, snap->platform, snap->gameStatus,
-                                                     snap->npTitleId, snap->titleName)
-                                : MakePresenceObject(false, {}, {}, {}, {}));
+            const bool sameGame =
+                online && inSameGame_caller && snap->comId == callerComId;
+            const QString type =
+                presenceType.isEmpty() ? QStringLiteral("primary") : presenceType;
+            entry.insert(
+                QStringLiteral("presence"),
+                online ? MakePresence(type, true, snap->platform, snap->gameStatus,
+                                      snap->gameData, snap->npTitleId, snap->titleName,
+                                      presenceDetail, sameGame, QString())
+                       : MakePresence(type, false, {}, {}, {}, {}, {}, presenceDetail, false,
+                                      QString()));
         }
         arr.append(entry);
     }
@@ -181,6 +241,9 @@ void RegisterUserRoutes(QHttpServer& http, Database& db, SharedState& shared) {
                 QStringLiteral("offset"),
                 QStringLiteral("presenceType"),
                 QStringLiteral("presenceDetail"),
+                QStringLiteral("filter"),
+                QStringLiteral("sort"),
+                QStringLiteral("direction"),
             };
             LogUnsupportedQueryParams(req, kKnown);
 
@@ -221,13 +284,29 @@ void RegisterUserRoutes(QHttpServer& http, Database& db, SharedState& shared) {
             int offset = 0;
             ParsePaging(query, 100, 500, limit, offset);
 
-            const bool wantPresence =
-                query.hasQueryItem(QStringLiteral("presenceType")) ||
-                query.hasQueryItem(QStringLiteral("presenceDetail")) ||
-                fields.contains(QStringLiteral("presence"));
+            // presenceType selects the presence member; presence is included only when
+            // presenceType is given (presenceDetail alone is ignored per the SDK).
+            const QString presenceType = query.queryItemValue(QStringLiteral("presenceType"));
+            const bool wantPresence = !presenceType.isEmpty();
+            if (!presenceType.isEmpty() && presenceType != QStringLiteral("primary") &&
+                presenceType != QStringLiteral("platform") &&
+                presenceType != QStringLiteral("incontext")) {
+                return JsonError(
+                    QHttpServerResponse::StatusCode::BadRequest, UP_INVALID_QUERY_PARAM,
+                    QStringLiteral("Invalid parameter in query string (parameter: 'presenceType')"));
+            }
+            // presenceDetail ignored when presenceType is absent.
+            const bool presenceDetail =
+                wantPresence &&
+                query.queryItemValue(QStringLiteral("presenceDetail")) == QStringLiteral("true");
+            const QString filter = query.queryItemValue(QStringLiteral("filter"));
+            const QString sortKey = query.queryItemValue(QStringLiteral("sort"));
+            const QString direction = query.queryItemValue(QStringLiteral("direction"));
             const auto friends = db.GetRelationships(*auth.userId).friends;
-            const QJsonObject body = BuildFriendList(db, shared, friends, fields, isDefault,
-                                                     offset, limit, wantPresence);
+            const QJsonObject body =
+                BuildFriendList(db, shared, friends, fields, isDefault, offset, limit,
+                                wantPresence, presenceType, presenceDetail, filter, sortKey,
+                                direction, *auth.userId);
             qInfo() << "WebAPI: friendList for" << auth.npid << "-> total" << friends.size();
             return JsonOk(body);
         });
