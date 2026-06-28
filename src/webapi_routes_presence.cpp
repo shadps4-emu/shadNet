@@ -75,6 +75,14 @@ QHttpServerResponse HandlePresenceWrite(Database& db, SharedState& shared, const
                          QStringLiteral("'gameStatus' is required in the request body"));
     }
 
+    // SDK: localizedGameStatus may only be set alongside a default gameStatus.
+    if (obj.contains(QStringLiteral("localizedGameStatus")) &&
+        !obj.contains(QStringLiteral("gameStatus"))) {
+        return JsonError(QHttpServerResponse::StatusCode::BadRequest, UP_QUERY_PARAM_REQUIRED,
+                         QStringLiteral("'gameStatus' (default) is required when "
+                                        "'localizedGameStatus' is specified"));
+    }
+
     // Write the published detail into the caller's live presence entry.
     {
         QWriteLocker lk(&shared.clientsLock);
