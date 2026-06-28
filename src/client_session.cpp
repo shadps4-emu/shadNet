@@ -225,7 +225,7 @@ void ClientSession::CleanupOnDisconnect() {
 
     // Collect send functions for every online friend before releasing the lock,
     // then remove ourselves from the map.
-    QVector<std::function<void(QByteArray)>> friendSenders;
+    QVector<QPair<std::function<void(QByteArray)>, QString>> friendSenders; // (send, npid)
     {
         QWriteLocker lk(&m_shared->clientsLock);
         auto self = m_shared->clients.find(m_info.userId);
@@ -233,7 +233,7 @@ void ClientSession::CleanupOnDisconnect() {
             for (auto it = self->friends.begin(); it != self->friends.end(); ++it) {
                 auto friendEntry = m_shared->clients.find(it.key());
                 if (friendEntry != m_shared->clients.end())
-                    friendSenders.append(friendEntry->send);
+                    friendSenders.append({friendEntry->send, friendEntry->npid});
             }
             m_shared->clients.erase(self);
             m_shared->npidToUserId.remove(m_info.npid);
@@ -254,14 +254,15 @@ void ClientSession::CleanupOnDisconnect() {
     const std::string s = ns.SerializeAsString();
     appendBlob(payload, QByteArray(s.data(), static_cast<int>(s.size())));
     QByteArray pkt = BuildNotification(NotificationType::FriendStatus, payload);
-    // WebApi: presence changed (went offline) -> notify friends' push listeners.
-    QByteArray webApiPkt = BuildNotification(
-        NotificationType::WebApiPushEvent,
-        BuildWebApiPushPayload(QString(), 0, QStringLiteral("np:service:presence:onlineStatus"),
-                               QByteArray(), m_info.npid, QString()));
-    for (const auto& send : friendSenders) {
+    // WebApi onlineStatus presence update (went offline): service name None (basic push).
+    // from = us, to = each recipient (per SDK event content), so build per-recipient.
+    for (const auto& [send, friendNpid] : friendSenders) {
         send(pkt);
-        send(webApiPkt);
+        send(BuildNotification(
+            NotificationType::WebApiPushEvent,
+            BuildWebApiPushPayload(QString(), 0,
+                                   QStringLiteral("np:service:presence:onlineStatus"),
+                                   QByteArray(), m_info.npid, friendNpid)));
     }
 
     qInfo() << "Client disconnected:" << m_info.npid;
