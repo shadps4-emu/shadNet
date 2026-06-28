@@ -13,6 +13,7 @@
 #include "webapi_auth.h"
 #include "webapi_routes_presence.h"
 #include "webapi_routes_profile.h"
+#include "webapi_routes_session.h"
 
 WebApiServer::WebApiServer(QObject* parent) : QObject(parent) {}
 WebApiServer::~WebApiServer() = default;
@@ -63,6 +64,7 @@ void WebApiServer::RegisterRoutes() {
     WebApiRoutes::RegisterUserRoutes(*m_http, *m_db, *m_shared);
     WebApiRoutes::RegisterProfileRoutes(*m_http, *m_db, *m_shared);
     WebApiRoutes::RegisterPresenceRoutes(*m_http, *m_db, *m_shared);
+    WebApiRoutes::RegisterSessionRoutes(*m_http, *m_db, *m_shared);
 
     m_http->setMissingHandler(
         this, [](const QHttpServerRequest& req, QHttpServerResponder& responder) {
