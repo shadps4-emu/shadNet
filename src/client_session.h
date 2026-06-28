@@ -14,7 +14,7 @@
 #include <QTcpSocket>
 #include <database.h>
 #include "config.h"
-#include "matching.h"
+#include "matching_types.h"
 #include "protocol.h"
 #include "score_cache.h"
 #include "score_db.h"
@@ -174,8 +174,8 @@ private:
     // Matching helpers (cmd_matching.cpp)
     void SendMatchingNotification(NotificationType type, const QByteArray& payload,
                                   const QString& targetNpid);
-    void NotifyRoomMembers(NotificationType type, const QByteArray& payload, uint64_t roomId,
-                           const QString& excludeNpid = {});
+    void NotifyRoomMembers(NotificationType type, const QByteArray& payload, const QString& comId,
+                           uint64_t roomId, const QString& excludeNpid = {});
     void DoLeaveRoom(uint64_t roomId);
     void CleanupMatchingOnDisconnect();
     void ResetMatchingRoomState(uint64_t roomId);

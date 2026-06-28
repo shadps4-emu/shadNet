@@ -66,8 +66,6 @@ enum class NotificationType : uint16_t {
     RequestEvent = 9,             // Room request completed (create/join/leave/kickout)
     MemberJoined = 10,            // A member joined the room
     MemberLeft = 11,              // A member left the room
-    SignalingHelper = 12,         // Peer P2P address exchange
-    SignalingEvent = 13,          // NpMatching2-layer signaling event (0x5102 ESTABLISHED)
     RoomDataInternalUpdated = 15, // Room internal data changed (broadcast to other members)
     KickedOut = 16,               // Local room event (0x1103) for the member who was removed
     // Generic NP WebApi push event, forwarded verbatim to the emulator's
