@@ -68,8 +68,8 @@ QJsonObject BuildUserList(const QList<QPair<int64_t, QString>>& users, const QSt
     return body;
 }
 
-// friendList entries carry the requested members directly (not wrapped in user:{} like
-// the block/profile shape). shadNet stores only (accountId, npid) per relationship, so
+// friendList entries nest identity in user:{onlineId, accountId} (same shape as block/
+// profile). shadNet stores only (accountId, npid) per relationship, so
 // onlineId and personalDetail.displayName are both the npid; avatarUrl is looked up from
 // the account table; isOfficiallyVerified defaults to false.
 QJsonObject BuildFriendList(Database& db, SharedState& shared,
@@ -78,13 +78,16 @@ QJsonObject BuildFriendList(Database& db, SharedState& shared,
                             bool wantPresence, const QString& presenceType, bool presenceDetail,
                             const QString& filter, const QString& sortKey,
                             const QString& direction, int64_t callerUserId) {
-    const bool wantOnlineId = isDefault || fields.contains(QStringLiteral("onlineId"));
+    // @default == user,region,npId. personalDetail / avatarUrl / isOfficiallyVerified are NOT
+    // in @default and must be requested explicitly.
+    const bool wantUser = isDefault || fields.contains(QStringLiteral("user"));
     const bool wantRegion = isDefault || fields.contains(QStringLiteral("region"));
-    const bool wantDetail = isDefault || fields.contains(QStringLiteral("personalDetail")) ||
-                            fields.contains(QStringLiteral("personalDetail.displayName"));
-    const bool wantAvatar = isDefault || fields.contains(QStringLiteral("avatarUrl"));
-    const bool wantVerified = fields.contains(QStringLiteral("isOfficiallyVerified"));
     const bool wantNpId = isDefault || fields.contains(QStringLiteral("npId"));
+    const bool wantDetail = fields.contains(QStringLiteral("personalDetail")) ||
+                            fields.contains(QStringLiteral("personalDetail.displayName"));
+    const bool wantAvatar = fields.contains(QStringLiteral("avatarUrl")) ||
+                            fields.contains(QStringLiteral("avatarUrls"));
+    const bool wantVerified = fields.contains(QStringLiteral("isOfficiallyVerified"));
 
     // Snapshot each friend's presence (online == membership in the shared clients map, minus
     // Appear-Offline, plus the in-game detail the presence PUTs stored). Also capture comId
@@ -165,8 +168,11 @@ QJsonObject BuildFriendList(Database& db, SharedState& shared,
         const int64_t accountId = friends[i].first;
         const QString& npid = friends[i].second;
         QJsonObject entry;
-        if (wantOnlineId) {
-            entry.insert(QStringLiteral("onlineId"), npid);
+        if (wantUser) {
+            QJsonObject user;
+            user.insert(QStringLiteral("onlineId"), npid);
+            user.insert(QStringLiteral("accountId"), QString::number(accountId));
+            entry.insert(QStringLiteral("user"), user);
         }
         if (wantNpId) {
             entry.insert(QStringLiteral("npId"), EncodeNpId(npid));
