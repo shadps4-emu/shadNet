@@ -171,6 +171,95 @@ bool ResolveTarget(Database& db, const QString& userKey, const WebApiAuth::AuthR
 // sessions are visible only to participants (invitations are not modeled), so inaccessible
 // private sessions are filtered out rather than returned (the documented 2114560 'not
 // permitted' error applies to direct single-session access, not this list).
+// One of a user's visible sessions, with every field the session-list endpoints can emit.
+struct SessionRow {
+    QString sessionId;
+    QString platform;
+    QString sessionName;
+    QHash<QString, QString> locName;
+    qint64 createdAt = 0;
+    QStringList availablePlatforms;
+    int memberCount = 0;
+    bool lockFlag = false;
+    int index = 0;
+    int priority = 0;
+    qint64 joinedAt = 0;
+};
+
+// Collect targetId's sessions visible to callerId (public, or private when the caller is a
+// participant -- invitations not modeled), then select either the indices in indexFilter or, with
+// no filter, the single highest-priority + most-recently-joined session. Shared by the single- and
+// multi-user session-list endpoints so privacy/selection stay identical.
+QList<SessionRow> CollectUserSessions(SharedState& shared, int64_t targetId, int64_t callerId,
+                                      bool hasIndexFilter, const QSet<int>& indexFilter) {
+    QList<SessionRow> rows;
+    {
+        QReadLocker lk(&shared.sessionsLock);
+        for (auto it = shared.sessions.cbegin(); it != shared.sessions.cend(); ++it) {
+            const auto& s = it.value();
+            const SharedState::SessionMember* tm = nullptr;
+            bool callerIsMember = false;
+            for (const auto& m : s.members) {
+                if (m.userId == targetId)
+                    tm = &m;
+                if (m.userId == callerId)
+                    callerIsMember = true;
+            }
+            if (!tm)
+                continue;
+            if (s.sessionPrivacy == QStringLiteral("private") && !callerIsMember)
+                continue;
+            SessionRow r;
+            r.sessionId = s.sessionId;
+            r.platform = tm->platform;
+            r.sessionName = s.sessionName;
+            r.locName = s.localizedSessionNames;
+            r.createdAt = s.createdAt;
+            r.availablePlatforms = s.availablePlatforms;
+            r.memberCount = static_cast<int>(s.members.size());
+            r.lockFlag = s.sessionLockFlag;
+            r.index = tm->index;
+            r.priority = tm->priority;
+            r.joinedAt = tm->joinedAt;
+            rows.append(r);
+        }
+    }
+    QList<SessionRow> selected;
+    if (hasIndexFilter) {
+        for (const auto& r : rows)
+            if (indexFilter.contains(r.index))
+                selected.append(r);
+    } else {
+        const SessionRow* best = nullptr;
+        for (const auto& r : rows) {
+            if (!best || r.priority > best->priority ||
+                (r.priority == best->priority && r.joinedAt > best->joinedAt))
+                best = &r;
+        }
+        if (best)
+            selected.append(*best);
+    }
+    return selected;
+}
+
+// Parse an "index" query item (comma-separated indices) into a filter set.
+QSet<int> ParseIndexFilter(const QUrlQuery& query, bool& hasFilter) {
+    hasFilter = query.hasQueryItem(QStringLiteral("index"));
+    QSet<int> f;
+    if (hasFilter) {
+        for (const QString& tok : query.queryItemValue(QStringLiteral("index"))
+                                      .split(QLatin1Char(','), Qt::SkipEmptyParts)) {
+            bool ok = false;
+            const int i = tok.toInt(&ok);
+            if (ok)
+                f.insert(i);
+        }
+    }
+    return f;
+}
+
+// GET /v1/users/<arg>/sessions -- a single user's sessions (fields: platform,sessionId default;
+// index,priority additive).
 QHttpServerResponse HandleSessionList(Database& db, SharedState& shared, const QString& userKey,
                                       const QHttpServerRequest& req) {
     auto auth = WebApiAuth::Authenticate(req, db);
@@ -181,7 +270,6 @@ QHttpServerResponse HandleSessionList(Database& db, SharedState& shared, const Q
     const bool resolved = ResolveTarget(db, userKey, auth, targetId);
 
     const QUrlQuery query(req.url());
-    // fields: @default (omitted) == platform,sessionId.
     const QStringList fields =
         query.queryItemValue(QStringLiteral("fields")).split(QLatin1Char(','), Qt::SkipEmptyParts);
     const bool isDefault = fields.isEmpty();
@@ -190,75 +278,24 @@ QHttpServerResponse HandleSessionList(Database& db, SharedState& shared, const Q
     const bool wantIndex = fields.contains(QStringLiteral("index"));
     const bool wantPriority = fields.contains(QStringLiteral("priority"));
 
-    const bool hasIndexFilter = query.hasQueryItem(QStringLiteral("index"));
-    QSet<int> indexFilter;
-    if (hasIndexFilter) {
-        for (const QString& tok : query.queryItemValue(QStringLiteral("index"))
-                                      .split(QLatin1Char(','), Qt::SkipEmptyParts)) {
-            bool ok = false;
-            const int i = tok.toInt(&ok);
-            if (ok)
-                indexFilter.insert(i);
-        }
-    }
+    bool hasIndexFilter = false;
+    const QSet<int> indexFilter = ParseIndexFilter(query, hasIndexFilter);
 
-    struct Entry {
-        QString sessionId;
-        QString platform;
-        int index = 0;
-        int priority = 0;
-        qint64 joinedAt = 0;
-    };
-    QList<Entry> entries;
-    if (resolved) {
-        QReadLocker lk(&shared.sessionsLock);
-        for (auto it = shared.sessions.cbegin(); it != shared.sessions.cend(); ++it) {
-            const auto& s = it.value();
-            const SharedState::SessionMember* tm = nullptr;
-            bool callerIsMember = false;
-            for (const auto& m : s.members) {
-                if (m.userId == targetId)
-                    tm = &m;
-                if (m.userId == *auth.userId)
-                    callerIsMember = true;
-            }
-            if (!tm)
-                continue; // target not a member of this session
-            if (s.sessionPrivacy == QStringLiteral("private") && !callerIsMember)
-                continue; // private + caller not a participant
-            entries.append({s.sessionId, tm->platform, tm->index, tm->priority, tm->joinedAt});
-        }
-    }
-
-    // Selection: explicit index filter, else the single highest-priority + most-recently
-    // joined session (higher priority value == higher priority).
-    QList<Entry> selected;
-    if (hasIndexFilter) {
-        for (const auto& e : entries)
-            if (indexFilter.contains(e.index))
-                selected.append(e);
-    } else {
-        const Entry* best = nullptr;
-        for (const auto& e : entries) {
-            if (!best || e.priority > best->priority ||
-                (e.priority == best->priority && e.joinedAt > best->joinedAt))
-                best = &e;
-        }
-        if (best)
-            selected.append(*best);
-    }
+    QList<SessionRow> selected;
+    if (resolved)
+        selected = CollectUserSessions(shared, targetId, *auth.userId, hasIndexFilter, indexFilter);
 
     QJsonArray arr;
-    for (const auto& e : selected) {
+    for (const auto& r : selected) {
         QJsonObject o;
         if (wantPlatform)
-            o.insert(QStringLiteral("platform"), e.platform);
+            o.insert(QStringLiteral("platform"), r.platform);
         if (wantSessionId)
-            o.insert(QStringLiteral("sessionId"), e.sessionId);
+            o.insert(QStringLiteral("sessionId"), r.sessionId);
         if (wantIndex)
-            o.insert(QStringLiteral("index"), e.index);
+            o.insert(QStringLiteral("index"), r.index);
         if (wantPriority)
-            o.insert(QStringLiteral("priority"), e.priority);
+            o.insert(QStringLiteral("priority"), r.priority);
         arr.append(o);
     }
     QJsonObject body;
@@ -266,7 +303,102 @@ QHttpServerResponse HandleSessionList(Database& db, SharedState& shared, const Q
     body.insert(QStringLiteral("start"), 0);
     body.insert(QStringLiteral("size"), static_cast<int>(arr.size()));
     body.insert(QStringLiteral("totalResults"), static_cast<int>(arr.size()));
-    qInfo() << "WebAPI: session list for target" << targetId << "-> " << arr.size();
+    qInfo() << "WebAPI: session list for target" << targetId << "->" << arr.size();
+    return JsonOk(body);
+}
+
+// GET /v1/users/@users/sessions?accountIds=... -- multiple users' sessions. @default ==
+// platform,sessionId; sessionName/sessionCreateTimestamp/availablePlatforms/memberCount/
+// sessionLockFlag/index/priority are additive. Users with no visible session are omitted; the
+// envelope is just {users:[...]} (no start/size/totalResults).
+QHttpServerResponse HandleMultiUserSessions(Database& db, SharedState& shared,
+                                            const QHttpServerRequest& req) {
+    auto auth = WebApiAuth::Authenticate(req, db);
+    if (!auth.userId.has_value()) {
+        return std::move(auth.errorResponse);
+    }
+    const QUrlQuery query(req.url());
+    if (!query.hasQueryItem(QStringLiteral("accountIds"))) {
+        return JsonError(QHttpServerResponse::StatusCode::BadRequest, SESSION_BAD_REQUEST,
+                         QStringLiteral("'accountIds' parameter required in query string"));
+    }
+    const QStringList ids = query.queryItemValue(QStringLiteral("accountIds"))
+                                .split(QLatin1Char(','), Qt::SkipEmptyParts);
+    if (ids.isEmpty() || ids.size() > 50) {
+        return JsonError(QHttpServerResponse::StatusCode::BadRequest, SESSION_BAD_REQUEST,
+                         QStringLiteral("'accountIds' must list 1-50 account IDs"));
+    }
+
+    const QStringList fields =
+        query.queryItemValue(QStringLiteral("fields")).split(QLatin1Char(','), Qt::SkipEmptyParts);
+    const bool isDefault = fields.isEmpty() || fields.contains(QStringLiteral("@default"));
+    const bool wantPlatform = isDefault || fields.contains(QStringLiteral("platform"));
+    const bool wantSessionId = isDefault || fields.contains(QStringLiteral("sessionId"));
+    const bool wantName = fields.contains(QStringLiteral("sessionName"));
+    const bool wantCreateTs = fields.contains(QStringLiteral("sessionCreateTimestamp"));
+    const bool wantPlatforms = fields.contains(QStringLiteral("availablePlatforms"));
+    const bool wantMemberCount = fields.contains(QStringLiteral("memberCount"));
+    const bool wantLockFlag = fields.contains(QStringLiteral("sessionLockFlag"));
+    const bool wantIndex = fields.contains(QStringLiteral("index"));
+    const bool wantPriority = fields.contains(QStringLiteral("priority"));
+    const QString npLanguage = query.queryItemValue(QStringLiteral("npLanguage"));
+
+    bool hasIndexFilter = false;
+    const QSet<int> indexFilter = ParseIndexFilter(query, hasIndexFilter);
+
+    QJsonArray users;
+    for (const QString& idStr : ids) {
+        bool ok = false;
+        const qlonglong accId = idStr.toLongLong(&ok);
+        if (!ok)
+            continue;
+        const QList<SessionRow> rows =
+            CollectUserSessions(shared, accId, *auth.userId, hasIndexFilter, indexFilter);
+        if (rows.isEmpty())
+            continue; // user with no visible session is omitted
+        QJsonArray arr;
+        for (const auto& r : rows) {
+            QJsonObject o;
+            if (wantPlatform)
+                o.insert(QStringLiteral("platform"), r.platform);
+            if (wantSessionId)
+                o.insert(QStringLiteral("sessionId"), r.sessionId);
+            if (wantName) {
+                QString name = r.sessionName;
+                if (!npLanguage.isEmpty()) {
+                    const auto n = r.locName.constFind(npLanguage);
+                    if (n != r.locName.constEnd())
+                        name = n.value();
+                }
+                o.insert(QStringLiteral("sessionName"), name);
+            }
+            if (wantCreateTs)
+                o.insert(QStringLiteral("sessionCreateTimestamp"), r.createdAt);
+            if (wantPlatforms) {
+                QJsonArray a;
+                for (const auto& pf : r.availablePlatforms)
+                    a.append(pf);
+                o.insert(QStringLiteral("availablePlatforms"), a);
+            }
+            if (wantMemberCount)
+                o.insert(QStringLiteral("memberCount"), r.memberCount);
+            if (wantLockFlag)
+                o.insert(QStringLiteral("sessionLockFlag"), r.lockFlag);
+            if (wantIndex)
+                o.insert(QStringLiteral("index"), r.index);
+            if (wantPriority)
+                o.insert(QStringLiteral("priority"), r.priority);
+            arr.append(o);
+        }
+        QJsonObject u;
+        u.insert(QStringLiteral("onlineId"), db.GetUsername(accId).value_or(QString()));
+        u.insert(QStringLiteral("accountId"), QString::number(accId));
+        u.insert(QStringLiteral("sessions"), arr);
+        users.append(u);
+    }
+    QJsonObject body;
+    body.insert(QStringLiteral("users"), users);
+    qInfo() << "WebAPI: multi-user session list ->" << users.size() << "user(s)";
     return JsonOk(body);
 }
 
@@ -619,6 +751,8 @@ void RegisterSessionRoutes(QHttpServer& http, Database& db, SharedState& shared)
     http.route("/v1/users/<arg>/sessions",
                [&db, &shared](const QString& userKey,
                               const QHttpServerRequest& req) -> QHttpServerResponse {
+                   if (userKey == QStringLiteral("@users"))
+                       return HandleMultiUserSessions(db, shared, req);
                    return HandleSessionList(db, shared, userKey, req);
                });
 
