@@ -2,7 +2,10 @@
 // SPDX-FileCopyrightText: Copyright 2026 shadNet Project
 // SPDX-License-Identifier: GPL-2.0-or-later
 #include <QDateTime>
+#include <QJsonDocument>
+#include <QJsonObject>
 #include "client_session.h"
+#include "proto_utils.h"
 #include "protocol.h"
 #include "shadnet.pb.h"
 #include "stream_extractor.h"
@@ -169,6 +172,8 @@ ErrorType ClientSession::DispatchCommand(CommandType cmd, StreamExtractor& se, Q
         return CmdAddBlock(se);
     case CommandType::RemoveBlock:
         return CmdRemoveBlock(se);
+    case CommandType::SetAppearOffline:
+        return CmdSetAppearOffline(se);
     case CommandType::GetBoardInfos:
         return CmdGetBoardInfos(se, reply);
     case CommandType::RecordScore:
@@ -323,6 +328,96 @@ QByteArray ClientSession::BuildWebApiPushPayload(
         appendBlob(payload, kv.second.toUtf8());
     }
     return payload;
+}
+
+// Mid-session Appear-Offline toggle. Applies the flag, then notifies friends of the
+// resulting online-status change (per SDK, toggling the setting updates online status):
+//  - onlineStatus (service None) to ALL online friends -> they re-fetch and see the new
+//    state (online when disabling, offline when enabling);
+//  - gameStatus/gameData/gameTitleInfo (service inGamePresence) to SAME-comId friends, but
+//    only for fields that are set ('in a state with the ... set'); a body is attached only
+//    when going online with sticky notificationWithData (offline => unobservable => no body).
+ErrorType ClientSession::CmdSetAppearOffline(StreamExtractor& data) {
+    shadnet::SetAppearOfflineRequest req;
+    if (!decodeProto(req, data) || data.error())
+        return ErrorType::Malformed;
+    const bool enable = req.appear_offline();
+
+    QString myNpid, gameStatusVal, gameDataVal;
+    bool hasGameStatus = false, hasGameData = false, hasTitle = false, notifyWithData = false;
+    QList<QPair<int64_t, QString>> friends; // (userId, npid) of online friends
+    {
+        QWriteLocker lk(&m_shared->clientsLock);
+        auto self = m_shared->clients.find(m_info.userId);
+        if (self == m_shared->clients.end() || self->appearOffline == enable)
+            return ErrorType::NoError; // unregistered or no change
+        self->appearOffline = enable;
+        myNpid = self->npid;
+        hasGameStatus = !self->gameStatus.isEmpty();
+        hasGameData = !self->gameData.isEmpty();
+        hasTitle = !self->npTitleId.isEmpty() || !self->titleName.isEmpty();
+        notifyWithData = self->notifyWithData;
+        gameStatusVal = self->gameStatus;
+        gameDataVal = self->gameData;
+        for (auto fr = self->friends.cbegin(); fr != self->friends.cend(); ++fr) {
+            auto fit = m_shared->clients.find(fr.key());
+            if (fit != m_shared->clients.end() && fit->send)
+                friends.append({fr.key(), fit->npid});
+        }
+    }
+    qInfo() << "Appear-Offline" << (enable ? "enabled" : "disabled") << "for" << myNpid;
+
+    const bool nowOnline = !enable;
+    static const QString kOnlineStatus = QStringLiteral("np:service:presence:onlineStatus");
+    // 1) onlineStatus to ALL online friends (service None, not comId-gated).
+    for (const auto& f : friends)
+        PushWebApiEvent(QString(), 0, kOnlineStatus, QByteArray(), myNpid, f.second, f.first);
+
+    // 2) in-game events to SAME-comId friends, only while in a game.
+    QString myComId;
+    QSet<int64_t> sameComId;
+    {
+        QReadLocker ul(&m_shared->usageLock);
+        myComId = m_shared->usageClientGame.value(m_info.userId);
+        if (!myComId.isEmpty()) {
+            for (auto it = m_shared->usageClientGame.cbegin();
+                 it != m_shared->usageClientGame.cend(); ++it) {
+                if (it.value() == myComId)
+                    sameComId.insert(it.key());
+            }
+        }
+    }
+    if (!myComId.isEmpty()) {
+        static const QString kInGame = QStringLiteral("inGamePresence");
+        static const QString kTitle = QStringLiteral("np:service:presence:gameTitleInfo");
+        static const QString kStatus = QStringLiteral("np:service:presence:gameStatus");
+        static const QString kData = QStringLiteral("np:service:presence:gameData");
+        for (const auto& f : friends) {
+            if (!sameComId.contains(f.first))
+                continue;
+            if (hasTitle)
+                PushWebApiEvent(kInGame, 0, kTitle, QByteArray(), myNpid, f.second, f.first);
+            if (hasGameStatus) {
+                QByteArray body;
+                if (nowOnline && notifyWithData) {
+                    QJsonObject o;
+                    o.insert(QStringLiteral("gameStatus"), gameStatusVal);
+                    body = QJsonDocument(o).toJson(QJsonDocument::Compact);
+                }
+                PushWebApiEvent(kInGame, 0, kStatus, body, myNpid, f.second, f.first);
+            }
+            if (hasGameData) {
+                QByteArray body;
+                if (nowOnline && notifyWithData) {
+                    QJsonObject o;
+                    o.insert(QStringLiteral("gameData"), gameDataVal);
+                    body = QJsonDocument(o).toJson(QJsonDocument::Compact);
+                }
+                PushWebApiEvent(kInGame, 0, kData, body, myNpid, f.second, f.first);
+            }
+        }
+    }
+    return ErrorType::NoError;
 }
 
 void ClientSession::EmitPresenceGameTitleInfo() {

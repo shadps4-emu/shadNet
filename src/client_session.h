@@ -142,6 +142,7 @@ public:
     ErrorType CmdRemoveFriend(StreamExtractor& data);
     ErrorType CmdAddBlock(StreamExtractor& data);
     ErrorType CmdRemoveBlock(StreamExtractor& data);
+    ErrorType CmdSetAppearOffline(StreamExtractor& data);
 
     // commands cmd_score.cpp
     ErrorType CmdGetBoardInfos(StreamExtractor& data, QByteArray& reply);
