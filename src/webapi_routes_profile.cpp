@@ -24,33 +24,24 @@ namespace WebApiRoutes {
 namespace {
 
 // GET /v1/profiles?onlineId=<a[,b,...]>
-QJsonObject BuildProfiles(Database& db, const QStringList& onlineIds, const QStringList& fields,
-                          bool isDefault) {
-    const bool wantOnlineId = isDefault || fields.contains(QStringLiteral("onlineId"));
-    const bool wantNpId = isDefault || fields.contains(QStringLiteral("npId"));
-    const bool wantAvatar = isDefault || fields.contains(QStringLiteral("avatarUrl"));
+// Defined below; declared here so the batch builder can delegate to it.
+QJsonObject BuildProfile(Database& db, SharedState& shared, qint64 userId,
+                         const QString& onlineId, const QStringList& fields, bool isDefault);
 
+// Batch profiles: accountIds are numeric account IDs. Each entry reuses the single-user
+// builder so every field behaves identically. (presence is not a batch field per the SDK.)
+QJsonObject BuildProfiles(Database& db, SharedState& shared, const QStringList& accountIds,
+                          const QStringList& fields, bool isDefault) {
     QJsonArray arr;
-    for (const QString& requested : onlineIds) {
-        const auto uid = db.GetUserId(requested);
-        if (!uid) {
-            continue; // unknown handle -- skip rather than fail the whole request
-        }
-        const QString onlineId = db.GetUsername(*uid).value_or(requested);
-        QJsonObject entry;
-        if (wantOnlineId) {
-            entry.insert(QStringLiteral("onlineId"), onlineId);
-        }
-        if (wantNpId) {
-            entry.insert(QStringLiteral("npId"), EncodeNpId(onlineId));
-        }
-        if (wantAvatar) {
-            const auto avatar = db.GetAvatarUrl(*uid);
-            if (avatar && !avatar->isEmpty()) {
-                entry.insert(QStringLiteral("avatarUrl"), *avatar);
-            }
-        }
-        arr.append(entry);
+    for (const QString& idStr : accountIds) {
+        bool ok = false;
+        const qlonglong accId = idStr.toLongLong(&ok);
+        if (!ok)
+            continue; // skip malformed ids
+        const auto name = db.GetUsername(accId);
+        if (!name)
+            continue; // unknown account -- skip rather than fail the whole request
+        arr.append(BuildProfile(db, shared, accId, *name, fields, isDefault));
     }
     QJsonObject body;
     body.insert(QStringLiteral("profiles"), arr);
@@ -134,12 +125,20 @@ QJsonObject BuildProfile(Database& db, SharedState& shared, qint64 userId,
 
 } // namespace
 
-void RegisterProfileRoutes(QHttpServer& http, Database& db) {
+void RegisterProfileRoutes(QHttpServer& http, Database& db, SharedState& shared) {
     // GET /v1/profiles?onlineId=<a[,b,...]>&fields=...
-    http.route("/v1/profiles", [&db](const QHttpServerRequest& req) -> QHttpServerResponse {
+    http.route("/v1/profiles",
+               [&db, &shared](const QHttpServerRequest& req) -> QHttpServerResponse {
         static const QSet<QString> kKnown = {
-            QStringLiteral("onlineId"),
+            QStringLiteral("accountIds"),
             QStringLiteral("fields"),
+            QStringLiteral("avatarSize"),
+            QStringLiteral("avatarSizes"),
+            QStringLiteral("avatarUrlScheme"),
+            QStringLiteral("profilePictureSizes"),
+            QStringLiteral("aboutMeType"),
+            QStringLiteral("languagesUsedLanguageSet"),
+            QStringLiteral("npLanguages"),
         };
         LogUnsupportedQueryParams(req, kKnown);
 
@@ -149,12 +148,17 @@ void RegisterProfileRoutes(QHttpServer& http, Database& db) {
         }
 
         const QUrlQuery query(req.url());
-        if (!query.hasQueryItem(QStringLiteral("onlineId"))) {
+        if (!query.hasQueryItem(QStringLiteral("accountIds"))) {
             return JsonError(QHttpServerResponse::StatusCode::BadRequest, UP_QUERY_PARAM_REQUIRED,
-                             QStringLiteral("'onlineId' parameter required in query string"));
+                             QStringLiteral("'accountIds' parameter required in query string"));
         }
-        const QStringList onlineIds = query.queryItemValue(QStringLiteral("onlineId"))
-                                          .split(QLatin1Char(','), Qt::SkipEmptyParts);
+        const QStringList accountIds = query.queryItemValue(QStringLiteral("accountIds"))
+                                           .split(QLatin1Char(','), Qt::SkipEmptyParts);
+        if (accountIds.isEmpty() || accountIds.size() > 50) {
+            return JsonError(
+                QHttpServerResponse::StatusCode::BadRequest, UP_INVALID_QUERY_PARAM,
+                QStringLiteral("Invalid parameter in query string (parameter: 'accountIds')"));
+        }
 
         QString fieldsStr = query.queryItemValue(QStringLiteral("fields"));
         if (fieldsStr.isEmpty()) {
@@ -163,15 +167,15 @@ void RegisterProfileRoutes(QHttpServer& http, Database& db) {
         const QStringList fields = fieldsStr.split(QLatin1Char(','), Qt::SkipEmptyParts);
         const bool isDefault = fields.contains(QStringLiteral("@default"));
 
-        const QJsonObject body = BuildProfiles(db, onlineIds, fields, isDefault);
-        qInfo() << "WebAPI: profiles lookup" << onlineIds << "-> returned"
+        const QJsonObject body = BuildProfiles(db, shared, accountIds, fields, isDefault);
+        qInfo() << "WebAPI: profiles lookup" << accountIds.size() << "account(s) -> returned"
                 << body.value(QStringLiteral("size")).toInt();
         return JsonOk(body);
     });
 
     // GET /v1/users/<arg>/profile -- single user's profile.
     http.route("/v1/users/<arg>/profile",
-               [&db](const QString& userKey, const QHttpServerRequest& req) -> QHttpServerResponse {
+               [&db, &shared](const QString& userKey, const QHttpServerRequest& req) -> QHttpServerResponse {
                    static const QSet<QString> kKnown = {
                        QStringLiteral("fields"),
                        QStringLiteral("avatarSize"),
