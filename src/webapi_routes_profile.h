@@ -7,6 +7,7 @@ class Database;
 
 namespace WebApiRoutes {
 
-void RegisterProfileRoutes(QHttpServer& http, Database& db);
+struct SharedState;
+void RegisterProfileRoutes(QHttpServer& http, Database& db, SharedState& shared);
 
 } // namespace WebApiRoutes

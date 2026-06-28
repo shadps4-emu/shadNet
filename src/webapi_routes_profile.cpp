@@ -15,6 +15,7 @@
 #include <QStringList>
 #include <QUrlQuery>
 
+#include "client_session.h" // SharedState
 #include "database.h"
 #include "webapi_auth.h"
 #include "webapi_routes_common.h"
@@ -58,8 +59,8 @@ QJsonObject BuildProfiles(Database& db, const QStringList& onlineIds, const QStr
 }
 
 // GET /v1/users/{userId}/profile -- a single user's Profile object
-QJsonObject BuildProfile(Database& db, qint64 userId, const QString& onlineId,
-                         const QStringList& fields, bool isDefault) {
+QJsonObject BuildProfile(Database& db, SharedState& shared, qint64 userId,
+                         const QString& onlineId, const QStringList& fields, bool isDefault) {
     const bool wantUser = isDefault || fields.contains(QStringLiteral("user"));
     const bool wantRegion = isDefault || fields.contains(QStringLiteral("region"));
     const bool wantNpId = isDefault || fields.contains(QStringLiteral("npId"));
@@ -70,6 +71,7 @@ QJsonObject BuildProfile(Database& db, qint64 userId, const QString& onlineId,
     const bool wantDetail = fields.contains(QStringLiteral("personalDetail")) ||
                             fields.contains(QStringLiteral("personalDetail.displayName"));
     const bool wantVerified = fields.contains(QStringLiteral("isOfficiallyVerified"));
+    const bool wantPresence = fields.contains(QStringLiteral("presence"));
 
     QJsonObject p;
     if (wantUser) {
@@ -99,10 +101,33 @@ QJsonObject BuildProfile(Database& db, qint64 userId, const QString& onlineId,
     if (wantDetail) {
         QJsonObject pd;
         pd.insert(QStringLiteral("displayName"), onlineId);
-        p.insert(QStringLiteral("personalDetail"), "it's me wanna fight?"); // unsupported
+        p.insert(QStringLiteral("personalDetail"), pd);
     }
     if (wantVerified) {
         p.insert(QStringLiteral("isOfficiallyVerified"), false);
+    }
+    if (wantPresence) {
+        // Profile embeds presence as {primaryInfo: <entry>} -- note: unlike friendList and
+        // GET presence, the profile presence object has no top-level onlineStatus member.
+        bool online = false;
+        QString platform, gameStatus, npTitleId, titleName;
+        {
+            QReadLocker lk(&shared.clientsLock);
+            auto it = shared.clients.constFind(userId);
+            if (it != shared.clients.constEnd() && !it->appearOffline) {
+                online = true;
+                platform = it->platform;
+                gameStatus = it->gameStatus;
+                npTitleId = it->npTitleId;
+                titleName = it->titleName;
+            }
+        }
+        QJsonObject presence;
+        presence.insert(QStringLiteral("primaryInfo"),
+                        MakePresenceEntry(online, platform, gameStatus, QString(), npTitleId,
+                                          titleName, /*includeDetail=*/true,
+                                          /*forcePlatform=*/false));
+        p.insert(QStringLiteral("presence"), presence);
     }
     return p;
 }
@@ -184,7 +209,8 @@ void RegisterProfileRoutes(QHttpServer& http, Database& db) {
                    const QStringList fields = fieldsStr.split(QLatin1Char(','), Qt::SkipEmptyParts);
                    const bool isDefault = fields.contains(QStringLiteral("@default"));
 
-                   const QJsonObject body = BuildProfile(db, userId, onlineId, fields, isDefault);
+                   const QJsonObject body =
+                       BuildProfile(db, shared, userId, onlineId, fields, isDefault);
                    qInfo() << "WebAPI: profile for" << onlineId << "fields" << fields;
                    return JsonOk(body);
                });
