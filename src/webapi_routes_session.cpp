@@ -27,6 +27,8 @@ namespace {
 // spec; SESSION_BAD_REQUEST is a placeholder pending the group's common error-code table.
 constexpr quint32 SESSION_USER_NOT_ONLINE = 2114564;
 constexpr quint32 SESSION_BAD_REQUEST = 2114561; // PLACEHOLDER (not from the doc)
+constexpr quint32 SESSION_ONLY_CREATOR = 2114562;
+constexpr quint32 SESSION_ONLY_MEMBER = 2114563;
 
 constexpr int kImageMax = 160 * 1024;
 constexpr int kDataMax = 1024 * 1024;
@@ -401,6 +403,91 @@ QHttpServerResponse HandleSessionCreate(Database& db, SharedState& shared,
     return JsonOk(body);
 }
 
+// PUT /v1/sessions/<arg> -- update session info (application/json body). owner-bind sessions
+// may be updated only by the creator; owner-migration sessions by any participant. The
+// sessionName/localizedSessionNames pair (and sessionStatus/localizedSessionStatus) is
+// replaced as a unit: supplying one without the other clears the omitted half.
+QHttpServerResponse HandleSessionUpdate(Database& db, SharedState& shared,
+                                        const QString& sessionId,
+                                        const QHttpServerRequest& req) {
+    auto auth = WebApiAuth::Authenticate(req, db);
+    if (!auth.userId.has_value()) {
+        return std::move(auth.errorResponse);
+    }
+    QJsonParseError perr{};
+    const QJsonDocument doc = QJsonDocument::fromJson(req.body(), &perr);
+    if (perr.error != QJsonParseError::NoError || !doc.isObject()) {
+        return JsonError(QHttpServerResponse::StatusCode::BadRequest, SESSION_BAD_REQUEST,
+                         QStringLiteral("Malformed session-request JSON"));
+    }
+    const QJsonObject obj = doc.object();
+
+    QWriteLocker lk(&shared.sessionsLock);
+    auto it = shared.sessions.find(sessionId);
+    if (it == shared.sessions.end()) {
+        return JsonError(QHttpServerResponse::StatusCode::NotFound, SESSION_BAD_REQUEST,
+                         QStringLiteral("Session not found"));
+    }
+    auto& s = it.value();
+
+    const bool isOwner = (s.ownerUserId == *auth.userId);
+    bool isMember = false;
+    for (const auto& m : s.members) {
+        if (m.userId == *auth.userId) {
+            isMember = true;
+            break;
+        }
+    }
+    if (s.sessionType == QStringLiteral("owner-bind")) {
+        if (!isOwner)
+            return JsonError(QHttpServerResponse::StatusCode::Forbidden, SESSION_ONLY_CREATOR,
+                             QStringLiteral("Only the session creator is permitted to perform "
+                                            "this operation"));
+    } else { // owner-migration
+        if (!isMember)
+            return JsonError(QHttpServerResponse::StatusCode::Forbidden, SESSION_ONLY_MEMBER,
+                             QStringLiteral("Only session members are permitted to perform "
+                                            "this operation"));
+    }
+
+    // sessionName / localizedSessionNames: replaced together when either is present.
+    if (obj.contains(QStringLiteral("sessionName")) ||
+        obj.contains(QStringLiteral("localizedSessionNames"))) {
+        s.sessionName = obj.value(QStringLiteral("sessionName")).toString();
+        s.localizedSessionNames.clear();
+        const QJsonObject lo = obj.value(QStringLiteral("localizedSessionNames")).toObject();
+        for (auto l = lo.constBegin(); l != lo.constEnd(); ++l)
+            s.localizedSessionNames.insert(l.key(), l.value().toString());
+    }
+    // sessionStatus / localizedSessionStatus: same paired-replacement rule.
+    if (obj.contains(QStringLiteral("sessionStatus")) ||
+        obj.contains(QStringLiteral("localizedSessionStatus"))) {
+        s.sessionStatus = obj.value(QStringLiteral("sessionStatus")).toString();
+        s.localizedSessionStatus.clear();
+        const QJsonObject lo = obj.value(QStringLiteral("localizedSessionStatus")).toObject();
+        for (auto l = lo.constBegin(); l != lo.constEnd(); ++l)
+            s.localizedSessionStatus.insert(l.key(), l.value().toString());
+    }
+    // Independent fields: updated only when present. sessionType and sendNotificationFlag are
+    // fixed at creation and not updatable here.
+    if (obj.contains(QStringLiteral("sessionPrivacy")))
+        s.sessionPrivacy = obj.value(QStringLiteral("sessionPrivacy")).toString();
+    if (obj.contains(QStringLiteral("sessionMaxUser")))
+        s.sessionMaxUser = obj.value(QStringLiteral("sessionMaxUser")).toInt();
+    if (obj.contains(QStringLiteral("sessionLockFlag")))
+        s.sessionLockFlag = obj.value(QStringLiteral("sessionLockFlag")).toBool();
+    if (obj.contains(QStringLiteral("availablePlatforms"))) {
+        QStringList p;
+        for (const auto& v : obj.value(QStringLiteral("availablePlatforms")).toArray())
+            p.append(v.toString());
+        if (!p.isEmpty())
+            s.availablePlatforms = p;
+    }
+
+    qInfo() << "WebAPI: session updated" << sessionId << "by" << auth.npid;
+    return QHttpServerResponse{QHttpServerResponse::StatusCode::NoContent};
+}
+
 } // namespace
 
 void RegisterSessionRoutes(QHttpServer& http, Database& db, SharedState& shared) {
@@ -415,6 +502,13 @@ void RegisterSessionRoutes(QHttpServer& http, Database& db, SharedState& shared)
                [&db, &shared](const QString& userKey,
                               const QHttpServerRequest& req) -> QHttpServerResponse {
                    return HandleSessionList(db, shared, userKey, req);
+               });
+
+    // PUT /v1/sessions/<arg> -- update session information.
+    http.route("/v1/sessions/<arg>", QHttpServerRequest::Method::Put,
+               [&db, &shared](const QString& sessionId,
+                              const QHttpServerRequest& req) -> QHttpServerResponse {
+                   return HandleSessionUpdate(db, shared, sessionId, req);
                });
 }
 
