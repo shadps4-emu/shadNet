@@ -138,6 +138,9 @@ ErrorType ClientSession::CmdLogin(StreamExtractor& data, QByteArray& reply) {
         QWriteLocker lk(&m_shared->clientsLock);
         SharedState::ClientEntry entry;
         entry.npid = npid;
+        // Title context reported by the emulator at login -> presence gameTitleInfo.
+        entry.npTitleId = QString::fromStdString(req.np_title_id());
+        entry.titleName = QString::fromStdString(req.title_name());
         entry.send = [this](QByteArray pkt) {
             QMetaObject::invokeMethod(
                 this, [this, pkt]() { SendPacket(pkt); }, Qt::QueuedConnection);
