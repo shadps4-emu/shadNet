@@ -3,18 +3,6 @@
 #pragma once
 #include <cstdint>
 
-// ── Handler type indices (array index and bitmask position) ──────────────────
-
-namespace HandlerType {
-constexpr uint8_t Context = 0;
-constexpr uint8_t Request = 1;
-constexpr uint8_t RoomEvent = 2;
-constexpr uint8_t LobbyEvent = 3;
-constexpr uint8_t RoomMessage = 4;
-constexpr uint8_t LobbyMessage = 5;
-constexpr uint8_t Count = 6;
-} // namespace HandlerType
-
 namespace Matching2 {
 constexpr uint16_t ORBIS_NP_MATCHING2_ROOM_SEARCHABLE_INT_ATTR_EXTERNAL_1_ID = 0x004C;
 constexpr uint16_t ORBIS_NP_MATCHING2_ROOM_SEARCHABLE_INT_ATTR_EXTERNAL_2_ID = 0x004D;
@@ -39,6 +27,18 @@ constexpr uint32_t ORBIS_NP_MATCHING2_ROOM_FLAG_ATTR_NAT_TYPE_RESTRICTION = 0x04
 constexpr uint32_t ORBIS_NP_MATCHING2_ROOM_FLAG_ATTR_PROHIBITIVE_MODE = 0x02000000;
 
 constexpr uint32_t ORBIS_NP_MATCHING2_ROOMMEMBER_FLAG_ATTR_OWNER = 0x80000000;
+
+constexpr uint32_t ORBIS_NP_MATCHING2_ROOM_EVENT_MEMBER_JOINED = 0x1101;
+constexpr uint32_t ORBIS_NP_MATCHING2_ROOM_EVENT_MEMBER_LEFT = 0x1102;
+constexpr uint32_t ORBIS_NP_MATCHING2_ROOM_EVENT_KICKEDOUT = 0x1103;
+constexpr uint32_t ORBIS_NP_MATCHING2_ROOM_EVENT_ROOM_DESTROYED = 0x1104;
+constexpr uint32_t ORBIS_NP_MATCHING2_ROOM_EVENT_ROOM_OWNER_CHANGED = 0x1105;
+constexpr uint32_t ORBIS_NP_MATCHING2_ROOM_EVENT_UPDATED_ROOM_DATA_INTERNAL = 0x1106;
+
+constexpr uint8_t ORBIS_NP_MATCHING2_EVENT_CAUSE_LEAVE_ACTION = 1;
+constexpr uint8_t ORBIS_NP_MATCHING2_EVENT_CAUSE_KICKOUT_ACTION = 2;
+constexpr uint8_t ORBIS_NP_MATCHING2_EVENT_CAUSE_GRANT_OWNER_ACTION = 3;
+constexpr uint8_t ORBIS_NP_MATCHING2_EVENT_CAUSE_SERVER_OPERATION = 4;
 
 constexpr uint8_t ORBIS_NP_MATCHING2_ROLE_MEMBER = 1;
 constexpr uint8_t ORBIS_NP_MATCHING2_ROLE_OWNER = 2;

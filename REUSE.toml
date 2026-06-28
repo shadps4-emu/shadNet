@@ -8,6 +8,7 @@ path = [
     ".gitmodules",
     "README.md",
     "scoreboards.cfg",
+    "worlds.cfg",
     "CMakeLists.txt",
     "CMakeUserPresets.json",
     "clientsample/CMakeLists.txt",

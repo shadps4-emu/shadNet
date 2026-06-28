@@ -32,15 +32,17 @@ enum class CommandType : uint16_t {
     AddBlock = 10,
     RemoveBlock = 11,
     // Matchmaking
-    RegisterHandlers = 12,
+    ContextStart = 12,
     CreateRoom = 13,
     JoinRoom = 14,
     LeaveRoom = 15,
     GetRoomList = 16,
     RequestSignalingInfos = 17,
+    ContextStop = 18,
     SetRoomDataInternal = 20,
     SetRoomDataExternal = 21,
     KickoutRoomMember = 22,
+    GetWorldInfoList = 23,
     // Scores
     GetBoardInfos = 30,
     RecordScore = 31,
@@ -63,11 +65,7 @@ enum class NotificationType : uint16_t {
     FriendLost = 7,   // Someone removed you from their friend list
     FriendStatus = 8, // A friend came online or went offline
     // Matchmaking
-    RequestEvent = 9,             // Room request completed (create/join/leave/kickout)
-    MemberJoined = 10,            // A member joined the room
-    MemberLeft = 11,              // A member left the room
-    RoomDataInternalUpdated = 15, // Room internal data changed (broadcast to other members)
-    KickedOut = 16,               // Local room event (0x1103) for the member who was removed
+    RoomEvent = 10, // Any room event; Orbis event id carried in the message
     // Generic NP WebApi push event, forwarded verbatim to the emulator's
     // libSceNpWebApi push-event callbacks. Payload (length-prefixed, see
     // ClientSession::BuildWebApiPushPayload): npServiceName, npServiceLabel(u32 LE),

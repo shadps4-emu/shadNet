@@ -65,18 +65,10 @@ struct RoomMember {
     MemberBinAttrSlot memberBinAttr;
 };
 
-struct CallbackRegistration {
-    bool enabled = false;
-    uint64_t callbackAddr = 0;
-    uint64_t callbackArg = 0;
-};
-
 struct MatchingSessionState {
-    QString addr;
-    uint16_t port = 0;
     uint32_t ctxId = 0;
-    uint32_t serviceLabel = 0;
-    QString comId;
+    QString titleId;
+    QString matchingKey;
     uint16_t serverId = 1;
     uint16_t worldId = 1;
     uint16_t lobbyId = 0;
@@ -86,13 +78,6 @@ struct MatchingSessionState {
     uint16_t maxSlots = 0;
     uint32_t roomFlags = 0;
     bool initialized = false;
-
-    CallbackRegistration callbacks[HandlerType::Count] = {};
-    uint8_t enabledHandlersMask = 0;
-
-    bool hasHandler(uint8_t idx) const {
-        return (enabledHandlersMask & (1 << idx)) != 0;
-    }
 };
 
 struct Room {
@@ -222,7 +207,8 @@ struct MatchingSharedState {
     QHash<QPair<ComId, uint64_t>, QVector<uint64_t>> lobbyRooms;
     std::atomic<uint64_t> nextRoomId{1};
 
-    QHash<ComId, QVector<WorldConfig>> worldConfigs;
+    QHash<QString, QVector<WorldConfig>> worldConfigs;
+    QHash<QString, QString> titleGroups;
 
     mutable QReadWriteLock udpLock;
     QHash<QString, QPair<QString, uint16_t>> udpExt;

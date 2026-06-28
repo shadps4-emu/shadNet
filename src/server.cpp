@@ -50,6 +50,8 @@ bool ShadNetServer::Start(ConfigManager* config) {
         return false;
     }
 
+    LoadWorldsCfg("worlds.cfg");
+
     QHostAddress addr;
     const QString host = config->GetHost();
     if (host.isEmpty() || host == "0.0.0.0")
@@ -214,6 +216,93 @@ bool ShadNetServer::LoadScoreboardsCfg(const QString& path) {
     }
 
     qInfo() << "scoreboards.cfg loaded";
+    return true;
+}
+
+bool ShadNetServer::LoadWorldsCfg(const QString& path) {
+    QFile f(path);
+    if (!f.exists()) {
+        qInfo() << "No worlds.cfg found, GetWorldInfoList will use a default world list";
+        return true;
+    }
+    if (!f.open(QIODevice::ReadOnly | QIODevice::Text)) {
+        qWarning() << "Cannot open worlds.cfg:" << f.errorString();
+        return false;
+    }
+
+    QWriteLocker lk(&m_shared.matching.roomsLock);
+    QTextStream ts(&f);
+    int lineNo = 0;
+    enum class Section { None, Groups, Worlds } section = Section::None;
+
+    auto parseGroups = [&](const QString& line) -> bool {
+        const int eq = line.indexOf('=');
+        if (eq < 0)
+            return false;
+        const QString titleId = line.left(eq).trimmed();
+        const QString group = line.mid(eq + 1).trimmed();
+        if (titleId.isEmpty() || group.isEmpty())
+            return false;
+        m_shared.matching.titleGroups[titleId] = group;
+        return true;
+    };
+
+    auto parseWorlds = [&](const QString& line) -> bool {
+        const QStringList parts = line.split('|');
+        if (parts.size() != 5)
+            return false;
+        const QString group = parts[0].trimmed();
+        if (group.isEmpty())
+            return false;
+        bool ok = false;
+        WorldConfig wc;
+        wc.worldId = parts[1].trimmed().toUInt(&ok);
+        if (!ok || wc.worldId == 0)
+            return false;
+        wc.serverId = static_cast<uint16_t>(parts[2].trimmed().toUInt(&ok));
+        if (!ok)
+            return false;
+        wc.lobbiesNum = parts[3].trimmed().toUInt(&ok);
+        if (!ok)
+            return false;
+        wc.maxLobbyMembersNum = parts[4].trimmed().toUInt(&ok);
+        if (!ok)
+            return false;
+        m_shared.matching.worldConfigs[group].append(wc);
+        return true;
+    };
+
+    while (!ts.atEnd()) {
+        ++lineNo;
+        QString line = ts.readLine().trimmed();
+        if (line.isEmpty() || line.startsWith('#'))
+            continue;
+
+        if (line.startsWith('[') && line.endsWith(']')) {
+            const QString name = line.mid(1, line.size() - 2).trimmed().toLower();
+            if (name == "groups")
+                section = Section::Groups;
+            else if (name == "worlds")
+                section = Section::Worlds;
+            else {
+                section = Section::None;
+                qWarning() << "worlds.cfg line" << lineNo << "unknown section:" << line;
+            }
+            continue;
+        }
+
+        bool ok = false;
+        if (section == Section::Groups)
+            ok = parseGroups(line);
+        else if (section == Section::Worlds)
+            ok = parseWorlds(line);
+
+        if (!ok)
+            qWarning() << "worlds.cfg line" << lineNo << "invalid:" << line;
+    }
+
+    qInfo() << "worlds.cfg loaded:" << m_shared.matching.titleGroups.size() << "group mapping(s),"
+            << m_shared.matching.worldConfigs.size() << "configured group(s)";
     return true;
 }
 

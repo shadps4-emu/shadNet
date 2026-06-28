@@ -32,6 +32,7 @@ private:
     void SpawnSession(QTcpSocket* socket, bool isSsl);
     bool InitScoreSystem();
     bool LoadScoreboardsCfg(const QString& path);
+    bool LoadWorldsCfg(const QString& path);
 
     ConfigManager* m_config = nullptr;
     QTcpServer* m_unsecuredServer = nullptr; // plain TCP connections

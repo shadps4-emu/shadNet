@@ -128,6 +128,12 @@ static shadnet::MatchingRoomMemberData BuildRoomMemberData(const RoomMember& mem
     pb.set_team_id(member.teamId);
     pb.set_is_owner((member.flagAttr & Matching2::ORBIS_NP_MATCHING2_ROOMMEMBER_FLAG_ATTR_OWNER) !=
                     0);
+    pb.set_join_date(member.joinDate);
+    pb.set_nat_type(member.natType);
+    pb.set_flag_attr(member.flagAttr);
+    pb.set_addr(member.addr.toStdString());
+    pb.set_port(member.port);
+    pb.set_group_id(member.groupId);
     if (member.memberBinAttr.set) {
         auto* a = pb.add_bin_attrs_internal();
         a->set_attr_id(member.memberBinAttr.attrId);
@@ -192,31 +198,6 @@ static shadnet::MatchingRoomDataExternal BuildRoomDataExternal(const Room& room)
 }
 
 // Build a fully-encoded NotifyRequestEvent payload (u32-LE prefix + proto bytes).
-static QByteArray MakeRequestEventPayload(uint32_t ctxId, uint16_t serverId, uint16_t worldId,
-                                          uint16_t lobbyId, uint32_t reqEvent, uint32_t reqId,
-                                          uint32_t errorCode, uint64_t roomId, uint16_t memberId,
-                                          uint16_t maxSlots, uint32_t flags, bool isOwner,
-                                          const QByteArray& responseBlob) {
-    shadnet::NotifyRequestEvent pb;
-    pb.set_ctx_id(ctxId);
-    pb.set_server_id(serverId);
-    pb.set_world_id(worldId);
-    pb.set_lobby_id(lobbyId);
-    pb.set_req_event(reqEvent);
-    pb.set_req_id(reqId);
-    pb.set_error_code(errorCode);
-    pb.set_room_id(roomId);
-    pb.set_member_id(memberId);
-    pb.set_max_slots(maxSlots);
-    pb.set_flags(flags);
-    pb.set_is_owner(isOwner);
-    if (!responseBlob.isEmpty())
-        pb.set_response_blob(responseBlob.constData(), responseBlob.size());
-    QByteArray payload;
-    appendProto(payload, pb);
-    return payload;
-}
-
 // ── Notification helpers ──────────────────────────────────────────────────────
 
 void ClientSession::SendMatchingNotification(NotificationType type, const QByteArray& payload,
@@ -236,12 +217,12 @@ void ClientSession::SendMatchingNotification(NotificationType type, const QByteA
 }
 
 void ClientSession::NotifyRoomMembers(NotificationType type, const QByteArray& payload,
-                                      const QString& comId, uint64_t roomId,
+                                      const QString& matchingKey, uint64_t roomId,
                                       const QString& excludeNpid) {
     QVector<std::function<void(QByteArray)>> senders;
     {
         QReadLocker roomLk(&m_shared->matching.roomsLock);
-        auto roomIt = m_shared->matching.rooms.find({comId, roomId});
+        auto roomIt = m_shared->matching.rooms.find({matchingKey, roomId});
         if (roomIt == m_shared->matching.rooms.end())
             return;
         QReadLocker clientLk(&m_shared->clientsLock);
@@ -261,7 +242,47 @@ void ClientSession::NotifyRoomMembers(NotificationType type, const QByteArray& p
         send(pkt);
 }
 
-// ── Command handlers ──────────────────────────────────────────────────────────
+void ClientSession::SendRoomMemberEvent(uint64_t roomId, uint32_t event, uint32_t cause,
+                                        const RoomMember& member, const QString& excludeNpid) {
+    shadnet::NotifyRoomEvent pb;
+    pb.set_ctx_id(m_matching.ctxId);
+    pb.set_room_id(roomId);
+    pb.set_event(event);
+    pb.set_event_cause(cause);
+    *pb.mutable_member() = BuildRoomMemberData(member);
+    QByteArray payload;
+    appendProto(payload, pb);
+    NotifyRoomMembers(NotificationType::RoomEvent, payload, m_matching.matchingKey, roomId,
+                      excludeNpid);
+}
+
+void ClientSession::SendRoomEventToTarget(uint64_t roomId, uint32_t event, uint32_t cause,
+                                          int32_t errorCode, const QString& targetNpid) {
+    shadnet::NotifyRoomEvent pb;
+    pb.set_ctx_id(m_matching.ctxId);
+    pb.set_room_id(roomId);
+    pb.set_event(event);
+    pb.set_event_cause(cause);
+    pb.set_error_code(errorCode);
+    QByteArray payload;
+    appendProto(payload, pb);
+    SendMatchingNotification(NotificationType::RoomEvent, payload, targetNpid);
+}
+
+void ClientSession::GetSelfSignalingAddr(QString& addr, uint16_t& port) const {
+    addr.clear();
+    port = 0;
+    {
+        QReadLocker lk(&m_shared->matching.udpLock);
+        auto it = m_shared->matching.udpExt.find(m_info.npid);
+        if (it != m_shared->matching.udpExt.end()) {
+            addr = it.value().first;
+            port = it.value().second;
+        }
+    }
+    if (addr.isEmpty() && m_socket)
+        addr = m_socket->peerAddress().toString();
+}
 
 void ClientSession::ResetMatchingRoomState(uint64_t roomId) {
     if (roomId == 0 || m_matching.roomId != roomId)
@@ -270,37 +291,29 @@ void ClientSession::ResetMatchingRoomState(uint64_t roomId) {
     qInfo() << "Matching room state reset for" << m_info.npid << "room=" << roomId;
 }
 
-ErrorType ClientSession::CmdRegisterHandlers(StreamExtractor& data) {
-    shadnet::RegisterHandlersRequest req;
+ErrorType ClientSession::CmdContextStart(StreamExtractor& data) {
+    shadnet::ContextStartRequest req;
     if (!decodeProto(req, data) || data.error())
         return ErrorType::Malformed;
 
-    m_matching.addr = QString::fromStdString(req.addr());
-    m_matching.port = static_cast<uint16_t>(req.port());
     m_matching.ctxId = req.ctx_id();
-    m_matching.serviceLabel = req.service_label();
-    m_matching.comId = QString::fromStdString(req.com_id());
-
-    int count = qMin(req.callbacks_size(), static_cast<int>(HandlerType::Count));
-    m_matching.enabledHandlersMask = 0;
-    for (int i = 0; i < count; ++i) {
-        const auto& cb = req.callbacks(i);
-        m_matching.callbacks[i].enabled = cb.enabled();
-        m_matching.callbacks[i].callbackAddr = cb.callback_addr();
-        m_matching.callbacks[i].callbackArg = cb.callback_arg();
-        if (cb.enabled())
-            m_matching.enabledHandlersMask |= (1u << i);
-    }
-
-    if (m_matching.addr.isEmpty())
-        m_matching.addr = m_socket->peerAddress().toString();
-
     m_matching.initialized = true;
 
-    qInfo() << "RegisterHandlers:" << m_info.npid << "addr=" << m_matching.addr
-            << "port=" << m_matching.port << "ctx=" << m_matching.ctxId
-            << "comId=" << m_matching.comId
-            << "handlers=0x" + QString::number(m_matching.enabledHandlersMask, 16);
+    qInfo() << "ContextStart:" << m_info.npid << "ctx=" << m_matching.ctxId
+            << "title=" << m_matching.titleId << "key=" << m_matching.matchingKey;
+
+    return ErrorType::NoError;
+}
+
+ErrorType ClientSession::CmdContextStop(StreamExtractor& data) {
+    shadnet::ContextStopRequest req;
+    if (!decodeProto(req, data) || data.error())
+        return ErrorType::Malformed;
+
+    m_matching.ctxId = 0;
+    m_matching.initialized = false;
+
+    qInfo() << "ContextStop:" << m_info.npid;
 
     return ErrorType::NoError;
 }
@@ -310,7 +323,6 @@ ErrorType ClientSession::CmdCreateRoom(StreamExtractor& data, QByteArray& reply)
     if (!decodeProto(req, data) || data.error())
         return ErrorType::Malformed;
 
-    uint32_t reqId = req.req_id();
     uint16_t maxSlot = static_cast<uint16_t>(req.max_slots());
     if (maxSlot < 1)
         maxSlot = 1;
@@ -363,8 +375,7 @@ ErrorType ClientSession::CmdCreateRoom(StreamExtractor& data, QByteArray& reply)
     owner.userId = m_info.userId;
     owner.npid = m_info.npid;
     owner.avatarUrl = m_info.avatarUrl;
-    owner.addr = m_matching.addr;
-    owner.port = m_matching.port;
+    GetSelfSignalingAddr(owner.addr, owner.port);
     owner.joinDate = MatchingTimestampUsec();
     owner.teamId = static_cast<uint8_t>(req.team_id());
     owner.flagAttr = Matching2::ORBIS_NP_MATCHING2_ROOMMEMBER_FLAG_ATTR_OWNER;
@@ -404,24 +415,15 @@ ErrorType ClientSession::CmdCreateRoom(StreamExtractor& data, QByteArray& reply)
     *rep.mutable_details() = BuildCreateJoinResponse(room, *member);
     appendProto(reply, rep);
 
-    if (m_matching.hasHandler(HandlerType::Request)) {
-        QByteArray responseBlob = PbEncode(BuildCreateJoinResponse(room, *member));
-        SendSelfNotification(NotificationType::RequestEvent,
-                             MakeRequestEventPayload(m_matching.ctxId, room.serverId, room.worldId,
-                                                     room.lobbyId, 0x0101, reqId, 0, rid, memberId,
-                                                     maxSlot, room.flagAttr, true, responseBlob));
-        qDebug() << "  -> RequestEvent(0x0101/CreateJoinRoom) to" << m_info.npid;
-    }
-
     {
         QWriteLocker lk(&m_shared->matching.roomsLock);
         const uint32_t worldId = room.worldId;
         const uint64_t lobbyId = room.lobbyId;
-        m_shared->matching.rooms.insert({m_matching.comId, rid}, std::move(room));
+        m_shared->matching.rooms.insert({m_matching.matchingKey, rid}, std::move(room));
         if (worldId != 0)
-            m_shared->matching.worldRooms[{m_matching.comId, worldId}].append(rid);
+            m_shared->matching.worldRooms[{m_matching.matchingKey, worldId}].append(rid);
         else if (lobbyId != 0)
-            m_shared->matching.lobbyRooms[{m_matching.comId, lobbyId}].append(rid);
+            m_shared->matching.lobbyRooms[{m_matching.matchingKey, lobbyId}].append(rid);
     }
 
     qInfo() << "Room" << rid << "created by" << m_info.npid << "max=" << maxSlot;
@@ -434,16 +436,13 @@ ErrorType ClientSession::CmdJoinRoom(StreamExtractor& data, QByteArray& reply) {
         return ErrorType::Malformed;
 
     uint64_t roomId = req.room_id();
-    uint32_t reqId = req.req_id();
 
     uint16_t myMemberId = 0;
     uint16_t maxSlot = 0;
-    uint32_t flags = 0;
-    QByteArray responseBlob;
 
     {
         QWriteLocker lk(&m_shared->matching.roomsLock);
-        auto roomIt = m_shared->matching.rooms.find({m_matching.comId, roomId});
+        auto roomIt = m_shared->matching.rooms.find({m_matching.matchingKey, roomId});
         if (roomIt == m_shared->matching.rooms.end())
             return ErrorType::RoomMissing;
         Room& room = roomIt.value();
@@ -456,8 +455,7 @@ ErrorType ClientSession::CmdJoinRoom(StreamExtractor& data, QByteArray& reply) {
         joiner.userId = m_info.userId;
         joiner.npid = m_info.npid;
         joiner.avatarUrl = m_info.avatarUrl;
-        joiner.addr = m_matching.addr;
-        joiner.port = m_matching.port;
+        GetSelfSignalingAddr(joiner.addr, joiner.port);
         joiner.joinDate = MatchingTimestampUsec();
         joiner.teamId = static_cast<uint8_t>(req.team_id());
         if (req.member_bin_attrs_size() > 0) {
@@ -472,7 +470,6 @@ ErrorType ClientSession::CmdJoinRoom(StreamExtractor& data, QByteArray& reply) {
         RoomMember* member = room.addMember(joiner);
         myMemberId = member->memberId;
         maxSlot = room.maxSlot;
-        flags = room.flagAttr;
 
         const uint16_t curMemberNum = static_cast<uint16_t>(room.members.size());
         room.openPublicSlots =
@@ -497,52 +494,35 @@ ErrorType ClientSession::CmdJoinRoom(StreamExtractor& data, QByteArray& reply) {
         rep.set_cur_members(curMemberNum);
         *rep.mutable_details() = BuildCreateJoinResponse(room, *member);
         appendProto(reply, rep);
-
-        if (m_matching.hasHandler(HandlerType::Request))
-            responseBlob = PbEncode(BuildCreateJoinResponse(room, *member));
     }
 
     qInfo() << "Room" << roomId << m_info.npid << "joined mid=" << myMemberId;
 
-    // MemberJoined notification to existing members
+    // MemberJoined to existing members (0x1101)
     {
-        shadnet::NotifyMemberJoined pb;
-        pb.set_room_id(roomId);
-        pb.set_member_id(myMemberId);
-        pb.set_npid(m_info.npid.toStdString());
-        pb.set_addr(m_matching.addr.toStdString());
-        pb.set_port(m_matching.port);
-        for (int i = 0; i < req.member_bin_attrs_size(); ++i) {
-            const auto& a = req.member_bin_attrs(i);
-            auto* ba = pb.add_bin_attrs();
-            ba->set_attr_id(a.attr_id());
-            ba->set_data(a.data());
+        RoomMember joinedCopy;
+        {
+            QReadLocker lk(&m_shared->matching.roomsLock);
+            auto roomIt = m_shared->matching.rooms.find({m_matching.matchingKey, roomId});
+            if (roomIt != m_shared->matching.rooms.end()) {
+                if (const RoomMember* m = roomIt->findById(myMemberId))
+                    joinedCopy = *m;
+            }
         }
-        QByteArray payload;
-        appendProto(payload, pb);
-        NotifyRoomMembers(NotificationType::MemberJoined, payload, m_matching.comId, roomId,
-                          m_info.npid);
-        qDebug() << "  -> MemberJoined room=" << roomId << "npid=" << m_info.npid
-                 << "mid=" << myMemberId << "to existing members";
+        SendRoomMemberEvent(roomId, Matching2::ORBIS_NP_MATCHING2_ROOM_EVENT_MEMBER_JOINED,
+                            Matching2::ORBIS_NP_MATCHING2_EVENT_CAUSE_SERVER_OPERATION, joinedCopy,
+                            m_info.npid);
+        qDebug() << "  -> MemberJoined room=" << roomId << "mid=" << myMemberId
+                 << "to existing members";
     }
 
-    // RequestEvent (0x0102) to self
-    if (m_matching.hasHandler(HandlerType::Request)) {
-        SendSelfNotification(NotificationType::RequestEvent,
-                             MakeRequestEventPayload(m_matching.ctxId, m_matching.serverId,
-                                                     m_matching.worldId, m_matching.lobbyId, 0x0102,
-                                                     reqId, 0, roomId, myMemberId, maxSlot, flags,
-                                                     false, responseBlob));
-        qDebug() << "  -> RequestEvent(0x0102/JoinRoom) to" << m_info.npid;
-    }
-
-    // Send current room bin attrs to joining client (RoomDataInternalUpdated)
-    if (m_matching.hasHandler(HandlerType::RoomEvent)) {
+    // Send current room bin attrs to joining client (0x1106 to self)
+    {
         QVector<InternalBinAttrSlot> binSnapshot;
         uint32_t roomFlags = 0;
         {
             QReadLocker lk(&m_shared->matching.roomsLock);
-            auto roomIt = m_shared->matching.rooms.find({m_matching.comId, roomId});
+            auto roomIt = m_shared->matching.rooms.find({m_matching.matchingKey, roomId});
             if (roomIt != m_shared->matching.rooms.end()) {
                 for (const auto& slot : roomIt->internalBinAttr)
                     if (slot.set)
@@ -551,10 +531,12 @@ ErrorType ClientSession::CmdJoinRoom(StreamExtractor& data, QByteArray& reply) {
             }
         }
         if (!binSnapshot.isEmpty()) {
-            shadnet::NotifyRoomDataInternalUpdated pb;
-            pb.set_room_id(roomId);
-            pb.set_flags(roomFlags);
+            shadnet::NotifyRoomEvent pb;
             pb.set_ctx_id(m_matching.ctxId);
+            pb.set_room_id(roomId);
+            pb.set_event(Matching2::ORBIS_NP_MATCHING2_ROOM_EVENT_UPDATED_ROOM_DATA_INTERNAL);
+            pb.set_event_cause(Matching2::ORBIS_NP_MATCHING2_EVENT_CAUSE_SERVER_OPERATION);
+            pb.set_flags(roomFlags);
             for (const auto& slot : binSnapshot) {
                 auto* ba = pb.add_bin_attrs();
                 ba->set_attr_id(slot.attrId);
@@ -562,8 +544,8 @@ ErrorType ClientSession::CmdJoinRoom(StreamExtractor& data, QByteArray& reply) {
             }
             QByteArray payload;
             appendProto(payload, pb);
-            SendSelfNotification(NotificationType::RoomDataInternalUpdated, payload);
-            qDebug() << "  -> RoomDataInternalUpdated room=" << roomId << "to joiner" << m_info.npid
+            SendSelfNotification(NotificationType::RoomEvent, payload);
+            qDebug() << "  -> UpdatedRoomDataInternal room=" << roomId << "to joiner" << m_info.npid
                      << "attrs=" << binSnapshot.size();
         }
     }
@@ -577,7 +559,6 @@ ErrorType ClientSession::CmdLeaveRoom(StreamExtractor& data, QByteArray& reply) 
         return ErrorType::Malformed;
 
     uint64_t roomId = req.room_id();
-    uint32_t reqId = req.req_id();
 
     uint16_t myMemberId = 0;
     bool wasOwner = false;
@@ -585,7 +566,7 @@ ErrorType ClientSession::CmdLeaveRoom(StreamExtractor& data, QByteArray& reply) 
 
     {
         QWriteLocker lk(&m_shared->matching.roomsLock);
-        auto roomIt = m_shared->matching.rooms.find({m_matching.comId, roomId});
+        auto roomIt = m_shared->matching.rooms.find({m_matching.matchingKey, roomId});
         if (roomIt == m_shared->matching.rooms.end())
             return ErrorType::RoomMissing;
         Room& room = roomIt.value();
@@ -605,9 +586,9 @@ ErrorType ClientSession::CmdLeaveRoom(StreamExtractor& data, QByteArray& reply) 
         if (room.isEmpty()) {
             m_shared->matching.rooms.erase(roomIt);
             if (worldId != 0)
-                m_shared->matching.worldRooms[{m_matching.comId, worldId}].removeAll(roomId);
+                m_shared->matching.worldRooms[{m_matching.matchingKey, worldId}].removeAll(roomId);
             else if (lobbyId != 0)
-                m_shared->matching.lobbyRooms[{m_matching.comId, lobbyId}].removeAll(roomId);
+                m_shared->matching.lobbyRooms[{m_matching.matchingKey, lobbyId}].removeAll(roomId);
             roomDestroyed = true;
             qInfo() << "Room" << roomId << "destroyed";
         } else {
@@ -638,30 +619,15 @@ ErrorType ClientSession::CmdLeaveRoom(StreamExtractor& data, QByteArray& reply) 
     ResetMatchingRoomState(roomId);
     qInfo() << "Room" << roomId << m_info.npid << "left mid=" << myMemberId;
 
-    // Notify remaining members (MemberLeft) and tear down NpSignaling connections
+    // Notify remaining members (MemberLeft, 0x1102)
     if (!roomDestroyed) {
-        shadnet::NotifyMemberLeft pb;
-        pb.set_room_id(roomId);
-        pb.set_member_id(myMemberId);
-        pb.set_npid(m_info.npid.toStdString());
-        pb.set_ctx_id(m_matching.ctxId);
-        QByteArray payload;
-        appendProto(payload, pb);
-        NotifyRoomMembers(NotificationType::MemberLeft, payload, m_matching.comId, roomId);
+        RoomMember left;
+        left.memberId = myMemberId;
+        left.npid = m_info.npid;
+        SendRoomMemberEvent(roomId, Matching2::ORBIS_NP_MATCHING2_ROOM_EVENT_MEMBER_LEFT,
+                            Matching2::ORBIS_NP_MATCHING2_EVENT_CAUSE_LEAVE_ACTION, left);
         qDebug() << "  -> MemberLeft room=" << roomId << "npid=" << m_info.npid
                  << "mid=" << myMemberId << "to remaining members";
-    }
-
-    // RequestEvent (0x0103) to self
-    if (m_matching.hasHandler(HandlerType::Request)) {
-        shadnet::LeaveRoomReply leaveBlob;
-        leaveBlob.set_room_id(roomId);
-        SendSelfNotification(NotificationType::RequestEvent,
-                             MakeRequestEventPayload(m_matching.ctxId, m_matching.serverId,
-                                                     m_matching.worldId, m_matching.lobbyId, 0x0103,
-                                                     reqId, 0, roomId, myMemberId, 0, 0, false,
-                                                     PbEncode(leaveBlob)));
-        qDebug() << "  -> RequestEvent(0x0103/LeaveRoom) to" << m_info.npid;
     }
 
     shadnet::LeaveRoomReply rep;
@@ -676,21 +642,14 @@ ErrorType ClientSession::CmdKickoutRoomMember(StreamExtractor& data, QByteArray&
         return ErrorType::Malformed;
 
     uint64_t roomId = req.room_id();
-    uint32_t reqId = req.req_id();
     uint16_t targetMemberId = static_cast<uint16_t>(req.target_member_id());
     uint32_t blockKickFlag = req.block_kick_flag();
 
     QString targetNpid;
-    uint16_t initiatorMemberId = 0;
-    uint16_t maxSlots = 0;
-    uint32_t roomFlags = 0;
-    uint16_t serverId = m_matching.serverId;
-    uint16_t worldId = m_matching.worldId;
-    uint16_t lobbyId = m_matching.lobbyId;
 
     {
         QWriteLocker lk(&m_shared->matching.roomsLock);
-        auto roomIt = m_shared->matching.rooms.find({m_matching.comId, roomId});
+        auto roomIt = m_shared->matching.rooms.find({m_matching.matchingKey, roomId});
         if (roomIt == m_shared->matching.rooms.end())
             return ErrorType::RoomMissing;
         Room& room = roomIt.value();
@@ -705,13 +664,7 @@ ErrorType ClientSession::CmdKickoutRoomMember(StreamExtractor& data, QByteArray&
         if (targetIt == room.members.end())
             return ErrorType::NotFound;
 
-        initiatorMemberId = initiator->memberId;
         targetNpid = targetIt->npid;
-        maxSlots = room.maxSlot;
-        roomFlags = room.flagAttr;
-        serverId = room.serverId;
-        worldId = room.worldId;
-        lobbyId = room.lobbyId;
 
         if (blockKickFlag && !room.blockedUsers.contains(targetNpid))
             room.blockedUsers.append(targetNpid);
@@ -727,41 +680,106 @@ ErrorType ClientSession::CmdKickoutRoomMember(StreamExtractor& data, QByteArray&
     qInfo() << "Room" << roomId << m_info.npid << "kicked" << targetNpid << "mid=" << targetMemberId
             << "blockKickFlag=" << blockKickFlag;
 
-    {
-        shadnet::NotifyKickedOut pb;
-        pb.set_room_id(roomId);
-        pb.set_status_code(MATCHING2_KICKEDOUT_STATUS_CODE);
-        pb.set_guard_value(MATCHING2_KICKEDOUT_GUARD_VALUE);
-        QByteArray payload;
-        appendProto(payload, pb);
-        SendMatchingNotification(NotificationType::KickedOut, payload, targetNpid);
-        qDebug() << "  -> KickedOut room=" << roomId << "to" << targetNpid;
-    }
+    // KickedOut to the removed member (0x1103)
+    SendRoomEventToTarget(roomId, Matching2::ORBIS_NP_MATCHING2_ROOM_EVENT_KICKEDOUT,
+                          Matching2::ORBIS_NP_MATCHING2_EVENT_CAUSE_KICKOUT_ACTION,
+                          MATCHING2_KICKEDOUT_STATUS_CODE, targetNpid);
+    qDebug() << "  -> KickedOut room=" << roomId << "to" << targetNpid;
 
+    // MemberLeft to remaining members (0x1102, KICKOUT cause)
     {
-        shadnet::NotifyMemberLeft pb;
-        pb.set_room_id(roomId);
-        pb.set_member_id(targetMemberId);
-        pb.set_npid(targetNpid.toStdString());
-        pb.set_ctx_id(m_matching.ctxId);
-        QByteArray payload;
-        appendProto(payload, pb);
-        NotifyRoomMembers(NotificationType::MemberLeft, payload, m_matching.comId, roomId,
-                          targetNpid);
+        RoomMember left;
+        left.memberId = targetMemberId;
+        left.npid = targetNpid;
+        SendRoomMemberEvent(roomId, Matching2::ORBIS_NP_MATCHING2_ROOM_EVENT_MEMBER_LEFT,
+                            Matching2::ORBIS_NP_MATCHING2_EVENT_CAUSE_KICKOUT_ACTION, left,
+                            targetNpid);
         qDebug() << "  -> MemberLeft (kicked) room=" << roomId << "mid=" << targetMemberId;
-    }
-
-    if (m_matching.hasHandler(HandlerType::Request)) {
-        SendSelfNotification(NotificationType::RequestEvent,
-                             MakeRequestEventPayload(m_matching.ctxId, serverId, worldId, lobbyId,
-                                                     0x0104, reqId, 0, roomId, initiatorMemberId,
-                                                     maxSlots, roomFlags, true, {}));
-        qDebug() << "  -> RequestEvent(0x0104/KickoutRoomMember) to" << m_info.npid;
     }
 
     shadnet::KickoutRoomMemberReply rep;
     rep.set_room_id(roomId);
     appendProto(reply, rep);
+    return ErrorType::NoError;
+}
+
+ErrorType ClientSession::CmdGetWorldInfoList(StreamExtractor& data, QByteArray& reply) {
+    shadnet::GetWorldInfoListRequest req;
+    if (!decodeProto(req, data) || data.error())
+        return ErrorType::Malformed;
+
+    const uint16_t serverId = static_cast<uint16_t>(req.server_id());
+
+    shadnet::GetWorldInfoListReply rep;
+    {
+        QReadLocker lk(&m_shared->matching.roomsLock);
+
+        auto countRoomsAndMembers = [&](uint32_t worldId, uint32_t& roomsNum,
+                                        uint32_t& roomMembersNum) {
+            roomsNum = 0;
+            roomMembersNum = 0;
+            const QVector<uint64_t> ids =
+                m_shared->matching.worldRooms.value({m_matching.matchingKey, worldId});
+            for (uint64_t rid : ids) {
+                auto it = m_shared->matching.rooms.find({m_matching.matchingKey, rid});
+                if (it == m_shared->matching.rooms.end())
+                    continue;
+                ++roomsNum;
+                roomMembersNum += static_cast<uint32_t>(it.value().members.size());
+            }
+        };
+
+        const QVector<WorldConfig> configs =
+            m_shared->matching.worldConfigs.value(m_matching.matchingKey);
+
+        if (!configs.isEmpty()) {
+            for (const WorldConfig& wc : configs) {
+                if (serverId != 0 && wc.serverId != serverId)
+                    continue;
+                uint32_t roomsNum = 0;
+                uint32_t roomMembersNum = 0;
+                countRoomsAndMembers(wc.worldId, roomsNum, roomMembersNum);
+
+                shadnet::MatchingWorld* w = rep.add_worlds();
+                w->set_world_id(wc.worldId);
+                w->set_lobbies_num(wc.lobbiesNum);
+                w->set_max_lobby_members(wc.maxLobbyMembersNum);
+                w->set_lobby_members_num(0);
+                w->set_rooms_num(roomsNum);
+                w->set_room_members_num(roomMembersNum);
+            }
+        } else {
+            QVector<uint32_t> worldIds;
+            for (auto it = m_shared->matching.worldRooms.constBegin();
+                 it != m_shared->matching.worldRooms.constEnd(); ++it) {
+                if (it.key().first != m_matching.matchingKey)
+                    continue;
+                const uint32_t worldId = it.key().second;
+                if (!worldIds.contains(worldId))
+                    worldIds.append(worldId);
+            }
+            if (worldIds.isEmpty())
+                worldIds.append(1);
+
+            for (uint32_t worldId : worldIds) {
+                uint32_t roomsNum = 0;
+                uint32_t roomMembersNum = 0;
+                countRoomsAndMembers(worldId, roomsNum, roomMembersNum);
+
+                shadnet::MatchingWorld* w = rep.add_worlds();
+                w->set_world_id(worldId);
+                w->set_lobbies_num(0);
+                w->set_max_lobby_members(0);
+                w->set_lobby_members_num(0);
+                w->set_rooms_num(roomsNum);
+                w->set_room_members_num(roomMembersNum);
+            }
+        }
+    }
+
+    appendProto(reply, rep);
+    qInfo() << "GetWorldInfoList:" << m_info.npid << "server=" << serverId
+            << "worlds=" << rep.worlds_size();
     return ErrorType::NoError;
 }
 
@@ -787,13 +805,13 @@ ErrorType ClientSession::CmdGetRoomList(StreamExtractor& data, QByteArray& reply
 
         QVector<uint64_t> candidates;
         if (worldId != 0)
-            candidates = m_shared->matching.worldRooms.value({m_matching.comId, worldId});
+            candidates = m_shared->matching.worldRooms.value({m_matching.matchingKey, worldId});
         else if (lobbyId != 0)
-            candidates = m_shared->matching.lobbyRooms.value({m_matching.comId, lobbyId});
+            candidates = m_shared->matching.lobbyRooms.value({m_matching.matchingKey, lobbyId});
 
         QVector<const Room*> matches;
         for (uint64_t rid : candidates) {
-            auto roomIt = m_shared->matching.rooms.find({m_matching.comId, rid});
+            auto roomIt = m_shared->matching.rooms.find({m_matching.matchingKey, rid});
             if (roomIt == m_shared->matching.rooms.end())
                 continue;
             if (!RoomMatchesFilters(roomIt.value(), req))
@@ -840,7 +858,7 @@ ErrorType ClientSession::CmdRequestSignalingInfos(StreamExtractor& data, QByteAr
         QReadLocker lk(&m_shared->matching.roomsLock);
         for (auto it = m_shared->matching.rooms.constBegin();
              it != m_shared->matching.rooms.constEnd(); ++it) {
-            if (it.key().first != m_matching.comId)
+            if (it.key().first != m_matching.matchingKey)
                 continue;
             const RoomMember* tm = it.value().findByNpid(targetNpid);
             if (tm) {
@@ -858,7 +876,7 @@ ErrorType ClientSession::CmdRequestSignalingInfos(StreamExtractor& data, QByteAr
         QReadLocker lk(&m_shared->matching.roomsLock);
         for (auto it = m_shared->matching.rooms.constBegin();
              it != m_shared->matching.rooms.constEnd(); ++it) {
-            if (it.key().first != m_matching.comId)
+            if (it.key().first != m_matching.matchingKey)
                 continue;
             const RoomMember* tm = it.value().findByNpid(targetNpid);
             if (tm) {
@@ -886,7 +904,6 @@ ErrorType ClientSession::CmdSetRoomDataInternal(StreamExtractor& data, QByteArra
     if (!decodeProto(req, data) || data.error())
         return ErrorType::Malformed;
 
-    uint32_t reqId = req.req_id();
     uint64_t roomId = req.room_id();
     uint32_t flagFilter = req.flag_filter();
     uint32_t flagAttr = req.flag_attr();
@@ -896,7 +913,7 @@ ErrorType ClientSession::CmdSetRoomDataInternal(StreamExtractor& data, QByteArra
     uint32_t newFlags = 0;
     {
         QWriteLocker lk(&m_shared->matching.roomsLock);
-        auto roomIt = m_shared->matching.rooms.find({m_matching.comId, roomId});
+        auto roomIt = m_shared->matching.rooms.find({m_matching.matchingKey, roomId});
         if (roomIt == m_shared->matching.rooms.end())
             return ErrorType::RoomMissing;
         Room& room = roomIt.value();
@@ -934,25 +951,14 @@ ErrorType ClientSession::CmdSetRoomDataInternal(StreamExtractor& data, QByteArra
                 << "binAttrs=" << req.bin_attrs_size();
     }
 
-    // RequestEvent(0x0109) to self
-    if (m_matching.hasHandler(HandlerType::Request)) {
-        shadnet::SetRoomDataInternalReply blob;
-        blob.set_room_id(roomId);
-        SendSelfNotification(NotificationType::RequestEvent,
-                             MakeRequestEventPayload(m_matching.ctxId, m_matching.serverId,
-                                                     m_matching.worldId, m_matching.lobbyId, 0x0109,
-                                                     reqId, 0, roomId, m_matching.myMemberId,
-                                                     m_matching.maxSlots, newFlags,
-                                                     m_matching.isRoomOwner, PbEncode(blob)));
-        qDebug() << "  -> RequestEvent(0x0109/SetRoomDataInternal) to" << m_info.npid;
-    }
-
-    // Broadcast RoomDataInternalUpdated to all other members
+    // Broadcast UpdatedRoomDataInternal to all other members (0x1106)
     {
-        shadnet::NotifyRoomDataInternalUpdated pb;
-        pb.set_room_id(roomId);
-        pb.set_flags(newFlags);
+        shadnet::NotifyRoomEvent pb;
         pb.set_ctx_id(m_matching.ctxId);
+        pb.set_room_id(roomId);
+        pb.set_event(Matching2::ORBIS_NP_MATCHING2_ROOM_EVENT_UPDATED_ROOM_DATA_INTERNAL);
+        pb.set_event_cause(Matching2::ORBIS_NP_MATCHING2_EVENT_CAUSE_SERVER_OPERATION);
+        pb.set_flags(newFlags);
         for (int i = 0; i < req.bin_attrs_size(); ++i) {
             const auto& a = req.bin_attrs(i);
             auto* ba = pb.add_bin_attrs();
@@ -961,9 +967,9 @@ ErrorType ClientSession::CmdSetRoomDataInternal(StreamExtractor& data, QByteArra
         }
         QByteArray notifPayload;
         appendProto(notifPayload, pb);
-        NotifyRoomMembers(NotificationType::RoomDataInternalUpdated, notifPayload, m_matching.comId,
-                          roomId, m_info.npid);
-        qDebug() << "  -> RoomDataInternalUpdated room=" << roomId << "broadcast (excl. sender)"
+        NotifyRoomMembers(NotificationType::RoomEvent, notifPayload, m_matching.matchingKey, roomId,
+                          m_info.npid);
+        qDebug() << "  -> UpdatedRoomDataInternal room=" << roomId << "broadcast (excl. sender)"
                  << "attrs=" << req.bin_attrs_size();
     }
 
@@ -978,12 +984,11 @@ ErrorType ClientSession::CmdSetRoomDataExternal(StreamExtractor& data, QByteArra
     if (!decodeProto(req, data) || data.error())
         return ErrorType::Malformed;
 
-    uint32_t reqId = req.req_id();
     uint64_t roomId = req.room_id();
 
     {
         QWriteLocker lk(&m_shared->matching.roomsLock);
-        auto roomIt = m_shared->matching.rooms.find({m_matching.comId, roomId});
+        auto roomIt = m_shared->matching.rooms.find({m_matching.matchingKey, roomId});
         if (roomIt == m_shared->matching.rooms.end())
             return ErrorType::RoomMissing;
         Room& room = roomIt.value();
@@ -1032,19 +1037,6 @@ ErrorType ClientSession::CmdSetRoomDataExternal(StreamExtractor& data, QByteArra
                 << "extBinAttrs=" << req.ext_bin_attrs_size();
     }
 
-    // RequestEvent(0x0004) to self
-    if (m_matching.hasHandler(HandlerType::Request)) {
-        shadnet::SetRoomDataExternalReply blob;
-        blob.set_room_id(roomId);
-        SendSelfNotification(NotificationType::RequestEvent,
-                             MakeRequestEventPayload(m_matching.ctxId, m_matching.serverId,
-                                                     m_matching.worldId, m_matching.lobbyId, 0x0004,
-                                                     reqId, 0, roomId, m_matching.myMemberId,
-                                                     m_matching.maxSlots, m_matching.roomFlags,
-                                                     m_matching.isRoomOwner, PbEncode(blob)));
-        qDebug() << "  -> RequestEvent(0x0004/SetRoomDataExternal) to" << m_info.npid;
-    }
-
     shadnet::SetRoomDataExternalReply rep;
     rep.set_room_id(roomId);
     appendProto(reply, rep);
@@ -1059,7 +1051,7 @@ void ClientSession::DoLeaveRoom(uint64_t roomId) {
 
     {
         QWriteLocker lk(&m_shared->matching.roomsLock);
-        auto roomIt = m_shared->matching.rooms.find({m_matching.comId, roomId});
+        auto roomIt = m_shared->matching.rooms.find({m_matching.matchingKey, roomId});
         if (roomIt == m_shared->matching.rooms.end())
             return;
         Room& room = roomIt.value();
@@ -1079,9 +1071,9 @@ void ClientSession::DoLeaveRoom(uint64_t roomId) {
         if (room.isEmpty()) {
             m_shared->matching.rooms.erase(roomIt);
             if (worldId != 0)
-                m_shared->matching.worldRooms[{m_matching.comId, worldId}].removeAll(roomId);
+                m_shared->matching.worldRooms[{m_matching.matchingKey, worldId}].removeAll(roomId);
             else if (lobbyId != 0)
-                m_shared->matching.lobbyRooms[{m_matching.comId, lobbyId}].removeAll(roomId);
+                m_shared->matching.lobbyRooms[{m_matching.matchingKey, lobbyId}].removeAll(roomId);
             roomDestroyed = true;
             qInfo() << "Room" << roomId << "destroyed (disconnect)";
         } else {
@@ -1111,14 +1103,11 @@ void ClientSession::DoLeaveRoom(uint64_t roomId) {
     ResetMatchingRoomState(roomId);
 
     if (!roomDestroyed) {
-        shadnet::NotifyMemberLeft pb;
-        pb.set_room_id(roomId);
-        pb.set_member_id(myMemberId);
-        pb.set_npid(m_info.npid.toStdString());
-        pb.set_ctx_id(m_matching.ctxId);
-        QByteArray payload;
-        appendProto(payload, pb);
-        NotifyRoomMembers(NotificationType::MemberLeft, payload, m_matching.comId, roomId);
+        RoomMember left;
+        left.memberId = myMemberId;
+        left.npid = m_info.npid;
+        SendRoomMemberEvent(roomId, Matching2::ORBIS_NP_MATCHING2_ROOM_EVENT_MEMBER_LEFT,
+                            Matching2::ORBIS_NP_MATCHING2_EVENT_CAUSE_LEAVE_ACTION, left);
         qDebug() << "  -> MemberLeft room=" << roomId << "npid=" << m_info.npid
                  << "mid=" << myMemberId << "to remaining members (disconnect)";
     }

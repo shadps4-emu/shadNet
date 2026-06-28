@@ -104,6 +104,13 @@ ErrorType ClientSession::CmdLogin(StreamExtractor& data, QByteArray& reply) {
     m_info.banned = user.banned;
     m_authenticated = true;
 
+    m_matching.titleId = QString::fromStdString(req.title_id());
+    {
+        QReadLocker lk(&m_shared->matching.roomsLock);
+        m_matching.matchingKey =
+            m_shared->matching.titleGroups.value(m_matching.titleId, m_matching.titleId);
+    }
+
     UserRelationships rels = m_db->GetRelationships(user.userId);
 
     // Build LoginReply
