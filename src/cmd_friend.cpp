@@ -266,7 +266,7 @@ ErrorType ClientSession::CmdAddBlock(StreamExtractor& data) {
     }
 
     // WebApi: our block list changed.
-    PushWebApiEvent(QString(), 0, kWebApiBlockDataType, QByteArray(), targetNpid, QString(),
+    PushWebApiEvent(QString(), 0, kWebApiBlockDataType, QByteArray(), QString(), m_info.npid,
                     m_info.userId);
 
     qInfo() << m_info.npid << "blocked" << targetNpid;
@@ -308,7 +308,7 @@ ErrorType ClientSession::CmdRemoveBlock(StreamExtractor& data) {
         return ErrorType::DbFail;
 
     // WebApi: our block list changed.
-    PushWebApiEvent(QString(), 0, kWebApiBlockDataType, QByteArray(), targetNpid, QString(),
+    PushWebApiEvent(QString(), 0, kWebApiBlockDataType, QByteArray(), QString(), m_info.npid,
                     m_info.userId);
 
     qInfo() << m_info.npid << "unblocked" << targetNpid;
