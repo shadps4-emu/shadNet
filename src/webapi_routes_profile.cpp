@@ -188,6 +188,31 @@ void RegisterProfileRoutes(QHttpServer& http, Database& db) {
                    qInfo() << "WebAPI: profile for" << onlineId << "fields" << fields;
                    return JsonOk(body);
                });
+
+    // GET /v1/users/<accountId|me>/profile/personalDetail/isAvailable -- whether the user
+    // permits in-game real-name display. Self-only. isAvailable is present only when a real
+    // name is registered; shadNet has no real-name registration, so we always return {} (the
+    // "real name not registered" case).
+    http.route(
+        "/v1/users/<arg>/profile/personalDetail/isAvailable",
+        [&db](const QString& userKey, const QHttpServerRequest& req) -> QHttpServerResponse {
+            auto auth = WebApiAuth::Authenticate(req, db);
+            if (!auth.userId.has_value()) {
+                return std::move(auth.errorResponse);
+            }
+            const bool self =
+                userKey.compare(QStringLiteral("me"), Qt::CaseInsensitive) == 0 ||
+                userKey.compare(auth.npid, Qt::CaseInsensitive) == 0 ||
+                userKey == QString::number(*auth.userId);
+            if (!self) {
+                return JsonError(QHttpServerResponse::StatusCode::Forbidden,
+                                 UP_ACCESS_DENIED_OWNERSHIP,
+                                 QStringLiteral("Access denied by resource ownership"));
+            }
+            qInfo() << "WebAPI: personalDetail/isAvailable for" << auth.npid
+                    << "-> {} (no real name registered)";
+            return JsonOk(QJsonObject{});
+        });
 }
 
 } // namespace WebApiRoutes
