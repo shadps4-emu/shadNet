@@ -231,6 +231,58 @@ QJsonObject BuildFriendList(Database& db, SharedState& shared,
 //   limit=[0-2000] (default 2000; 0 == count-only), offset=[0-2147483647] (default 0).
 // Block list is always self-only ("can only be obtained for the current user").
 void RegisterUserRoutes(QHttpServer& http, Database& db, SharedState& shared) {
+    // GET /v1/friendOnlineIdLists?accountIds=id1,id2,... (max 10)
+    // Batch: each specified user's full friend list as account info only (onlineId +
+    // accountId) -- no presence/profile (use /v1/users/<arg>/friendList for those).
+    http.route(
+        "/v1/friendOnlineIdLists",
+        [&db](const QHttpServerRequest& req) -> QHttpServerResponse {
+            auto auth = WebApiAuth::Authenticate(req, db);
+            if (!auth.userId.has_value()) {
+                return std::move(auth.errorResponse);
+            }
+            const QUrlQuery query(req.url());
+            if (!query.hasQueryItem(QStringLiteral("accountIds"))) {
+                return JsonError(
+                    QHttpServerResponse::StatusCode::BadRequest, UP_QUERY_PARAM_REQUIRED,
+                    QStringLiteral("'accountIds' parameter required in query string"));
+            }
+            const QStringList ids =
+                query.queryItemValue(QStringLiteral("accountIds"))
+                    .split(QLatin1Char(','), Qt::SkipEmptyParts);
+            if (ids.isEmpty() || ids.size() > 10) {
+                return JsonError(
+                    QHttpServerResponse::StatusCode::BadRequest, UP_INVALID_QUERY_PARAM,
+                    QStringLiteral("Invalid parameter in query string (parameter: 'accountIds')"));
+            }
+            QJsonArray lists;
+            for (const QString& idStr : ids) {
+                bool ok = false;
+                const qlonglong accId = idStr.toLongLong(&ok);
+                if (!ok)
+                    continue; // skip malformed ids
+                QJsonObject userObj;
+                QJsonObject u;
+                u.insert(QStringLiteral("onlineId"),
+                         db.GetUsername(accId).value_or(QString()));
+                u.insert(QStringLiteral("accountId"), QString::number(accId));
+                userObj.insert(QStringLiteral("user"), u);
+                QJsonArray fl;
+                for (const auto& fr : db.GetRelationships(accId).friends) {
+                    QJsonObject f;
+                    f.insert(QStringLiteral("onlineId"), fr.second);
+                    f.insert(QStringLiteral("accountId"), QString::number(fr.first));
+                    fl.append(f);
+                }
+                userObj.insert(QStringLiteral("friendOnlineIdLists"), fl);
+                lists.append(userObj);
+            }
+            QJsonObject body;
+            body.insert(QStringLiteral("friendOnlineIdLists"), lists);
+            qInfo() << "WebAPI: friendOnlineIdLists for" << ids.size() << "user(s)";
+            return JsonOk(body);
+        });
+
     http.route(
         "/v1/users/<arg>/friendList",
         [&db, &shared](const QString& userKey, const QHttpServerRequest& req) -> QHttpServerResponse {
