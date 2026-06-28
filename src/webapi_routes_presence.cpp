@@ -343,8 +343,25 @@ void RegisterPresenceRoutes(QHttpServer& http, Database& db, SharedState& shared
                                                          /*forcePlatform=*/true));
                        }
                        presence.insert(QStringLiteral("platformInfoList"), list);
-                   } else { // incontext -- not tracked; return an empty list.
-                       presence.insert(QStringLiteral("incontextInfoList"), QJsonArray());
+                   } else { // incontext: the target's presence in games sharing the
+                            // caller's NP Communication ID (the requesting app's title).
+                       QJsonArray list;
+                       if (online && (platReq.isEmpty() ||
+                                      platReq == QStringLiteral("PS4"))) {
+                           QString callerComId, targetComId;
+                           {
+                               QReadLocker ul(&shared.usageLock);
+                               callerComId = shared.usageClientGame.value(*auth.userId);
+                               targetComId = shared.usageClientGame.value(targetId);
+                           }
+                           // Only list the entry when both run the same (non-empty) comId.
+                           if (!callerComId.isEmpty() && callerComId == targetComId) {
+                               list.append(MakePresenceEntry(
+                                   online, QStringLiteral("PS4"), gameStatus, npTitleId,
+                                   titleName, detail, /*forcePlatform=*/true));
+                           }
+                       }
+                       presence.insert(QStringLiteral("incontextInfoList"), list);
                    }
 
                    QJsonObject body;
