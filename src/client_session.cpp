@@ -295,10 +295,10 @@ void ClientSession::SendSelfNotification(NotificationType type, const QByteArray
     SendPacket(BuildNotification(type, payload));
 }
 
-QByteArray ClientSession::BuildWebApiPushPayload(const QString& npServiceName,
-                                                 quint32 npServiceLabel, const QString& dataType,
-                                                 const QByteArray& data, const QString& fromNpid,
-                                                 const QString& toNpid) {
+QByteArray ClientSession::BuildWebApiPushPayload(
+    const QString& npServiceName, quint32 npServiceLabel, const QString& dataType,
+    const QByteArray& data, const QString& fromNpid, const QString& toNpid,
+    const QList<QPair<QString, QString>>& extdData) {
     QByteArray payload;
     appendBlob(payload, npServiceName.toUtf8());
     appendU32LE(payload, npServiceLabel);
@@ -306,17 +306,25 @@ QByteArray ClientSession::BuildWebApiPushPayload(const QString& npServiceName,
     appendBlob(payload, data);
     appendBlob(payload, fromNpid.toUtf8());
     appendBlob(payload, toNpid.toUtf8());
+    // Extended-data section (backward-compatible append): u32 LE count, then
+    // (blob key, blob value) per pair. Old clients stop after toNpid and ignore it.
+    appendU32LE(payload, static_cast<quint32>(extdData.size()));
+    for (const auto& kv : extdData) {
+        appendBlob(payload, kv.first.toUtf8());
+        appendBlob(payload, kv.second.toUtf8());
+    }
     return payload;
 }
 
 void ClientSession::PushWebApiEvent(const QString& npServiceName, quint32 npServiceLabel,
                                     const QString& dataType, const QByteArray& data,
                                     const QString& fromNpid, const QString& toNpid,
-                                    int64_t targetUserId) {
-    SendNotification(
-        NotificationType::WebApiPushEvent,
-        BuildWebApiPushPayload(npServiceName, npServiceLabel, dataType, data, fromNpid, toNpid),
-        targetUserId);
+                                    int64_t targetUserId,
+                                    const QList<QPair<QString, QString>>& extdData) {
+    SendNotification(NotificationType::WebApiPushEvent,
+                     BuildWebApiPushPayload(npServiceName, npServiceLabel, dataType, data,
+                                            fromNpid, toNpid, extdData),
+                     targetUserId);
 }
 
 void ClientSession::SendPacket(const QByteArray& pkt) {

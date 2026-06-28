@@ -13,7 +13,10 @@
 #include <QJsonArray>
 #include <QJsonObject>
 #include <QSet>
+#include <QList>
+#include <QPair>
 #include <QString>
+#include <QUrlQuery>
 
 #include <QDateTime>
 #include <QJsonValue>
@@ -107,14 +110,27 @@ QHttpServerResponse HandlePresenceWrite(Database& db, SharedState& shared, const
         }
     }
 
+    // notificationWithData=true attaches the status/data to the presence update event so a
+    // listener gets it as extended data (pExtdData) rather than only re-fetching.
+    QList<QPair<QString, QString>> extd;
+    if (QUrlQuery(req.url()).queryItemValue(QStringLiteral("notificationWithData")) ==
+        QStringLiteral("true")) {
+        if (obj.contains(QStringLiteral("gameStatus")))
+            extd.append({QStringLiteral("gameStatus"),
+                         obj.value(QStringLiteral("gameStatus")).toString()});
+        if (obj.contains(QStringLiteral("gameData")))
+            extd.append({QStringLiteral("gameData"),
+                         obj.value(QStringLiteral("gameData")).toString()});
+    }
+
     // Tell each online friend's push listener our presence changed; it re-fetches via
-    // friendList?presenceType=... (same empty-body trigger the connect/disconnect path uses).
+    // friendList?presenceType=... (plus the extd payload above when notificationWithData).
     if (!friendSenders.isEmpty()) {
         const QByteArray pkt = ClientSession::BuildNotification(
             NotificationType::WebApiPushEvent,
             ClientSession::BuildWebApiPushPayload(
                 QString(), 0, QStringLiteral("np:service:presence:onlineStatus"), QByteArray(),
-                auth.npid, QString()));
+                auth.npid, QString(), extd));
         for (const auto& send : friendSenders)
             send(pkt);
     }

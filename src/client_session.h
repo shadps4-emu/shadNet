@@ -7,6 +7,8 @@
 #include <QAtomicInt>
 #include <QByteArray>
 #include <QHash>
+#include <QList>
+#include <QPair>
 #include <QObject>
 #include <QReadWriteLock>
 #include <QSet>
@@ -172,17 +174,21 @@ public:
     // Static packet builders (no instance state). Public so WebAPI fan-out sites can build
     // notification / push packets without a ClientSession instance.
     static QByteArray BuildNotification(NotificationType type, const QByteArray& payload);
-    static QByteArray BuildWebApiPushPayload(const QString& npServiceName, quint32 npServiceLabel,
-                                             const QString& dataType, const QByteArray& data,
-                                             const QString& fromNpid, const QString& toNpid);
+    static QByteArray BuildWebApiPushPayload(
+        const QString& npServiceName, quint32 npServiceLabel, const QString& dataType,
+        const QByteArray& data, const QString& fromNpid, const QString& toNpid,
+        const QList<QPair<QString, QString>>& extdData = {});
 
 private:
     // Push a generic NP WebApi push event to one online user. The emulator forwards it
     // verbatim to libSceNpWebApi push-event callbacks. data may be empty (the listener
     // re-fetches via the REST routes); from/to npids may be empty.
+    // extdData: optional (key,value) extended-data pairs delivered to the receiving game's
+    // extended push-event callback (pExtdData). Default empty = a plain trigger push.
     void PushWebApiEvent(const QString& npServiceName, quint32 npServiceLabel,
                          const QString& dataType, const QByteArray& data, const QString& fromNpid,
-                         const QString& toNpid, int64_t targetUserId);
+                         const QString& toNpid, int64_t targetUserId,
+                         const QList<QPair<QString, QString>>& extdData = {});
 
     // Matching helpers (cmd_matching.cpp)
     void SendMatchingNotification(NotificationType type, const QByteArray& payload,
