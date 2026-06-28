@@ -76,14 +76,17 @@ struct SharedState {
             usageClientGame.erase(it);
         }
     }
-    void UsageTouchGame(int64_t userId, const QString& comId) {
+    // Returns true when the user's comId was newly set or changed (false if unchanged /
+    // empty), so callers can react to the transition (e.g. emit a gameTitleInfo presence
+    // update once same-comId grouping becomes possible).
+    bool UsageTouchGame(int64_t userId, const QString& comId) {
         if (comId.isEmpty())
-            return;
+            return false;
         QWriteLocker lk(&usageLock);
         auto it = usageClientGame.find(userId);
         if (it != usageClientGame.end()) {
             if (it.value() == comId)
-                return;
+                return false;
             auto old = usageGameUsers.find(it.value());
             if (old != usageGameUsers.end() && --old.value() <= 0)
                 usageGameUsers.erase(old);
@@ -92,6 +95,7 @@ struct SharedState {
             usageClientGame.insert(userId, comId);
         }
         ++usageGameUsers[comId];
+        return true;
     }
 };
 
@@ -185,6 +189,9 @@ private:
     // re-fetches via the REST routes); from/to npids may be empty.
     // extdData: optional (key,value) extended-data pairs delivered to the receiving game's
     // extended push-event callback (pExtdData). Default empty = a plain trigger push.
+    // Emit a gameTitleInfo presence update (pure trigger, no body) to this user's online
+    // friends running the same NP Comm ID. Called when the comId first becomes known.
+    void EmitPresenceGameTitleInfo();
     void PushWebApiEvent(const QString& npServiceName, quint32 npServiceLabel,
                          const QString& dataType, const QByteArray& data, const QString& fromNpid,
                          const QString& toNpid, int64_t targetUserId,

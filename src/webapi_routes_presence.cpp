@@ -13,7 +13,10 @@
 #include <QJsonArray>
 #include <QJsonObject>
 #include <QSet>
+#include <QList>
+#include <QPair>
 #include <QString>
+#include <QUrlQuery>
 
 #include <QDateTime>
 #include <QJsonValue>
@@ -72,10 +75,7 @@ QHttpServerResponse HandlePresenceWrite(Database& db, SharedState& shared, const
                          QStringLiteral("'gameStatus' is required in the request body"));
     }
 
-    // Write the published detail into the caller's live presence entry, then collect the
-    // online friends to notify. Online status is implicit by membership in the clients map;
-    // these fields add the in-game detail that friendList?presenceType=... reads back.
-    QList<std::function<void(QByteArray)>> friendSenders;
+    // Write the published detail into the caller's live presence entry.
     {
         QWriteLocker lk(&shared.clientsLock);
         auto it = shared.clients.find(*auth.userId);
@@ -99,24 +99,80 @@ QHttpServerResponse HandlePresenceWrite(Database& db, SharedState& shared, const
                 }
             }
             it->presenceUpdatedAt = QDateTime::currentSecsSinceEpoch();
-            for (auto fr = it->friends.cbegin(); fr != it->friends.cend(); ++fr) {
-                auto fit = shared.clients.find(fr.key());
-                if (fit != shared.clients.end() && fit->send)
-                    friendSenders.append(fit->send);
+        }
+    }
+
+    // SDK: game-status / game-data presence update events are received ONLY by users on a
+    // title with the same NP Communication ID as the updater. Snapshot the updater's comId
+    // and the set of users sharing it (usageLock), separately from clientsLock to avoid lock
+    // nesting. If the updater's comId isn't known yet, fall back to all online friends.
+    QString updaterComId;
+    QSet<int64_t> sameComId;
+    {
+        QReadLocker ul(&shared.usageLock);
+        updaterComId = shared.usageClientGame.value(*auth.userId);
+        if (!updaterComId.isEmpty()) {
+            for (auto it = shared.usageClientGame.cbegin(); it != shared.usageClientGame.cend();
+                 ++it) {
+                if (it.value() == updaterComId)
+                    sameComId.insert(it.key());
             }
         }
     }
 
-    // Tell each online friend's push listener our presence changed; it re-fetches via
-    // friendList?presenceType=... (same empty-body trigger the connect/disconnect path uses).
-    if (!friendSenders.isEmpty()) {
-        const QByteArray pkt = ClientSession::BuildNotification(
-            NotificationType::WebApiPushEvent,
-            ClientSession::BuildWebApiPushPayload(
-                QString(), 0, QStringLiteral("np:service:presence:onlineStatus"), QByteArray(),
-                auth.npid, QString()));
-        for (const auto& send : friendSenders)
-            send(pkt);
+    // Collect online friends to notify (recipient npid + send), comId-gated when known.
+    QList<QPair<QString, std::function<void(QByteArray)>>> recipients;
+    {
+        QReadLocker lk(&shared.clientsLock);
+        auto it = shared.clients.constFind(*auth.userId);
+        if (it != shared.clients.constEnd()) {
+            for (auto fr = it->friends.cbegin(); fr != it->friends.cend(); ++fr) {
+                const int64_t fid = fr.key();
+                if (!updaterComId.isEmpty() && !sameComId.contains(fid))
+                    continue; // SDK comId gate
+                auto fit = shared.clients.constFind(fid);
+                if (fit != shared.clients.constEnd() && fit->send)
+                    recipients.append({fit->npid, fit->send});
+            }
+        }
+    }
+
+    // Emit the per-field presence update events (SDK): gameStatus -> np:service:presence:
+    // gameStatus, gameData -> np:service:presence:gameData, both with NP service name
+    // 'inGamePresence'. The JSON body ({"gameStatus":..} / {"gameData":..}) is included only
+    // when notificationWithData=true; otherwise the event fires with no body (re-fetch).
+    const bool notify = QUrlQuery(req.url()).queryItemValue(
+                            QStringLiteral("notificationWithData")) == QStringLiteral("true");
+    QList<QPair<QString, QByteArray>> events; // (dataType, body)
+    if (obj.contains(QStringLiteral("gameStatus"))) {
+        QByteArray body;
+        if (notify) {
+            QJsonObject o;
+            o.insert(QStringLiteral("gameStatus"), obj.value(QStringLiteral("gameStatus")));
+            body = QJsonDocument(o).toJson(QJsonDocument::Compact);
+        }
+        events.append({QStringLiteral("np:service:presence:gameStatus"), body});
+    }
+    if (obj.contains(QStringLiteral("gameData"))) {
+        QByteArray body;
+        if (notify) {
+            QJsonObject o;
+            o.insert(QStringLiteral("gameData"), obj.value(QStringLiteral("gameData")));
+            body = QJsonDocument(o).toJson(QJsonDocument::Compact);
+        }
+        events.append({QStringLiteral("np:service:presence:gameData"), body});
+    }
+
+    static const QString kInGamePresence = QStringLiteral("inGamePresence");
+    for (const auto& ev : events) {
+        for (const auto& rcpt : recipients) {
+            // from = updater, to = recipient (per SDK event content).
+            const QByteArray pkt = ClientSession::BuildNotification(
+                NotificationType::WebApiPushEvent,
+                ClientSession::BuildWebApiPushPayload(kInGamePresence, 0, ev.first, ev.second,
+                                                      auth.npid, rcpt.first));
+            rcpt.second(pkt);
+        }
     }
 
     // presence writes return 204 No Content.

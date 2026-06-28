@@ -146,9 +146,12 @@ ErrorType ClientSession::DispatchCommand(CommandType cmd, StreamExtractor& se, Q
     // ComId; peek it (non-consuming) so the handler's own parse is undisturbed.
     if (LeadsWithComId(cmd)) {
         const QByteArray cid = se.peekBytes(12);
-        if (cid.size() == 12)
-            m_shared->UsageTouchGame(m_info.userId,
-                                     QString::fromLatin1(cid.constData(), cid.size()));
+        if (cid.size() == 12) {
+            // comId newly known/changed -> same-comId friends learn our title info.
+            if (m_shared->UsageTouchGame(
+                    m_info.userId, QString::fromLatin1(cid.constData(), cid.size())))
+                EmitPresenceGameTitleInfo();
+        }
     }
     // Authenticated commands.
     switch (cmd) {
@@ -314,6 +317,48 @@ QByteArray ClientSession::BuildWebApiPushPayload(
         appendBlob(payload, kv.second.toUtf8());
     }
     return payload;
+}
+
+void ClientSession::EmitPresenceGameTitleInfo() {
+    // SDK: np:service:presence:gameTitleInfo, service 'inGamePresence', received only by
+    // same-NP-Comm-ID users. No body (pure trigger): recipients re-fetch title info via
+    // GET presence / friendList. from = self, to = recipient.
+    QString myComId;
+    QSet<int64_t> sameComId;
+    {
+        QReadLocker ul(&m_shared->usageLock);
+        myComId = m_shared->usageClientGame.value(m_info.userId);
+        if (myComId.isEmpty())
+            return;
+        for (auto it = m_shared->usageClientGame.cbegin();
+             it != m_shared->usageClientGame.cend(); ++it) {
+            if (it.value() == myComId)
+                sameComId.insert(it.key());
+        }
+    }
+
+    QList<QPair<QString, int64_t>> recipients; // (recipient npid, recipient userId)
+    {
+        QReadLocker lk(&m_shared->clientsLock);
+        auto it = m_shared->clients.constFind(m_info.userId);
+        if (it == m_shared->clients.constEnd())
+            return;
+        for (auto fr = it->friends.cbegin(); fr != it->friends.cend(); ++fr) {
+            const int64_t fid = fr.key();
+            if (!sameComId.contains(fid))
+                continue; // SDK comId gate
+            auto fit = m_shared->clients.constFind(fid);
+            if (fit != m_shared->clients.constEnd())
+                recipients.append({fit->npid, fid});
+        }
+    }
+
+    static const QString kInGamePresence = QStringLiteral("inGamePresence");
+    static const QString kGameTitleInfo = QStringLiteral("np:service:presence:gameTitleInfo");
+    for (const auto& rcpt : recipients) {
+        PushWebApiEvent(kInGamePresence, 0, kGameTitleInfo, QByteArray(), m_info.npid,
+                        rcpt.first, rcpt.second);
+    }
 }
 
 void ClientSession::PushWebApiEvent(const QString& npServiceName, quint32 npServiceLabel,
