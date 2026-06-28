@@ -31,6 +31,30 @@ constexpr quint32 SESSION_ONLY_CREATOR = 2114562;
 constexpr quint32 SESSION_ONLY_MEMBER = 2114563;
 constexpr quint32 SESSION_NOT_PERMITTED = 2114560;
 
+// 0 == permitted. owner-bind: only the creator may mutate/delete; owner-migration: any member.
+quint32 SessionPermissionError(const SharedState::Session& s, int64_t userId) {
+    const bool isOwner = (s.ownerUserId == userId);
+    bool isMember = false;
+    for (const auto& m : s.members) {
+        if (m.userId == userId) {
+            isMember = true;
+            break;
+        }
+    }
+    if (s.sessionType == QStringLiteral("owner-bind"))
+        return isOwner ? 0u : SESSION_ONLY_CREATOR;
+    return isMember ? 0u : SESSION_ONLY_MEMBER;
+}
+
+QHttpServerResponse SessionPermissionResponse(quint32 err) {
+    return JsonError(QHttpServerResponse::StatusCode::Forbidden, err,
+                     err == SESSION_ONLY_CREATOR
+                         ? QStringLiteral("Only the session creator is permitted to perform "
+                                          "this operation")
+                         : QStringLiteral("Only session members are permitted to perform "
+                                          "this operation"));
+}
+
 constexpr int kImageMax = 160 * 1024;
 constexpr int kDataMax = 1024 * 1024;
 constexpr int kChangeableMax = 1024;
@@ -563,25 +587,8 @@ QHttpServerResponse HandleSessionUpdate(Database& db, SharedState& shared,
     }
     auto& s = it.value();
 
-    const bool isOwner = (s.ownerUserId == *auth.userId);
-    bool isMember = false;
-    for (const auto& m : s.members) {
-        if (m.userId == *auth.userId) {
-            isMember = true;
-            break;
-        }
-    }
-    if (s.sessionType == QStringLiteral("owner-bind")) {
-        if (!isOwner)
-            return JsonError(QHttpServerResponse::StatusCode::Forbidden, SESSION_ONLY_CREATOR,
-                             QStringLiteral("Only the session creator is permitted to perform "
-                                            "this operation"));
-    } else { // owner-migration
-        if (!isMember)
-            return JsonError(QHttpServerResponse::StatusCode::Forbidden, SESSION_ONLY_MEMBER,
-                             QStringLiteral("Only session members are permitted to perform "
-                                            "this operation"));
-    }
+    if (const quint32 err = SessionPermissionError(s, *auth.userId))
+        return SessionPermissionResponse(err);
 
     // sessionName / localizedSessionNames: replaced together when either is present.
     if (obj.contains(QStringLiteral("sessionName")) ||
@@ -738,6 +745,146 @@ QHttpServerResponse HandleSessionGet(Database& db, SharedState& shared, const QS
     return JsonOk(body);
 }
 
+// DELETE /v1/sessions/<arg> -- delete a session (same permission rule as update).
+QHttpServerResponse HandleSessionDelete(Database& db, SharedState& shared,
+                                        const QString& sessionId,
+                                        const QHttpServerRequest& req) {
+    auto auth = WebApiAuth::Authenticate(req, db);
+    if (!auth.userId.has_value()) {
+        return std::move(auth.errorResponse);
+    }
+    QWriteLocker lk(&shared.sessionsLock);
+    auto it = shared.sessions.find(sessionId);
+    if (it == shared.sessions.end()) {
+        return JsonError(QHttpServerResponse::StatusCode::NotFound, SESSION_BAD_REQUEST,
+                         QStringLiteral("Session not found"));
+    }
+    if (const quint32 err = SessionPermissionError(it.value(), *auth.userId))
+        return SessionPermissionResponse(err);
+    shared.sessions.remove(sessionId);
+    qInfo() << "WebAPI: session deleted" << sessionId << "by" << auth.npid;
+    return QHttpServerResponse{QHttpServerResponse::StatusCode::NoContent};
+}
+
+// GET /v1/users/<arg>/friends/sessions -- sessions the caller's friends are in, each friend's
+// highest-priority session, aggregated by session with the friends grouped. @default ==
+// sessionId; other fields additive. sessionApplicationType=party returns empty (shadNet models
+// only game sessions). Paginated via limit (<=100) / offset.
+QHttpServerResponse HandleFriendsSessions(Database& db, SharedState& shared,
+                                          const QHttpServerRequest& req) {
+    auto auth = WebApiAuth::Authenticate(req, db);
+    if (!auth.userId.has_value()) {
+        return std::move(auth.errorResponse);
+    }
+    const QUrlQuery query(req.url());
+    const QStringList fields =
+        query.queryItemValue(QStringLiteral("fields")).split(QLatin1Char(','), Qt::SkipEmptyParts);
+    const bool isDefault = fields.isEmpty() || fields.contains(QStringLiteral("@default"));
+    const bool wantSessionId = isDefault || fields.contains(QStringLiteral("sessionId"));
+    const bool wantName = fields.contains(QStringLiteral("sessionName"));
+    const bool wantCreateTs = fields.contains(QStringLiteral("sessionCreateTimestamp"));
+    const bool wantPlatforms = fields.contains(QStringLiteral("availablePlatforms"));
+    const bool wantMemberCount = fields.contains(QStringLiteral("memberCount"));
+    const bool wantLockFlag = fields.contains(QStringLiteral("sessionLockFlag"));
+    const bool wantFriends = fields.contains(QStringLiteral("friends"));
+    const QString npLanguage = query.queryItemValue(QStringLiteral("npLanguage"));
+    const bool partyRequested =
+        query.queryItemValue(QStringLiteral("sessionApplicationType")) == QStringLiteral("party");
+
+    int limit = 100, offset = 0;
+    if (query.hasQueryItem(QStringLiteral("limit"))) {
+        bool ok = false;
+        const int v = query.queryItemValue(QStringLiteral("limit")).toInt(&ok);
+        if (ok)
+            limit = v < 0 ? 0 : (v > 100 ? 100 : v);
+    }
+    if (query.hasQueryItem(QStringLiteral("offset"))) {
+        bool ok = false;
+        const int v = query.queryItemValue(QStringLiteral("offset")).toInt(&ok);
+        if (ok && v >= 0)
+            offset = v;
+    }
+
+    struct FriendRef {
+        int64_t accountId = 0;
+        QString onlineId;
+        QString platform;
+    };
+    struct Agg {
+        SessionRow row;
+        QList<FriendRef> friends;
+    };
+    QList<QString> order;
+    QHash<QString, Agg> agg;
+    if (!partyRequested) {
+        const auto rels = db.GetRelationships(*auth.userId);
+        for (const auto& f : rels.friends) {
+            const QList<SessionRow> top =
+                CollectUserSessions(shared, f.first, *auth.userId, false, {});
+            if (top.isEmpty())
+                continue;
+            const SessionRow& r = top.first();
+            if (!agg.contains(r.sessionId)) {
+                Agg a;
+                a.row = r;
+                agg.insert(r.sessionId, a);
+                order.append(r.sessionId);
+            }
+            agg[r.sessionId].friends.append({f.first, f.second, r.platform});
+        }
+    }
+
+    const int total = static_cast<int>(order.size());
+    QJsonArray arr;
+    for (int i = offset; i < total && static_cast<int>(arr.size()) < limit; ++i) {
+        const Agg& a = agg[order[i]];
+        const SessionRow& r = a.row;
+        QJsonObject o;
+        if (wantSessionId)
+            o.insert(QStringLiteral("sessionId"), r.sessionId);
+        if (wantName) {
+            QString name = r.sessionName;
+            if (!npLanguage.isEmpty()) {
+                const auto n = r.locName.constFind(npLanguage);
+                if (n != r.locName.constEnd())
+                    name = n.value();
+            }
+            o.insert(QStringLiteral("sessionName"), name);
+        }
+        if (wantCreateTs)
+            o.insert(QStringLiteral("sessionCreateTimestamp"), r.createdAt);
+        if (wantPlatforms) {
+            QJsonArray pa;
+            for (const auto& p : r.availablePlatforms)
+                pa.append(p);
+            o.insert(QStringLiteral("availablePlatforms"), pa);
+        }
+        if (wantMemberCount)
+            o.insert(QStringLiteral("memberCount"), r.memberCount);
+        if (wantLockFlag)
+            o.insert(QStringLiteral("sessionLockFlag"), r.lockFlag);
+        if (wantFriends) {
+            QJsonArray fa;
+            for (const auto& fr : a.friends) {
+                QJsonObject fo;
+                fo.insert(QStringLiteral("onlineId"), fr.onlineId);
+                fo.insert(QStringLiteral("accountId"), QString::number(fr.accountId));
+                fo.insert(QStringLiteral("platform"), fr.platform);
+                fa.append(fo);
+            }
+            o.insert(QStringLiteral("friends"), fa);
+        }
+        arr.append(o);
+    }
+    QJsonObject body;
+    body.insert(QStringLiteral("sessions"), arr);
+    body.insert(QStringLiteral("start"), offset);
+    body.insert(QStringLiteral("size"), static_cast<int>(arr.size()));
+    body.insert(QStringLiteral("totalResults"), total);
+    qInfo() << "WebAPI: friends sessions ->" << arr.size();
+    return JsonOk(body);
+}
+
 } // namespace
 
 void RegisterSessionRoutes(QHttpServer& http, Database& db, SharedState& shared) {
@@ -761,6 +908,20 @@ void RegisterSessionRoutes(QHttpServer& http, Database& db, SharedState& shared)
                [&db, &shared](const QString& sessionId,
                               const QHttpServerRequest& req) -> QHttpServerResponse {
                    return HandleSessionGet(db, shared, sessionId, req);
+               });
+
+    // GET /v1/users/<arg>/friends/sessions -- sessions prioritized by the caller's friends.
+    http.route("/v1/users/<arg>/friends/sessions",
+               [&db, &shared](const QString& /*userKey*/,
+                              const QHttpServerRequest& req) -> QHttpServerResponse {
+                   return HandleFriendsSessions(db, shared, req);
+               });
+
+    // DELETE /v1/sessions/<arg> -- delete a session.
+    http.route("/v1/sessions/<arg>", QHttpServerRequest::Method::Delete,
+               [&db, &shared](const QString& sessionId,
+                              const QHttpServerRequest& req) -> QHttpServerResponse {
+                   return HandleSessionDelete(db, shared, sessionId, req);
                });
 
     // PUT /v1/sessions/<arg> -- update session information.
