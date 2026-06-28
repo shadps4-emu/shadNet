@@ -304,6 +304,13 @@ void RegisterPresenceRoutes(QHttpServer& http, Database& db, SharedState& shared
                    return HandlePresenceWrite(db, shared, "gameStatus", userKey, req);
                });
 
+    // PUT /v1/users/<arg>/presence/gameData (body: {gameData} only)
+    http.route("/v1/users/<arg>/presence/gameData", QHttpServerRequest::Method::Put,
+               [&db, &shared](const QString& userKey,
+                              const QHttpServerRequest& req) -> QHttpServerResponse {
+                   return HandlePresenceWrite(db, shared, "gameData", userKey, req);
+               });
+
     // DELETE /v1/users/<arg>/presence/gameData
     http.route("/v1/users/<arg>/presence/gameData", QHttpServerRequest::Method::Delete,
                [&db, &shared](const QString& userKey,
