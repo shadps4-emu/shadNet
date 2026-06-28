@@ -9,6 +9,7 @@
 #include <QJsonArray>
 #include <QJsonDocument>
 #include <QJsonObject>
+#include <QSet>
 #include <QString>
 #include <QStringList>
 #include <QUuid>
@@ -139,6 +140,131 @@ void LeaveSessionAtIndex(SharedState& shared, int64_t userId, int index) {
         s.ownerUserId = s.members.first().userId;
         s.ownerNpid = s.members.first().npid;
     }
+}
+
+// Resolve a <arg> path segment (accountId | onlineId | "me") to a numeric account id.
+// Returns false when the handle is unknown.
+bool ResolveTarget(Database& db, const QString& userKey, const WebApiAuth::AuthResult& auth,
+                   int64_t& targetId) {
+    if (userKey.compare(QStringLiteral("me"), Qt::CaseInsensitive) == 0 ||
+        userKey.compare(auth.npid, Qt::CaseInsensitive) == 0) {
+        targetId = *auth.userId;
+        return true;
+    }
+    bool num = false;
+    const qlonglong v = userKey.toLongLong(&num);
+    if (num) {
+        targetId = v;
+        return true;
+    }
+    const auto u = db.GetUserId(userKey);
+    if (!u)
+        return false;
+    targetId = *u;
+    return true;
+}
+
+// GET /v1/users/<arg>/sessions -- the target user's sessions (as sessionEntity rows). Private
+// sessions are visible only to participants (invitations are not modeled), so inaccessible
+// private sessions are filtered out rather than returned (the documented 2114560 'not
+// permitted' error applies to direct single-session access, not this list).
+QHttpServerResponse HandleSessionList(Database& db, SharedState& shared, const QString& userKey,
+                                      const QHttpServerRequest& req) {
+    auto auth = WebApiAuth::Authenticate(req, db);
+    if (!auth.userId.has_value()) {
+        return std::move(auth.errorResponse);
+    }
+    int64_t targetId = 0;
+    const bool resolved = ResolveTarget(db, userKey, auth, targetId);
+
+    const QUrlQuery query(req.url());
+    // fields: @default (omitted) == platform,sessionId.
+    const QStringList fields =
+        query.queryItemValue(QStringLiteral("fields")).split(QLatin1Char(','), Qt::SkipEmptyParts);
+    const bool isDefault = fields.isEmpty();
+    const bool wantPlatform = isDefault || fields.contains(QStringLiteral("platform"));
+    const bool wantSessionId = isDefault || fields.contains(QStringLiteral("sessionId"));
+    const bool wantIndex = fields.contains(QStringLiteral("index"));
+    const bool wantPriority = fields.contains(QStringLiteral("priority"));
+
+    const bool hasIndexFilter = query.hasQueryItem(QStringLiteral("index"));
+    QSet<int> indexFilter;
+    if (hasIndexFilter) {
+        for (const QString& tok : query.queryItemValue(QStringLiteral("index"))
+                                      .split(QLatin1Char(','), Qt::SkipEmptyParts)) {
+            bool ok = false;
+            const int i = tok.toInt(&ok);
+            if (ok)
+                indexFilter.insert(i);
+        }
+    }
+
+    struct Entry {
+        QString sessionId;
+        QString platform;
+        int index = 0;
+        int priority = 0;
+        qint64 joinedAt = 0;
+    };
+    QList<Entry> entries;
+    if (resolved) {
+        QReadLocker lk(&shared.sessionsLock);
+        for (auto it = shared.sessions.cbegin(); it != shared.sessions.cend(); ++it) {
+            const auto& s = it.value();
+            const SharedState::SessionMember* tm = nullptr;
+            bool callerIsMember = false;
+            for (const auto& m : s.members) {
+                if (m.userId == targetId)
+                    tm = &m;
+                if (m.userId == *auth.userId)
+                    callerIsMember = true;
+            }
+            if (!tm)
+                continue; // target not a member of this session
+            if (s.sessionPrivacy == QStringLiteral("private") && !callerIsMember)
+                continue; // private + caller not a participant
+            entries.append({s.sessionId, tm->platform, tm->index, tm->priority, tm->joinedAt});
+        }
+    }
+
+    // Selection: explicit index filter, else the single highest-priority + most-recently
+    // joined session (higher priority value == higher priority).
+    QList<Entry> selected;
+    if (hasIndexFilter) {
+        for (const auto& e : entries)
+            if (indexFilter.contains(e.index))
+                selected.append(e);
+    } else {
+        const Entry* best = nullptr;
+        for (const auto& e : entries) {
+            if (!best || e.priority > best->priority ||
+                (e.priority == best->priority && e.joinedAt > best->joinedAt))
+                best = &e;
+        }
+        if (best)
+            selected.append(*best);
+    }
+
+    QJsonArray arr;
+    for (const auto& e : selected) {
+        QJsonObject o;
+        if (wantPlatform)
+            o.insert(QStringLiteral("platform"), e.platform);
+        if (wantSessionId)
+            o.insert(QStringLiteral("sessionId"), e.sessionId);
+        if (wantIndex)
+            o.insert(QStringLiteral("index"), e.index);
+        if (wantPriority)
+            o.insert(QStringLiteral("priority"), e.priority);
+        arr.append(o);
+    }
+    QJsonObject body;
+    body.insert(QStringLiteral("sessions"), arr);
+    body.insert(QStringLiteral("start"), 0);
+    body.insert(QStringLiteral("size"), static_cast<int>(arr.size()));
+    body.insert(QStringLiteral("totalResults"), static_cast<int>(arr.size()));
+    qInfo() << "WebAPI: session list for target" << targetId << "-> " << arr.size();
+    return JsonOk(body);
 }
 
 QHttpServerResponse HandleSessionCreate(Database& db, SharedState& shared,
@@ -282,6 +408,13 @@ void RegisterSessionRoutes(QHttpServer& http, Database& db, SharedState& shared)
     http.route("/v1/sessions", QHttpServerRequest::Method::Post,
                [&db, &shared](const QHttpServerRequest& req) -> QHttpServerResponse {
                    return HandleSessionCreate(db, shared, req);
+               });
+
+    // GET /v1/users/<arg>/sessions -- list a user's sessions.
+    http.route("/v1/users/<arg>/sessions",
+               [&db, &shared](const QString& userKey,
+                              const QHttpServerRequest& req) -> QHttpServerResponse {
+                   return HandleSessionList(db, shared, userKey, req);
                });
 }
 
