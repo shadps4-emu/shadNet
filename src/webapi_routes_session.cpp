@@ -29,6 +29,7 @@ constexpr quint32 SESSION_USER_NOT_ONLINE = 2114564;
 constexpr quint32 SESSION_BAD_REQUEST = 2114561; // PLACEHOLDER (not from the doc)
 constexpr quint32 SESSION_ONLY_CREATOR = 2114562;
 constexpr quint32 SESSION_ONLY_MEMBER = 2114563;
+constexpr quint32 SESSION_NOT_PERMITTED = 2114560;
 
 constexpr int kImageMax = 160 * 1024;
 constexpr int kDataMax = 1024 * 1024;
@@ -488,6 +489,123 @@ QHttpServerResponse HandleSessionUpdate(Database& db, SharedState& shared,
     return QHttpServerResponse{QHttpServerResponse::StatusCode::NoContent};
 }
 
+// GET /v1/sessions/<arg> -- session information. Private sessions are accessible only to a
+// participant (invitations not modeled) -> otherwise 2114560. @default returns the core
+// fields (+ sessionType, per the doc example); members/sessionLockFlag/sendNotificationFlag
+// are additive. npLanguage selects a localized sessionName/sessionStatus within @default.
+QHttpServerResponse HandleSessionGet(Database& db, SharedState& shared, const QString& sessionId,
+                                     const QHttpServerRequest& req) {
+    auto auth = WebApiAuth::Authenticate(req, db);
+    if (!auth.userId.has_value()) {
+        return std::move(auth.errorResponse);
+    }
+    const QUrlQuery query(req.url());
+    const QStringList fields =
+        query.queryItemValue(QStringLiteral("fields")).split(QLatin1Char(','), Qt::SkipEmptyParts);
+    const bool wantDefault = fields.isEmpty() || fields.contains(QStringLiteral("@default"));
+    const bool wantMembers = fields.contains(QStringLiteral("members"));
+    const bool wantLockFlag = fields.contains(QStringLiteral("sessionLockFlag"));
+    const bool wantNotifyFlag = fields.contains(QStringLiteral("sendNotificationFlag"));
+    const QString npLanguage = query.queryItemValue(QStringLiteral("npLanguage"));
+
+    // Snapshot under the read lock (excluding the large blobs), then do DB lookups + build
+    // JSON outside the lock.
+    struct Snap {
+        QString privacy, type, name, status, ownerNpid;
+        QHash<QString, QString> locName, locStatus;
+        int maxUser = 0;
+        qint64 createdAt = 0;
+        int64_t ownerUserId = 0;
+        QStringList platforms;
+        bool lockFlag = false, notifyFlag = false;
+        QList<SharedState::SessionMember> members;
+    } snap;
+    bool found = false, permitted = false;
+    {
+        QReadLocker lk(&shared.sessionsLock);
+        auto it = shared.sessions.constFind(sessionId);
+        if (it != shared.sessions.constEnd()) {
+            found = true;
+            const auto& s = it.value();
+            bool callerIsMember = false;
+            for (const auto& m : s.members)
+                if (m.userId == *auth.userId) {
+                    callerIsMember = true;
+                    break;
+                }
+            permitted = (s.sessionPrivacy != QStringLiteral("private")) || callerIsMember;
+            snap.privacy = s.sessionPrivacy;
+            snap.type = s.sessionType;
+            snap.name = s.sessionName;
+            snap.status = s.sessionStatus;
+            snap.ownerNpid = s.ownerNpid;
+            snap.locName = s.localizedSessionNames;
+            snap.locStatus = s.localizedSessionStatus;
+            snap.maxUser = s.sessionMaxUser;
+            snap.createdAt = s.createdAt;
+            snap.ownerUserId = s.ownerUserId;
+            snap.platforms = s.availablePlatforms;
+            snap.lockFlag = s.sessionLockFlag;
+            snap.notifyFlag = s.sendNotificationFlag;
+            snap.members = s.members;
+        }
+    }
+    if (!found) {
+        return JsonError(QHttpServerResponse::StatusCode::NotFound, SESSION_BAD_REQUEST,
+                         QStringLiteral("Session not found"));
+    }
+    if (!permitted) {
+        return JsonError(QHttpServerResponse::StatusCode::Forbidden, SESSION_NOT_PERMITTED,
+                         QStringLiteral("Not permitted to access the session"));
+    }
+
+    QJsonObject body;
+    if (wantDefault) {
+        QString name = snap.name, status = snap.status;
+        if (!npLanguage.isEmpty()) {
+            const auto n = snap.locName.constFind(npLanguage);
+            if (n != snap.locName.constEnd())
+                name = n.value();
+            const auto st = snap.locStatus.constFind(npLanguage);
+            if (st != snap.locStatus.constEnd())
+                status = st.value();
+        }
+        body.insert(QStringLiteral("sessionPrivacy"), snap.privacy);
+        body.insert(QStringLiteral("sessionMaxUser"), snap.maxUser);
+        body.insert(QStringLiteral("sessionType"), snap.type);
+        body.insert(QStringLiteral("sessionName"), name);
+        body.insert(QStringLiteral("sessionStatus"), status);
+        body.insert(QStringLiteral("sessionCreateTimestamp"), snap.createdAt);
+        QJsonObject creator;
+        creator.insert(QStringLiteral("onlineId"),
+                       db.GetUsername(snap.ownerUserId).value_or(snap.ownerNpid));
+        creator.insert(QStringLiteral("accountId"), QString::number(snap.ownerUserId));
+        body.insert(QStringLiteral("sessionCreator"), creator);
+        QJsonArray plats;
+        for (const auto& p : snap.platforms)
+            plats.append(p);
+        body.insert(QStringLiteral("availablePlatforms"), plats);
+    }
+    if (wantMembers) {
+        // member object (per the 'member' spec): {accountId (numeric string), onlineId,
+        // platform}.
+        QJsonArray ms;
+        for (const auto& m : snap.members) {
+            QJsonObject mo;
+            mo.insert(QStringLiteral("accountId"), QString::number(m.userId));
+            mo.insert(QStringLiteral("onlineId"), db.GetUsername(m.userId).value_or(m.npid));
+            mo.insert(QStringLiteral("platform"), m.platform);
+            ms.append(mo);
+        }
+        body.insert(QStringLiteral("members"), ms);
+    }
+    if (wantLockFlag)
+        body.insert(QStringLiteral("sessionLockFlag"), snap.lockFlag);
+    if (wantNotifyFlag)
+        body.insert(QStringLiteral("sendNotificationFlag"), snap.notifyFlag);
+    return JsonOk(body);
+}
+
 } // namespace
 
 void RegisterSessionRoutes(QHttpServer& http, Database& db, SharedState& shared) {
@@ -502,6 +620,13 @@ void RegisterSessionRoutes(QHttpServer& http, Database& db, SharedState& shared)
                [&db, &shared](const QString& userKey,
                               const QHttpServerRequest& req) -> QHttpServerResponse {
                    return HandleSessionList(db, shared, userKey, req);
+               });
+
+    // GET /v1/sessions/<arg> -- session information.
+    http.route("/v1/sessions/<arg>", QHttpServerRequest::Method::Get,
+               [&db, &shared](const QString& sessionId,
+                              const QHttpServerRequest& req) -> QHttpServerResponse {
+                   return HandleSessionGet(db, shared, sessionId, req);
                });
 
     // PUT /v1/sessions/<arg> -- update session information.
