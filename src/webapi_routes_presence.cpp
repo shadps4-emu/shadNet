@@ -204,13 +204,15 @@ QHttpServerResponse HandlePresenceWrite(Database& db, SharedState& shared, const
 
 } // namespace
 
-// DELETE /v1/users/<arg>/presence/gameData -- clear the in-game free-form data. Self only.
-// Clears gameData + the sticky notificationWithData latch (a documented reset trigger), and
-// emits a bodiless gameData update event (deletion is a gameData change) to same-comId
-// friends, unless the user is Appear-Offline.
-static QHttpServerResponse HandlePresenceDeleteGameData(Database& db, SharedState& shared,
-                                                        const QString& userKey,
-                                                        const QHttpServerRequest& req) {
+// Shared DELETE handler for the presence delete routes (gameData, gameStatus). Self only.
+// Clears the named field, emits a bodiless update event of `dataType` (deletion is a change)
+// to same-comId friends unless Appear-Offline, and -- for gameData only -- resets the sticky
+// notificationWithData latch (the SDK reset trigger is DELETE game data, not game status).
+enum class DeleteField { GameData, GameStatus };
+static QHttpServerResponse HandlePresenceDelete(Database& db, SharedState& shared,
+                                                DeleteField field, const QString& dataType,
+                                                const QString& userKey,
+                                                const QHttpServerRequest& req) {
     auto auth = WebApiAuth::Authenticate(req, db);
     if (!auth.userId.has_value()) {
         return std::move(auth.errorResponse);
@@ -229,12 +231,19 @@ static QHttpServerResponse HandlePresenceDeleteGameData(Database& db, SharedStat
         auto it = shared.clients.find(*auth.userId);
         if (it != shared.clients.end()) {
             appearOffline = it->appearOffline;
-            it->gameData.clear();
-            it->notifyWithData = false; // SDK: DELETE game data resets notificationWithData
+            if (field == DeleteField::GameData) {
+                it->gameData.clear();
+                it->notifyWithData = false; // SDK: DELETE game data resets notificationWithData
+            } else {
+                it->gameStatus.clear();
+                it->localizedGameStatus.clear(); // localized variants follow the default status
+            }
             it->presenceUpdatedAt = QDateTime::currentSecsSinceEpoch();
         }
     }
-    qInfo() << "WebAPI: delete gameData for" << auth.npid;
+    qInfo() << "WebAPI: delete"
+            << (field == DeleteField::GameData ? "gameData" : "gameStatus") << "for"
+            << auth.npid;
 
     if (appearOffline)
         return QHttpServerResponse{QHttpServerResponse::StatusCode::NoContent};
@@ -270,11 +279,10 @@ static QHttpServerResponse HandlePresenceDeleteGameData(Database& db, SharedStat
     }
     // Deletion event carries no body (SDK: update events upon deletion omit the member).
     static const QString kInGamePresence = QStringLiteral("inGamePresence");
-    static const QString kGameData = QStringLiteral("np:service:presence:gameData");
     for (const auto& rcpt : recipients) {
         const QByteArray pkt = ClientSession::BuildNotification(
             NotificationType::WebApiPushEvent,
-            ClientSession::BuildWebApiPushPayload(kInGamePresence, 0, kGameData, QByteArray(),
+            ClientSession::BuildWebApiPushPayload(kInGamePresence, 0, dataType, QByteArray(),
                                                   auth.npid, rcpt.first));
         rcpt.second(pkt);
     }
@@ -300,7 +308,18 @@ void RegisterPresenceRoutes(QHttpServer& http, Database& db, SharedState& shared
     http.route("/v1/users/<arg>/presence/gameData", QHttpServerRequest::Method::Delete,
                [&db, &shared](const QString& userKey,
                               const QHttpServerRequest& req) -> QHttpServerResponse {
-                   return HandlePresenceDeleteGameData(db, shared, userKey, req);
+                   return HandlePresenceDelete(db, shared, DeleteField::GameData,
+                                               QStringLiteral("np:service:presence:gameData"),
+                                               userKey, req);
+               });
+
+    // DELETE /v1/users/<arg>/presence/gameStatus
+    http.route("/v1/users/<arg>/presence/gameStatus", QHttpServerRequest::Method::Delete,
+               [&db, &shared](const QString& userKey,
+                              const QHttpServerRequest& req) -> QHttpServerResponse {
+                   return HandlePresenceDelete(db, shared, DeleteField::GameStatus,
+                                               QStringLiteral("np:service:presence:gameStatus"),
+                                               userKey, req);
                });
 
     // GET /v1/users/<arg>/presence -- read a user's live presence. Self or a friend only
