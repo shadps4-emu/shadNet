@@ -810,35 +810,49 @@ QHttpServerResponse HandleFriendsSessions(Database& db, SharedState& shared,
         QString onlineId;
         QString platform;
     };
-    struct Agg {
-        SessionRow row;
-        QList<FriendRef> friends;
-    };
+    // Phase 1: each friend's highest-priority visible session -> the set of result sessions, in
+    // friend-list order. details[] holds session info from the first contributor.
     QList<QString> order;
-    QHash<QString, Agg> agg;
+    QHash<QString, SessionRow> details;
+    QHash<int64_t, QString> friendNpid; // accountId -> onlineId, for the membership scan below
     if (!partyRequested) {
         const auto rels = db.GetRelationships(*auth.userId);
         for (const auto& f : rels.friends) {
+            friendNpid.insert(f.first, f.second);
             const QList<SessionRow> top =
                 CollectUserSessions(shared, f.first, *auth.userId, false, {});
             if (top.isEmpty())
                 continue;
             const SessionRow& r = top.first();
-            if (!agg.contains(r.sessionId)) {
-                Agg a;
-                a.row = r;
-                agg.insert(r.sessionId, a);
+            if (!details.contains(r.sessionId)) {
+                details.insert(r.sessionId, r);
                 order.append(r.sessionId);
             }
-            agg[r.sessionId].friends.append({f.first, f.second, r.platform});
+        }
+    }
+    // Phase 2: for each result session, the caller's friends who are members (platform = the
+    // friend's platform in that session).
+    QHash<QString, QList<FriendRef>> sessionFriends;
+    if (!order.isEmpty()) {
+        QReadLocker lk(&shared.sessionsLock);
+        for (const QString& sid : order) {
+            const auto it = shared.sessions.constFind(sid);
+            if (it == shared.sessions.constEnd())
+                continue;
+            QList<FriendRef> fl;
+            for (const auto& m : it.value().members) {
+                const auto fn = friendNpid.constFind(m.userId);
+                if (fn != friendNpid.constEnd())
+                    fl.append({m.userId, fn.value(), m.platform});
+            }
+            sessionFriends.insert(sid, fl);
         }
     }
 
     const int total = static_cast<int>(order.size());
     QJsonArray arr;
     for (int i = offset; i < total && static_cast<int>(arr.size()) < limit; ++i) {
-        const Agg& a = agg[order[i]];
-        const SessionRow& r = a.row;
+        const SessionRow& r = details[order[i]];
         QJsonObject o;
         if (wantSessionId)
             o.insert(QStringLiteral("sessionId"), r.sessionId);
@@ -865,7 +879,7 @@ QHttpServerResponse HandleFriendsSessions(Database& db, SharedState& shared,
             o.insert(QStringLiteral("sessionLockFlag"), r.lockFlag);
         if (wantFriends) {
             QJsonArray fa;
-            for (const auto& fr : a.friends) {
+            for (const auto& fr : sessionFriends.value(order[i])) {
                 QJsonObject fo;
                 fo.insert(QStringLiteral("onlineId"), fr.onlineId);
                 fo.insert(QStringLiteral("accountId"), QString::number(fr.accountId));
