@@ -998,6 +998,67 @@ QHttpServerResponse HandleSessionJoin(Database& db, SharedState& shared, const Q
     return QHttpServerResponse{QHttpServerResponse::StatusCode::NoContent};
 }
 
+// GET /v1/sessions/<arg>/sessionData -- the session's binary data blob (set at create), returned
+// as application/octet-stream (up to 1 MiB). Access: the caller's platform must be among the
+// session's availablePlatforms, and a private session is readable only by a participant
+// (invitations not modeled); otherwise 2114560. Changeable session data is a separate endpoint.
+QHttpServerResponse HandleSessionGetData(Database& db, SharedState& shared,
+                                         const QString& sessionId,
+                                         const QHttpServerRequest& req) {
+    auto auth = WebApiAuth::Authenticate(req, db);
+    if (!auth.userId.has_value()) {
+        return std::move(auth.errorResponse);
+    }
+    // Caller's platform (for the availablePlatforms check); empty if offline.
+    QString callerPlatform;
+    {
+        QReadLocker lk(&shared.clientsLock);
+        const auto it = shared.clients.constFind(*auth.userId);
+        if (it != shared.clients.constEnd())
+            callerPlatform = it->platform;
+    }
+
+    QByteArray data;
+    QStringList platforms;
+    QString privacy;
+    bool found = false;
+    bool callerIsMember = false;
+    {
+        QReadLocker lk(&shared.sessionsLock);
+        const auto it = shared.sessions.constFind(sessionId);
+        if (it != shared.sessions.constEnd()) {
+            found = true;
+            const auto& sn = it.value();
+            data = sn.sessionData;
+            platforms = sn.availablePlatforms;
+            privacy = sn.sessionPrivacy;
+            for (const auto& m : sn.members) {
+                if (m.userId == *auth.userId) {
+                    callerIsMember = true;
+                    break;
+                }
+            }
+        }
+    }
+    if (!found) {
+        return JsonError(QHttpServerResponse::StatusCode::NotFound, SESSION_BAD_REQUEST,
+                         QStringLiteral("Session not found"));
+    }
+    // Platform not allowed on this session -> not permitted.
+    if (!callerPlatform.isEmpty() && !platforms.isEmpty() && !platforms.contains(callerPlatform)) {
+        return JsonError(QHttpServerResponse::StatusCode::Forbidden, SESSION_NOT_PERMITTED,
+                         QStringLiteral("Not permitted to access the session"));
+    }
+    // Private session is readable only by participants (invitations not modeled).
+    if (privacy == QStringLiteral("private") && !callerIsMember) {
+        return JsonError(QHttpServerResponse::StatusCode::Forbidden, SESSION_NOT_PERMITTED,
+                         QStringLiteral("Not permitted to access the session"));
+    }
+    qInfo() << "WebAPI: session data for" << sessionId << "->" << data.size() << "bytes";
+    return QHttpServerResponse(QByteArrayLiteral("application/octet-stream"), data,
+                               QHttpServerResponse::StatusCode::Ok);
+}
+
 } // namespace
 
 void RegisterSessionRoutes(QHttpServer& http, Database& db, SharedState& shared) {
@@ -1012,6 +1073,13 @@ void RegisterSessionRoutes(QHttpServer& http, Database& db, SharedState& shared)
                [&db, &shared](const QString& sessionId,
                               const QHttpServerRequest& req) -> QHttpServerResponse {
                    return HandleSessionJoin(db, shared, sessionId, req);
+               });
+
+    // GET /v1/sessions/<arg>/sessionData -- the session's binary data blob.
+    http.route("/v1/sessions/<arg>/sessionData", QHttpServerRequest::Method::Get,
+               [&db, &shared](const QString& sessionId,
+                              const QHttpServerRequest& req) -> QHttpServerResponse {
+                   return HandleSessionGetData(db, shared, sessionId, req);
                });
 
     // GET /v1/users/<arg>/sessions -- list a user's sessions.
