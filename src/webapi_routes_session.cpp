@@ -23,13 +23,17 @@ namespace WebApiRoutes {
 
 namespace {
 
-// Session/Invitation error codes. Only "user not online" is documented in the Session Creation
-// spec; SESSION_BAD_REQUEST is a placeholder pending the group's common error-code table.
-constexpr quint32 SESSION_USER_NOT_ONLINE = 2114564;
-constexpr quint32 SESSION_BAD_REQUEST = 2114561; // PLACEHOLDER (not from the doc)
+// Session/Invitation error codes. Documented: NOT_PERMITTED 2114560, FULL 2114561, ONLY_CREATOR
+// 2114562, ONLY_MEMBER 2114563, USER_NOT_ONLINE 2114564, ALREADY_JOINED 2114565. SESSION_BAD_REQUEST
+// is a PLACEHOLDER for generic bad-request / not-found pending the group's common error-code table
+// (the HTTP status 400/404 is the reliable signal there).
+constexpr quint32 SESSION_NOT_PERMITTED = 2114560;
+constexpr quint32 SESSION_FULL = 2114561;
 constexpr quint32 SESSION_ONLY_CREATOR = 2114562;
 constexpr quint32 SESSION_ONLY_MEMBER = 2114563;
-constexpr quint32 SESSION_NOT_PERMITTED = 2114560;
+constexpr quint32 SESSION_USER_NOT_ONLINE = 2114564;
+constexpr quint32 SESSION_ALREADY_JOINED = 2114565;
+constexpr quint32 SESSION_BAD_REQUEST = 2114576; // PLACEHOLDER (not from any doc)
 
 // 0 == permitted. owner-bind: only the creator may mutate/delete; owner-migration: any member.
 quint32 SessionPermissionError(const SharedState::Session& s, int64_t userId) {
@@ -899,6 +903,101 @@ QHttpServerResponse HandleFriendsSessions(Database& db, SharedState& shared,
     return JsonOk(body);
 }
 
+// POST /v1/sessions/<arg>/members -- join a session. index=[0-63] (default 0), priority (default
+// 49). Per the SDK: a user holds at most one session per index, so joining at an index already
+// used elsewhere leaves that other session first; re-posting to the same session at the same
+// index just updates priority (204); a different index for an already-joined session is rejected
+// (2114565). Full -> 2114561; caller offline -> 2114564. npTitleId query param (server-side only)
+// is accepted and ignored. Body: none. Success: 204.
+QHttpServerResponse HandleSessionJoin(Database& db, SharedState& shared, const QString& sessionId,
+                                      const QHttpServerRequest& req) {
+    auto auth = WebApiAuth::Authenticate(req, db);
+    if (!auth.userId.has_value()) {
+        return std::move(auth.errorResponse);
+    }
+    const QUrlQuery query(req.url());
+    int index = 0;
+    if (query.hasQueryItem(QStringLiteral("index"))) {
+        bool ok = false;
+        const int v = query.queryItemValue(QStringLiteral("index")).toInt(&ok);
+        if (ok)
+            index = v;
+    }
+    int priority = 49;
+    if (query.hasQueryItem(QStringLiteral("priority"))) {
+        bool ok = false;
+        const int v = query.queryItemValue(QStringLiteral("priority")).toInt(&ok);
+        if (ok)
+            priority = v;
+    }
+    if (index < 0 || index > 63) {
+        return JsonError(QHttpServerResponse::StatusCode::BadRequest, SESSION_BAD_REQUEST,
+                         QStringLiteral("'index' must be in the range 0-63"));
+    }
+
+    // The caller must be online; capture their platform for the membership entry.
+    QString platform;
+    {
+        QReadLocker lk(&shared.clientsLock);
+        auto it = shared.clients.constFind(*auth.userId);
+        if (it == shared.clients.constEnd()) {
+            return JsonError(QHttpServerResponse::StatusCode::Forbidden, SESSION_USER_NOT_ONLINE,
+                             QStringLiteral("The current user is not online"));
+        }
+        platform = it->platform;
+    }
+
+    QWriteLocker lk(&shared.sessionsLock);
+    auto sit = shared.sessions.find(sessionId);
+    if (sit == shared.sessions.end()) {
+        return JsonError(QHttpServerResponse::StatusCode::NotFound, SESSION_BAD_REQUEST,
+                         QStringLiteral("Session not found"));
+    }
+    {
+        // Already a member? same index -> update priority (204); different index -> 2114565.
+        auto& s = sit.value();
+        for (auto& m : s.members) {
+            if (m.userId == *auth.userId) {
+                if (m.index != index) {
+                    return JsonError(QHttpServerResponse::StatusCode::Forbidden,
+                                     SESSION_ALREADY_JOINED,
+                                     QStringLiteral("Session has already been joined in another "
+                                                    "index"));
+                }
+                m.priority = priority;
+                m.joinedAt = QDateTime::currentMSecsSinceEpoch();
+                qInfo() << "WebAPI: session re-join (priority update)" << sessionId << "by"
+                        << auth.npid << "index" << index;
+                return QHttpServerResponse{QHttpServerResponse::StatusCode::NoContent};
+            }
+        }
+        // Not a member -> capacity check (min(sessionMaxUser, 256)).
+        const int maxUsers =
+            (s.sessionMaxUser > 0 && s.sessionMaxUser < 256) ? s.sessionMaxUser : 256;
+        if (s.members.size() >= maxUsers) {
+            return JsonError(QHttpServerResponse::StatusCode::Forbidden, SESSION_FULL,
+                             QStringLiteral("The session is already full"));
+        }
+    }
+    // Joining at this index frees the index elsewhere first (may delete/migrate that other
+    // session). THIS session is untouched since the caller isn't a member of it; re-fetch after.
+    LeaveSessionAtIndex(shared, *auth.userId, index);
+    {
+        auto& s = shared.sessions[sessionId];
+        SharedState::SessionMember m;
+        m.userId = *auth.userId;
+        m.npid = auth.npid;
+        m.platform = platform;
+        m.index = index;
+        m.priority = priority;
+        m.joinedAt = QDateTime::currentMSecsSinceEpoch();
+        s.members.append(m);
+    }
+    qInfo() << "WebAPI: session join" << sessionId << "by" << auth.npid << "index" << index
+            << "priority" << priority;
+    return QHttpServerResponse{QHttpServerResponse::StatusCode::NoContent};
+}
+
 } // namespace
 
 void RegisterSessionRoutes(QHttpServer& http, Database& db, SharedState& shared) {
@@ -906,6 +1005,13 @@ void RegisterSessionRoutes(QHttpServer& http, Database& db, SharedState& shared)
     http.route("/v1/sessions", QHttpServerRequest::Method::Post,
                [&db, &shared](const QHttpServerRequest& req) -> QHttpServerResponse {
                    return HandleSessionCreate(db, shared, req);
+               });
+
+    // POST /v1/sessions/<arg>/members -- join a session.
+    http.route("/v1/sessions/<arg>/members", QHttpServerRequest::Method::Post,
+               [&db, &shared](const QString& sessionId,
+                              const QHttpServerRequest& req) -> QHttpServerResponse {
+                   return HandleSessionJoin(db, shared, sessionId, req);
                });
 
     // GET /v1/users/<arg>/sessions -- list a user's sessions.
