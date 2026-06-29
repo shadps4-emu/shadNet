@@ -149,7 +149,7 @@ ErrorType ClientSession::CmdLogin(StreamExtractor& data, QByteArray& reply) {
         entry.npid = npid;
         entry.appearOffline = req.appear_offline();
         // Title context reported by the emulator at login -> presence gameTitleInfo.
-        entry.npTitleId = QString::fromStdString(req.np_title_id());
+        entry.npTitleId = QString::fromStdString(req.title_id());
         entry.titleName = QString::fromStdString(req.title_name());
         entry.send = [this](QByteArray pkt) {
             QMetaObject::invokeMethod(

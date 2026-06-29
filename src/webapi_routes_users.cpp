@@ -223,13 +223,16 @@ QJsonObject BuildFriendList(Database& db, SharedState& shared,
 
 // GET /v1/users/<accountId|onlineId|me>/friendList
 //
-// Supported: friendStatus=friend (required, only legal value), fields=[@default,user,
-//   region,npId] (@default == user,region,npId; default when omitted), limit=[0-500]
-//   (default 100; 0 == count-only), offset=[0-2147483647] (default 0).
-// NOT yet supported (logged when present): presenceType, presenceDetail, filter, sort,
-//   direction, avatarSize, avatarSizes, avatarUrlScheme, profilePictureSizes, npLanguages.
-//   Unsupported fields values (avatarUrl(s), personalDetail*, isOfficiallyVerified) are
-//   dropped. Self-only: the path user must resolve to the authenticated account.
+// friendStatus=friend (required, only legal value). fields=[@default,user,region,npId,
+//   personalDetail,personalDetail.displayName,avatarUrl,avatarUrls,isOfficiallyVerified]
+//   (@default == user,region,npId; default when omitted; unknown field names ignored).
+//   limit=[0-500] (default 100; 0 == count-only), offset=[0-2147483647] (default 0).
+//   presenceType=[primary,platform,incontext] adds the presence member; presenceDetail=true
+//   adds detail (ignored without presenceType); filter=[online,incontext]; sort=[onlineId,
+//   onlineStatus,onlineStatus+onlineId] (onlineStatus* require presenceType) with
+//   direction=[asc,desc]. Self-only: the path user must resolve to the authenticated
+//   account. Ignored (logged when present): avatarSize(s), avatarUrlScheme,
+//   profilePictureSizes, npLanguages.
 //
 // GET /v1/users/<accountId|onlineId|me>/blockList
 //
@@ -360,6 +363,15 @@ void RegisterUserRoutes(QHttpServer& http, Database& db, SharedState& shared) {
             const QString filter = query.queryItemValue(QStringLiteral("filter"));
             const QString sortKey = query.queryItemValue(QStringLiteral("sort"));
             const QString direction = query.queryItemValue(QStringLiteral("direction"));
+            // Per the SDK, onlineStatus / onlineStatus+onlineId sorts may be used only when
+            // presenceType is specified; otherwise the request is rejected.
+            if ((sortKey == QStringLiteral("onlineStatus") ||
+                 sortKey == QStringLiteral("onlineStatus+onlineId")) &&
+                !wantPresence) {
+                return JsonError(
+                    QHttpServerResponse::StatusCode::BadRequest, UP_INVALID_QUERY_PARAM,
+                    QStringLiteral("Invalid parameter in query string (parameter: 'sort')"));
+            }
             const auto friends = db.GetRelationships(*auth.userId).friends;
             const QJsonObject body =
                 BuildFriendList(db, shared, friends, fields, isDefault, offset, limit,

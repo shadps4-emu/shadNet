@@ -22,10 +22,6 @@ message LoginRequest {
 // Mid-session Appear-Offline toggle.
 message SetAppearOfflineRequest {
     bool appear_offline = 1;
-    string npid     = 1;
-    string password = 2;
-    string token    = 3;
-    string title_id = 4;
 }
 
 message FriendEntry {
