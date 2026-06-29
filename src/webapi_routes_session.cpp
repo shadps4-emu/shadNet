@@ -1059,6 +1059,56 @@ QHttpServerResponse HandleSessionGetData(Database& db, SharedState& shared,
                                QHttpServerResponse::StatusCode::Ok);
 }
 
+// DELETE /v1/sessions/<arg>/members/<arg> -- leave a session. The member segment is "me" (or the
+// caller's account/onlineId); a member always removes themselves, and the session owner may remove
+// another member, otherwise 2114560. Removing the owner migrates ownership (owner-migration) or
+// deletes the session (owner-bind, or last member). Idempotent: leaving a session/membership that
+// no longer exists still returns 204. Body: none. Success: 204.
+QHttpServerResponse HandleSessionLeave(Database& db, SharedState& shared, const QString& sessionId,
+                                       const QString& memberKey, const QHttpServerRequest& req) {
+    auto auth = WebApiAuth::Authenticate(req, db);
+    if (!auth.userId.has_value()) {
+        return std::move(auth.errorResponse);
+    }
+    int64_t targetId = 0;
+    if (!ResolveTarget(db, memberKey, auth, targetId)) {
+        return QHttpServerResponse{QHttpServerResponse::StatusCode::NoContent}; // nothing to remove
+    }
+
+    QWriteLocker lk(&shared.sessionsLock);
+    auto it = shared.sessions.find(sessionId);
+    if (it == shared.sessions.end()) {
+        return QHttpServerResponse{QHttpServerResponse::StatusCode::NoContent}; // already not in it
+    }
+    auto& sn = it.value();
+    // Self-leave is always allowed; removing a different member requires being the owner.
+    if (targetId != *auth.userId && sn.ownerUserId != *auth.userId) {
+        return JsonError(QHttpServerResponse::StatusCode::Forbidden, SESSION_NOT_PERMITTED,
+                         QStringLiteral("Not permitted to access the session"));
+    }
+    const bool wasOwner = (sn.ownerUserId == targetId);
+    bool removed = false;
+    for (int m = 0; m < sn.members.size(); ++m) {
+        if (sn.members[m].userId == targetId) {
+            sn.members.removeAt(m);
+            removed = true;
+            break;
+        }
+    }
+    if (!removed) {
+        return QHttpServerResponse{QHttpServerResponse::StatusCode::NoContent}; // wasn't a member
+    }
+    if ((sn.sessionType == QStringLiteral("owner-bind") && wasOwner) || sn.members.isEmpty()) {
+        shared.sessions.remove(sessionId);
+    } else if (wasOwner) {
+        // owner-migration: hand ownership to the next remaining member.
+        sn.ownerUserId = sn.members.first().userId;
+        sn.ownerNpid = sn.members.first().npid;
+    }
+    qInfo() << "WebAPI: session leave" << sessionId << "member" << targetId << "by" << auth.npid;
+    return QHttpServerResponse{QHttpServerResponse::StatusCode::NoContent};
+}
+
 } // namespace
 
 void RegisterSessionRoutes(QHttpServer& http, Database& db, SharedState& shared) {
@@ -1080,6 +1130,13 @@ void RegisterSessionRoutes(QHttpServer& http, Database& db, SharedState& shared)
                [&db, &shared](const QString& sessionId,
                               const QHttpServerRequest& req) -> QHttpServerResponse {
                    return HandleSessionGetData(db, shared, sessionId, req);
+               });
+
+    // DELETE /v1/sessions/<arg>/members/<arg> -- leave a session.
+    http.route("/v1/sessions/<arg>/members/<arg>", QHttpServerRequest::Method::Delete,
+               [&db, &shared](const QString& sessionId, const QString& memberKey,
+                              const QHttpServerRequest& req) -> QHttpServerResponse {
+                   return HandleSessionLeave(db, shared, sessionId, memberKey, req);
                });
 
     // GET /v1/users/<arg>/sessions -- list a user's sessions.
