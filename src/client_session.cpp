@@ -191,8 +191,8 @@ ErrorType ClientSession::DispatchCommand(CommandType cmd, StreamExtractor& se, Q
         return CmdJoinRoom(se, reply);
     case CommandType::LeaveRoom:
         return CmdLeaveRoom(se, reply);
-    case CommandType::GetRoomList:
-        return CmdGetRoomList(se, reply);
+    case CommandType::SearchRoom:
+        return CmdSearchRoom(se, reply);
     case CommandType::RequestSignalingInfos:
         return CmdRequestSignalingInfos(se, reply);
     case CommandType::SetRoomDataInternal:

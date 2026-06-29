@@ -138,7 +138,7 @@ public:
     ErrorType CmdCreateRoom(StreamExtractor& data, QByteArray& reply);
     ErrorType CmdJoinRoom(StreamExtractor& data, QByteArray& reply);
     ErrorType CmdLeaveRoom(StreamExtractor& data, QByteArray& reply);
-    ErrorType CmdGetRoomList(StreamExtractor& data, QByteArray& reply);
+    ErrorType CmdSearchRoom(StreamExtractor& data, QByteArray& reply);
     ErrorType CmdRequestSignalingInfos(StreamExtractor& data, QByteArray& reply);
     ErrorType CmdSetRoomDataInternal(StreamExtractor& data, QByteArray& reply);
     ErrorType CmdSetRoomDataExternal(StreamExtractor& data, QByteArray& reply);

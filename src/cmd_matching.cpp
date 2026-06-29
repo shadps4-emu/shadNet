@@ -36,39 +36,60 @@ bool MatchIntFilter(uint32_t op, uint32_t roomValue, uint32_t filterValue) {
     }
 }
 
-bool RoomMatchesFilters(const Room& room, const shadnet::GetRoomListRequest& req) {
+bool RoomMatchesFilters(const Room& room, const shadnet::SearchRoomRequest& req) {
+    // Hidden rooms never appear in searches.
     if (room.flagAttr & Matching2::ORBIS_NP_MATCHING2_ROOM_FLAG_ATTR_HIDDEN)
         return false;
-    if ((room.flagAttr & req.flag_filter()) != (req.flag_attr() & req.flag_filter()))
-        return false;
 
+    // NAT_TYPE_RESTRICTION is ignored in the flag comparison (matches RPCN; it is
+    // irrelevant here and breaks some titles' searches).
+    const uint32_t nat = Matching2::ORBIS_NP_MATCHING2_ROOM_FLAG_ATTR_NAT_TYPE_RESTRICTION;
+    const uint32_t flagFilter = req.flag_filter() & ~nat;
+    const uint32_t flagAttr = req.flag_attr() & ~nat;
+    if ((room.flagAttr & flagFilter) != flagAttr) {
+        qWarning() << "  filter reject FLAG: roomFlags=" << Qt::hex << room.flagAttr
+                   << "filter=" << flagFilter << "attr=" << flagAttr;
+        return false;
+    }
+
+    constexpr uint16_t INT_1 = Matching2::ORBIS_NP_MATCHING2_ROOM_SEARCHABLE_INT_ATTR_EXTERNAL_1_ID;
+    constexpr uint16_t INT_8 = Matching2::ORBIS_NP_MATCHING2_ROOM_SEARCHABLE_INT_ATTR_EXTERNAL_8_ID;
     for (int i = 0; i < req.int_filters_size(); ++i) {
         const auto& f = req.int_filters(i);
         const uint16_t id = static_cast<uint16_t>(f.attr_id());
-        bool found = false;
-        for (const auto& slot : room.searchIntAttr) {
-            if (slot.set && slot.attrId == id) {
-                if (!MatchIntFilter(f.op(), slot.value, f.attr_value()))
-                    return false;
-                found = true;
-                break;
-            }
-        }
-        if (!found)
+        // An empty/unset filter slot (id 0) is sent by some games — skip it.
+        if (id == 0)
+            continue;
+        if (id < INT_1 || id > INT_8) {
+            qWarning() << "  filter reject INT id out of range:" << id;
             return false;
+        }
+        const auto& slot = room.searchIntAttr[id - INT_1];
+        if (!MatchIntFilter(f.op(), slot.value, f.attr_value())) {
+            qWarning() << "  filter reject INT: id=" << id << "op=" << f.op()
+                       << "roomVal=" << slot.value << "set=" << slot.set
+                       << "filterVal=" << f.attr_value();
+            return false;
+        }
     }
 
     for (int i = 0; i < req.bin_filters_size(); ++i) {
         const auto& f = req.bin_filters(i);
-        if (!room.searchBinAttr.set ||
-            room.searchBinAttr.attrId != static_cast<uint16_t>(f.attr_id()))
+        if (f.attr_id() == 0)
+            continue;
+        if (static_cast<uint16_t>(f.attr_id()) !=
+            Matching2::ORBIS_NP_MATCHING2_ROOM_SEARCHABLE_BIN_ATTR_EXTERNAL_1_ID) {
+            qWarning() << "  filter reject BIN id:" << f.attr_id();
             return false;
+        }
         const QByteArray fdata(f.data().data(), static_cast<int>(f.data().size()));
         const bool eq = room.searchBinAttr.data == fdata;
-        if (f.op() == 1 && !eq)
+        if ((f.op() == 1 && !eq) || (f.op() == 2 && eq)) {
+            qWarning() << "  filter reject BIN: op=" << f.op() << "set=" << room.searchBinAttr.set
+                       << "roomLen=" << room.searchBinAttr.data.size()
+                       << "filterLen=" << fdata.size();
             return false;
-        if (f.op() == 2 && eq)
-            return false;
+        }
     }
     return true;
 }
@@ -351,11 +372,17 @@ ErrorType ClientSession::CmdCreateRoom(StreamExtractor& data, QByteArray& reply)
         room.groups.append(grp);
     }
 
-    for (int i = 0; i < req.external_search_int_attrs_size() && i < 8; ++i) {
+    for (int i = 0; i < req.external_search_int_attrs_size(); ++i) {
         const auto& a = req.external_search_int_attrs(i);
-        room.searchIntAttr[i].set = true;
-        room.searchIntAttr[i].attrId = static_cast<uint16_t>(a.attr_id());
-        room.searchIntAttr[i].value = a.attr_value();
+        const uint16_t attrId = static_cast<uint16_t>(a.attr_id());
+        if (attrId < Matching2::ORBIS_NP_MATCHING2_ROOM_SEARCHABLE_INT_ATTR_EXTERNAL_1_ID ||
+            attrId > Matching2::ORBIS_NP_MATCHING2_ROOM_SEARCHABLE_INT_ATTR_EXTERNAL_8_ID)
+            continue;
+        const int idx =
+            attrId - Matching2::ORBIS_NP_MATCHING2_ROOM_SEARCHABLE_INT_ATTR_EXTERNAL_1_ID;
+        room.searchIntAttr[idx].set = true;
+        room.searchIntAttr[idx].attrId = attrId;
+        room.searchIntAttr[idx].value = a.attr_value();
     }
     if (req.external_search_bin_attrs_size() > 0) {
         const auto& a = req.external_search_bin_attrs(0);
@@ -363,11 +390,19 @@ ErrorType ClientSession::CmdCreateRoom(StreamExtractor& data, QByteArray& reply)
         room.searchBinAttr.attrId = static_cast<uint16_t>(a.attr_id());
         room.searchBinAttr.data = QByteArray(a.data().data(), static_cast<int>(a.data().size()));
     }
-    for (int i = 0; i < req.external_bin_attrs_size() && i < 2; ++i) {
+    for (int i = 0; i < req.external_bin_attrs_size(); ++i) {
         const auto& a = req.external_bin_attrs(i);
-        room.externalBinAttr[i].set = true;
-        room.externalBinAttr[i].attrId = static_cast<uint16_t>(a.attr_id());
-        room.externalBinAttr[i].data =
+        const uint16_t attrId = static_cast<uint16_t>(a.attr_id());
+        int idx = -1;
+        if (attrId == Matching2::ORBIS_NP_MATCHING2_ROOM_BIN_ATTR_EXTERNAL_1_ID)
+            idx = 0;
+        else if (attrId == Matching2::ORBIS_NP_MATCHING2_ROOM_BIN_ATTR_EXTERNAL_2_ID)
+            idx = 1;
+        if (idx < 0)
+            continue;
+        room.externalBinAttr[idx].set = true;
+        room.externalBinAttr[idx].attrId = attrId;
+        room.externalBinAttr[idx].data =
             QByteArray(a.data().data(), static_cast<int>(a.data().size()));
     }
 
@@ -426,7 +461,9 @@ ErrorType ClientSession::CmdCreateRoom(StreamExtractor& data, QByteArray& reply)
             m_shared->matching.lobbyRooms[{m_matching.matchingKey, lobbyId}].append(rid);
     }
 
-    qInfo() << "Room" << rid << "created by" << m_info.npid << "max=" << maxSlot;
+    qInfo() << "Room" << rid << "created by" << m_info.npid << "max=" << maxSlot
+            << "world=" << room.worldId << "lobby=" << room.lobbyId
+            << "key=" << m_matching.matchingKey;
     return ErrorType::NoError;
 }
 
@@ -783,8 +820,8 @@ ErrorType ClientSession::CmdGetWorldInfoList(StreamExtractor& data, QByteArray& 
     return ErrorType::NoError;
 }
 
-ErrorType ClientSession::CmdGetRoomList(StreamExtractor& data, QByteArray& reply) {
-    shadnet::GetRoomListRequest req;
+ErrorType ClientSession::CmdSearchRoom(StreamExtractor& data, QByteArray& reply) {
+    shadnet::SearchRoomRequest req;
     if (!decodeProto(req, data) || data.error())
         return ErrorType::Malformed;
 
@@ -798,8 +835,9 @@ ErrorType ClientSession::CmdGetRoomList(StreamExtractor& data, QByteArray& reply
     if (rangeMax == 0 || rangeMax > 20)
         rangeMax = 20;
 
-    shadnet::GetRoomListReply rep;
+    shadnet::SearchRoomReply rep;
     uint32_t total = 0;
+    int candidateCount = 0;
     {
         QReadLocker lk(&m_shared->matching.roomsLock);
 
@@ -808,6 +846,7 @@ ErrorType ClientSession::CmdGetRoomList(StreamExtractor& data, QByteArray& reply
             candidates = m_shared->matching.worldRooms.value({m_matching.matchingKey, worldId});
         else if (lobbyId != 0)
             candidates = m_shared->matching.lobbyRooms.value({m_matching.matchingKey, lobbyId});
+        candidateCount = candidates.size();
 
         QVector<const Room*> matches;
         for (uint64_t rid : candidates) {
@@ -832,7 +871,8 @@ ErrorType ClientSession::CmdGetRoomList(StreamExtractor& data, QByteArray& reply
     rep.set_range_result(static_cast<uint32_t>(rep.rooms_size()));
     appendProto(reply, rep);
 
-    qInfo() << "GetRoomList:" << m_info.npid << "world=" << worldId << "lobby=" << lobbyId
+    qInfo() << "SearchRoom:" << m_info.npid << "world=" << worldId << "lobby=" << lobbyId
+            << "key=" << m_matching.matchingKey << "candidates=" << candidateCount
             << "total=" << total << "returned=" << rep.rooms_size();
     return ErrorType::NoError;
 }
