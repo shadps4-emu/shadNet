@@ -189,16 +189,18 @@ ErrorType ClientSession::DispatchCommand(CommandType cmd, StreamExtractor& se, Q
     case CommandType::GetScoreNpid:
         return CmdGetScoreNpid(se, reply);
     // Matchmaking
-    case CommandType::RegisterHandlers:
-        return CmdRegisterHandlers(se);
+    case CommandType::ContextStart:
+        return CmdContextStart(se);
+    case CommandType::ContextStop:
+        return CmdContextStop(se);
     case CommandType::CreateRoom:
         return CmdCreateRoom(se, reply);
     case CommandType::JoinRoom:
         return CmdJoinRoom(se, reply);
     case CommandType::LeaveRoom:
         return CmdLeaveRoom(se, reply);
-    case CommandType::GetRoomList:
-        return CmdGetRoomList(se, reply);
+    case CommandType::SearchRoom:
+        return CmdSearchRoom(se, reply);
     case CommandType::RequestSignalingInfos:
         return CmdRequestSignalingInfos(se, reply);
     case CommandType::SetRoomDataInternal:
@@ -207,6 +209,8 @@ ErrorType ClientSession::DispatchCommand(CommandType cmd, StreamExtractor& se, Q
         return CmdSetRoomDataExternal(se, reply);
     case CommandType::KickoutRoomMember:
         return CmdKickoutRoomMember(se, reply);
+    case CommandType::GetWorldInfoList:
+        return CmdGetWorldInfoList(se, reply);
     case CommandType::GetScoreAccountId:
         return CmdGetScoreAccountId(se, reply);
     case CommandType::GetScoreGameDataByAccId:

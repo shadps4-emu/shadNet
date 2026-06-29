@@ -63,6 +63,7 @@ set(SOURCES
     "${PROTO_OUT}/shadnet.pb.cc"
     # Matchmaking
     src/matching.h
+    src/matching_types.h
     src/cmd_matching.cpp
     src/stun_server.h
     src/stun_server.cpp

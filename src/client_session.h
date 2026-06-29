@@ -17,7 +17,7 @@
 #include <QTcpSocket>
 #include <database.h>
 #include "config.h"
-#include "matching.h"
+#include "matching_types.h"
 #include "protocol.h"
 #include "score_cache.h"
 #include "score_db.h"
@@ -193,15 +193,17 @@ public:
     ErrorType CmdGetToken(QByteArray& reply);
 
     // commands cmd_matching.cpp
-    ErrorType CmdRegisterHandlers(StreamExtractor& data);
+    ErrorType CmdContextStart(StreamExtractor& data);
+    ErrorType CmdContextStop(StreamExtractor& data);
     ErrorType CmdCreateRoom(StreamExtractor& data, QByteArray& reply);
     ErrorType CmdJoinRoom(StreamExtractor& data, QByteArray& reply);
     ErrorType CmdLeaveRoom(StreamExtractor& data, QByteArray& reply);
-    ErrorType CmdGetRoomList(StreamExtractor& data, QByteArray& reply);
+    ErrorType CmdSearchRoom(StreamExtractor& data, QByteArray& reply);
     ErrorType CmdRequestSignalingInfos(StreamExtractor& data, QByteArray& reply);
     ErrorType CmdSetRoomDataInternal(StreamExtractor& data, QByteArray& reply);
     ErrorType CmdSetRoomDataExternal(StreamExtractor& data, QByteArray& reply);
     ErrorType CmdKickoutRoomMember(StreamExtractor& data, QByteArray& reply);
+    ErrorType CmdGetWorldInfoList(StreamExtractor& data, QByteArray& reply);
 
 signals:
     void Disconnected();
@@ -244,11 +246,17 @@ private:
     // Matching helpers (cmd_matching.cpp)
     void SendMatchingNotification(NotificationType type, const QByteArray& payload,
                                   const QString& targetNpid);
-    void NotifyRoomMembers(NotificationType type, const QByteArray& payload, uint64_t roomId,
+    void NotifyRoomMembers(NotificationType type, const QByteArray& payload,
+                           const QString& matchingKey, uint64_t roomId,
                            const QString& excludeNpid = {});
+    void SendRoomMemberEvent(uint64_t roomId, uint32_t event, uint32_t cause,
+                             const RoomMember& member, const QString& excludeNpid = {});
+    void SendRoomEventToTarget(uint64_t roomId, uint32_t event, uint32_t cause, int32_t errorCode,
+                               const QString& targetNpid);
     void DoLeaveRoom(uint64_t roomId);
     void CleanupMatchingOnDisconnect();
     void ResetMatchingRoomState(uint64_t roomId);
+    void GetSelfSignalingAddr(QString& addr, uint16_t& port) const;
 
     QTcpSocket* m_socket;
     bool m_isSsl = true;

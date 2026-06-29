@@ -1,18 +1,32 @@
 # Matchmaking (NpMatching2)
 
-Room-based matchmaking system. Clients create or join rooms, exchange peer information for P2P connectivity, and synchronize room state via binary attributes. All matchmaking state is held in memory — rooms are not persisted across server restarts.
+Room-based matchmaking. Clients start a matching context, query the world layout, then create or join rooms and synchronize room state via binary attributes. All matchmaking state is held in memory — rooms are not persisted across server restarts.
 
 ---
 
 ## Overview
 
-Matchmaking follows the NpMatching2 model: clients register callback handlers, then create or join rooms. When a new member joins, the server automatically exchanges signaling information between all room members so they can establish peer-to-peer connections. Room owners can update room attributes that are either broadcast to members (internal) or made available for room discovery (external/searchable).
+Matchmaking follows the NpMatching2 model. A client establishes a matching context (`ContextStart`), discovers the world layout (`GetWorldInfoList`), then creates or joins rooms. Every room event (a member joining, leaving, being kicked, or room data changing) is delivered to room members through a single unified `RoomEvent` notification that maps directly onto the client's `OrbisNpMatching2RoomEventCallback`.
+
+The server is the source of truth: it holds the full room and member state and ships the complete dataset to clients. The emulator keeps a local cache from those payloads.
+
+---
+
+## Scoping by title
+
+Matchmaking data is scoped by a **matching key**, resolved from the title id the client reports at login (`LoginRequest.title_id`, the CUSA serial). At login the server computes:
+
+```
+matchingKey = titleGroups.value(titleId, titleId)
+```
+
+If the title id belongs to a configured group (see `worlds.cfg`), the group name is used as the key; otherwise the title id is its own key. Titles sharing a key share one room pool and world list — this lets regional/re-release SKUs of the same game match together. All room/world maps are keyed by `(matchingKey, ...)`.
 
 ---
 
 ## Wire Format
 
-All matching commands (12–22) and notifications (9–17) use Protocol Buffers (proto3). Proto message definitions are in `shadnet.proto`.
+Matching commands and notifications use Protocol Buffers (proto3). Message definitions are in `shadnet.proto`.
 
 | Direction | Layout |
 |---|---|
@@ -20,7 +34,7 @@ All matching commands (12–22) and notifications (9–17) use Protocol Buffers 
 | Reply | `ErrorType (u8)` + `u32-LE size` + serialized proto bytes |
 | Notification | `u32-LE size` + serialized proto bytes |
 
-Commands that have no meaningful reply body still return a proto message (e.g. `LeaveRoomReply { room_id }`). The error byte is always present first in every reply.
+Commands with no meaningful reply body still return a proto message (e.g. `LeaveRoomReply { room_id }`). The error byte is always present first in every reply.
 
 ---
 
@@ -28,14 +42,13 @@ Commands that have no meaningful reply body still return a proto message (e.g. `
 
 ### MatchingSessionState (per-session)
 
-Each authenticated `ClientSession` holds a `MatchingSessionState` that tracks the client's matchmaking context.
+Each authenticated `ClientSession` holds a `MatchingSessionState`.
 
 | Field | Type | Description |
 |---|---|---|
-| `addr` | string | Client's UDP endpoint address (from RegisterHandlers or TCP peer) |
-| `port` | u16 | Client's UDP endpoint port |
-| `ctxId` | u32 | Matching context ID |
-| `serviceLabel` | u32 | Service label for the matching context |
+| `ctxId` | u32 | Matching context ID (set by `ContextStart`) |
+| `titleId` | string | Title id reported at login |
+| `matchingKey` | string | Resolved scoping key (group or title id) |
 | `serverId` | u16 | Server in the matching hierarchy |
 | `worldId` | u16 | World in the matching hierarchy |
 | `lobbyId` | u16 | Lobby in the matching hierarchy |
@@ -44,59 +57,37 @@ Each authenticated `ClientSession` holds a `MatchingSessionState` that tracks th
 | `isRoomOwner` | bool | Whether this client owns the current room |
 | `maxSlots` | u16 | Maximum room capacity |
 | `roomFlags` | u32 | Room flags/settings |
-| `enabledHandlersMask` | u8 | Bitmask of which callback handlers are active |
-| `initialized` | bool | Whether RegisterHandlers has been called |
-
-**Handler types** (7 total, registered via `RegisterHandlers`):
-
-| Index | Handler | Description |
-|---|---|---|
-| 0 | Context | Matching context events |
-| 1 | Request | Room request completion callbacks |
-| 2 | Signaling | Peer signaling events |
-| 3 | RoomEvent | Room state change events |
-| 4 | LobbyEvent | Lobby events |
-| 5 | RoomMessage | Room chat/data messages |
-| 6 | LobbyMessage | Lobby messages |
-
-Each handler carries a `callback_addr` (u64) and `callback_arg` (u64) on the client side.
+| `initialized` | bool | Whether a context is active (`ContextStart` called) |
 
 ---
 
 ### Room
 
-Stored in `MatchingSharedState::rooms`, keyed by `roomId`.
+Stored in `MatchingSharedState::rooms`, keyed by `(matchingKey, roomId)`.
 
 | Field | Type | Description |
 |---|---|---|
 | `roomId` | u64 | Unique room identifier (monotonically increasing) |
-| `maxSlots` | u16 | Maximum number of members |
-| `ownerNpid` | string | NP ID of the room owner |
+| `maxSlot` | u16 | Maximum number of members |
+| `ownerMemberId` | u16 | Member ID of the room owner |
 | `serverId` | u16 | Server in the matching hierarchy |
 | `worldId` | u16 | World in the matching hierarchy |
 | `lobbyId` | u16 | Lobby in the matching hierarchy |
-| `flags` | u32 | Room flags/settings |
-| `teamId` | u16 | Team/group identifier |
-| `groupConfigCount` | u16 | Number of team groups (typically 1) |
-| `signalingType` | u8 | Signaling mode |
-| `signalingFlag` | u8 | Signaling flags |
-| `signalingMainMember` | u16 | Main signaling member |
-| `roomPasswordPresent` | u8 | Whether a password is set |
-| `joinGroupLabelPresent` | u8 | Whether a group label is set |
+| `flagAttr` | u32 | Room flags/settings |
 | `members` | map | Member ID → `RoomMember` |
-| `binAttrsInternal` | list | Room-level binary attributes (synced to all members) |
-| `externalSearchIntAttrs` | list | Searchable integer attributes (attrId + value pairs) |
-| `externalSearchBinAttrs` | list | Searchable binary attributes |
-| `externalBinAttrs` | list | Non-searchable external binary attributes |
+| `groups` | list | Team groups (`RoomGroup`) |
+| `internalBinAttr` | slots | Room-level internal binary attributes (synced to members) |
+| `searchIntAttr` / `searchBinAttr` | slots | Searchable attributes (room-list filtering) |
+| `externalBinAttr` | slots | Non-searchable external binary attributes |
+| `ownerSuccession` | list | Ordered fallback owners |
 
 **Room attribute types:**
 
 | Type | Visibility | Purpose |
 |---|---|---|
 | Internal binary | All room members | Synchronize game state within the room |
-| Search integer | Room list queries | Filterable integer metadata (e.g. game mode, map) |
-| Search binary | Room list queries | Filterable binary metadata |
-| External binary | Room list queries | Non-filterable binary metadata |
+| Search integer/binary | Room list queries | Filterable metadata (e.g. game mode, map) |
+| External binary | Room list queries | Non-filterable metadata |
 
 ---
 
@@ -105,10 +96,17 @@ Stored in `MatchingSharedState::rooms`, keyed by `roomId`.
 | Field | Type | Description |
 |---|---|---|
 | `memberId` | u16 | Unique ID within the room |
+| `userId` | i64 | Server account ID |
 | `npid` | string | Player's NP ID |
-| `addr` | string | Client's UDP endpoint address |
-| `port` | u16 | Client's UDP endpoint port |
-| `binAttrsInternal` | list | Per-member binary attributes |
+| `addr` / `port` | string / u16 | UDP endpoint (from STUN `udpExt`) |
+| `joinDate` | u64 | Join timestamp (usec) |
+| `flagAttr` | u32 | Member flags (owner bit, etc.) |
+| `teamId` | u8 | Team identifier |
+| `groupId` | u8 | Room group the member belongs to |
+| `natType` | u8 | NAT type |
+| `memberBinAttr` | slot | Per-member internal binary attribute |
+
+The full member record is what the server packs into every room-member event (see `MatchingRoomMemberData`).
 
 ---
 
@@ -118,39 +116,62 @@ Thread-safe shared state protected by `QReadWriteLock`. Lock ordering: `roomsLoc
 
 | Field | Type | Description |
 |---|---|---|
-| `rooms` | map | roomId → Room |
+| `rooms` | map | (matchingKey, roomId) → Room |
+| `worldRooms` | map | (matchingKey, worldId) → [roomId] |
+| `lobbyRooms` | map | (matchingKey, lobbyId) → [roomId] |
 | `nextRoomId` | atomic u64 | Monotonically increasing room ID generator |
+| `worldConfigs` | map | matchingKey → [WorldConfig] (from `worlds.cfg`) |
+| `titleGroups` | map | titleId → group name (from `worlds.cfg`) |
 | `udpExt` | map | npid → (ip, port) — external UDP endpoints discovered by STUN |
-| `signalingPairs` | map | (me_npid, peer_npid) → (peer_ip, peer_port) — P2P handshake tracking |
-| `activationIntents` | map | (initiator_ip_u32, ctx_tag) → (initiator_npid, peer_npid) — NpSignaling activation |
+
+---
+
+## World configuration (`worlds.cfg`)
+
+A two-section INI file, loaded at startup into `titleGroups` and `worldConfigs`. Absent file → `GetWorldInfoList` returns a single default world.
+
+```ini
+[groups]
+# titleId = group   (titleId as the client reports it: CUSAxxxxx, no dash)
+CUSA00207 = bloodborne
+CUSA00900 = bloodborne
+
+[worlds]
+# group | world_id | server_id | lobbies_num | max_lobby_members
+bloodborne | 1 | 1 | 0 | 0
+```
+
+`[groups]` maps title ids to a shared matching key. `[worlds]` declares the worlds for a key. A title id not listed in `[groups]` keys by its own title id; its worlds (if any) are listed under that title id as the key.
 
 ---
 
 ## Commands
 
-All matchmaking commands require a prior successful login.
+All matchmaking commands require a prior successful login. Matching command IDs: 12–23.
 
 ---
 
-### RegisterHandlers (12)
+### ContextStart (12)
 
-Initialize the matchmaking subsystem for this session. Must be called before any room operations.
+Establish the matching context for this session. Sent by the emulator when the game starts a context.
 
-**Request:** `RegisterHandlersRequest` proto
+**Request:** `ContextStartRequest { ctx_id }`
 
-| Field | Type | Description |
-|---|---|---|
-| `addr` | string | Client's UDP address (empty → use TCP peer address) |
-| `port` | uint32 | Client's UDP port |
-| `ctx_id` | uint32 | Matching context ID |
-| `service_label` | uint32 | Service label |
-| `callbacks` | repeated `MatchingCallbackEntry` | Up to 7 handler entries |
+**Reply:** `ErrorType(u8)` only.
 
-`MatchingCallbackEntry` fields: `enabled` (bool), `callback_addr` (uint64), `callback_arg` (uint64).
+Stores `ctxId` on the session and marks it initialized. The reply drives the emulator's `CONTEXT_EVENT_STARTED` callback.
 
-**Reply:** `ErrorType(u8)` only — no proto body on success.
+---
 
-Sets `initialized = true` on the session. The handler bitmask determines which notification types the client will receive.
+### ContextStop (18)
+
+Tear down the matching context.
+
+**Request:** `ContextStopRequest { ctx_id }`
+
+**Reply:** `ErrorType(u8)` only.
+
+Clears the session's `ctxId` / initialized flag. The reply drives the emulator's `CONTEXT_EVENT_STOPPED` callback.
 
 ---
 
@@ -169,37 +190,15 @@ Create a new room with the caller as owner and sole member.
 | `lobby_id` | uint32 | Lobby in hierarchy |
 | `flags` | uint32 | Room flags |
 | `group_config_count` | uint32 | Number of team groups |
-| `allowed_user_count` | uint32 | Reserved |
-| `blocked_user_count` | uint32 | Reserved |
-| `internal_bin_attr_count` | uint32 | Reserved (room's initial internal attr slots) |
 | `external_search_int_attrs` | repeated `MatchingIntAttr` | Searchable integer attributes |
 | `external_search_bin_attrs` | repeated `MatchingBinAttr` | Searchable binary attributes |
 | `external_bin_attrs` | repeated `MatchingBinAttr` | External non-searchable binary attributes |
 | `member_bin_attrs` | repeated `MatchingBinAttr` | Creator's member binary attributes |
-| `join_group_label_present` | bool | Whether a join group label is provided |
-| `room_password_present` | bool | Whether a room password is provided |
-| `sig_type` | uint32 | Signaling mode |
-| `sig_flag` | uint32 | Signaling flags |
-| `sig_main_member` | uint32 | Main signaling member ID |
+| `sig_type` / `sig_flag` / `sig_main_member` | uint32 | Signaling parameters carried through to room data |
 
-**Reply:** `ErrorType(u8)` + `CreateRoomReply` proto
+**Reply:** `ErrorType(u8)` + `CreateRoomReply` proto (room_id, server/world/lobby, member_id, max_slots, flags, cur_members, and `details` = `CreateJoinRoomResponse` with full room data + member list).
 
-| Field | Type | Description |
-|---|---|---|
-| `room_id` | uint64 | Newly allocated room ID |
-| `server_id` | uint32 | Server in hierarchy |
-| `world_id` | uint32 | World in hierarchy |
-| `lobby_id` | uint32 | Lobby in hierarchy |
-| `member_id` | uint32 | Creator's member ID (always 1) |
-| `max_slots` | uint32 | Room capacity |
-| `flags` | uint32 | Room flags |
-| `cur_members` | uint32 | Current member count (always 1) |
-| `details` | `CreateJoinRoomResponse` | Full room data (internal view) + member list |
-
-**Notifications pushed:**
-- `RequestEvent` (to self, if Request handler enabled) — `req_event = 0x0101` (CreateJoinRoom), `response_blob` carries serialized `CreateJoinRoomResponse`
-
-**State update:** session `roomId`, `myMemberId = 1`, `isRoomOwner = true`.
+**State update:** session `roomId`, `myMemberId = 1`, `isRoomOwner = true`. The room is indexed under `(matchingKey, roomId)` and its world.
 
 ---
 
@@ -207,38 +206,15 @@ Create a new room with the caller as owner and sole member.
 
 Join an existing room.
 
-**Request:** `JoinRoomRequest` proto
+**Request:** `JoinRoomRequest` proto (room_id, req_id, team_id, join_flags, member_bin_attrs, password/group-label presence flags).
 
-| Field | Type | Description |
-|---|---|---|
-| `room_id` | uint64 | Room to join |
-| `req_id` | uint32 | Client request ID |
-| `team_id` | uint32 | Team identifier |
-| `join_flags` | uint32 | Join flags |
-| `blocked_user_count` | uint32 | Reserved |
-| `member_bin_attrs` | repeated `MatchingBinAttr` | Joiner's member binary attributes |
-| `room_password_present` | bool | Whether a room password is provided |
-| `join_group_label_present` | bool | Whether a join group label is provided |
+**Reply:** `ErrorType(u8)` + `JoinRoomReply` proto (room_id, member_id, max_slots, flags, cur_members, `details` = `CreateJoinRoomResponse`).
 
-**Reply:** `ErrorType(u8)` + `JoinRoomReply` proto
+**Validation:** room must exist and not be full; the joiner must not already be a member.
 
-| Field | Type | Description |
-|---|---|---|
-| `room_id` | uint64 | Joined room ID |
-| `member_id` | uint32 | Joiner's assigned member ID |
-| `max_slots` | uint32 | Room capacity |
-| `flags` | uint32 | Room flags |
-| `cur_members` | uint32 | Current member count (after join) |
-| `details` | `CreateJoinRoomResponse` | Full room data (internal view) + member list |
-
-**Validation:** room must exist and not be full. The joining member must not already be in the room.
-
-**Notifications pushed (in order):**
-
-1. **MemberJoined** (to existing members) — joiner's npid, memberId, addr, port, and member binary attributes
-2. **SignalingHelper** (bidirectional, if Signaling handler enabled) — for each existing member, sends them the joiner's info and sends joiner their info
-3. **RoomDataInternalUpdated** (to joiner, if RoomEvent handler enabled) — current room's binary attributes
-4. **SignalingEvent** (delayed 2 seconds, to all members) — `event_type = 0x5102` (ESTABLISHED) for each new peer pairing
+**Notifications pushed:**
+- **RoomEvent** `MEMBER_JOINED (0x1101)` to existing members — carries the full joining member.
+- **RoomEvent** `UPDATED_ROOM_DATA_INTERNAL (0x1106)` to the joiner — the room's current internal binary attributes.
 
 **State update:** session `roomId`, `myMemberId`, `isRoomOwner = false`.
 
@@ -248,386 +224,147 @@ Join an existing room.
 
 Leave the current room.
 
-**Request:** `LeaveRoomRequest` proto
+**Request:** `LeaveRoomRequest { room_id, req_id }`
 
-| Field | Type | Description |
-|---|---|---|
-| `room_id` | uint64 | Room to leave |
-| `req_id` | uint32 | Client request ID |
-
-**Reply:** `ErrorType(u8)` + `LeaveRoomReply` proto
-
-| Field | Type | Description |
-|---|---|---|
-| `room_id` | uint64 | Room that was left |
+**Reply:** `ErrorType(u8)` + `LeaveRoomReply { room_id }`
 
 **Leave logic (also triggered on disconnect):**
-
-1. Remove self from room members
-2. If room is now empty, destroy it
-3. If leaving member was the owner, transfer ownership to the first remaining member @TODO SCENPMATCHING2GRANTROOMOWNER 
-4. Clear all signaling pairs and activation intents related to the leaving member
+1. Remove self from room members.
+2. If the room is now empty, destroy it (and remove it from the world/lobby indices).
+3. If the leaver was the owner, transfer ownership via `ownerSuccession` (fallback: first remaining member). @TODO SCENPMATCHING2GRANTROOMOWNER
 
 **Notifications pushed:**
-- **MemberLeft** (to remaining members) — leaver's roomId, memberId, npid
-- **RequestEvent** (to self) — `req_event = 0x0103` (LeaveRoom), `response_blob` carries serialized `LeaveRoomReply`
-- **SignalingEvent** (to all affected pairs, immediately) — `event_type = 0x5101` (DEAD) for every (leaver, remaining member) pair. Both directions are sent: the remaining member receives 0x5101 with the leaver's memberId, and the leaver receives 0x5101 with each remaining member's memberId.
-- **NpSignalingEvent** (delayed 2 seconds, to all affected pairs) — `event = 0` (DEAD). Each remaining member receives `error_code = NP_SIG_ERROR_TERMINATED_BY_PEER (0x80552710)` with the leaver's npid. The leaver receives `error_code = NP_SIG_ERROR_TERMINATED_BY_MYSELF (0x80552718)` with each remaining member's npid.
-
-**State cleanup:** session `roomId = 0`, `myMemberId = 0`, `isRoomOwner = false`.
+- **RoomEvent** `MEMBER_LEFT (0x1102)` to remaining members, cause `LEAVE_ACTION`.
 
 ---
 
 ### GetRoomList (16)
 
-Retrieve all rooms on the server.
+Retrieve rooms for a world/lobby in this matching key, filtered by attributes.
 
-**Request:** no proto body.
+**Request:** `GetRoomListRequest` (world_id, lobby_id, range filters, attribute filters).
 
-**Reply:** `ErrorType(u8)` + `GetRoomListReply` proto
-
-| Field | Type | Description |
-|---|---|---|
-| `rooms` | repeated `MatchingRoomDataExternal` | All rooms with their external/searchable attributes |
-
-Returns all rooms from the global rooms map.
+**Reply:** `ErrorType(u8)` + `GetRoomListReply` (`rooms` = repeated `MatchingRoomDataExternal`, plus range_start/total/result). Candidates are taken from `worldRooms`/`lobbyRooms` for the caller's matching key and passed through the request filters.
 
 ---
 
 ### RequestSignalingInfos (17)
 
-Request the UDP endpoint information for a specific peer in a shared room.
+Look up a peer's UDP endpoint for P2P. On-demand only — no signaling state machine.
 
-**Request:** `RequestSignalingInfosRequest` proto
+**Request:** `RequestSignalingInfosRequest { target_npid }`
 
-| Field | Type | Description |
-|---|---|---|
-| `target_npid` | string | NP ID of the target peer |
-
-**Reply:** `ErrorType(u8)` + `RequestSignalingInfosReply` proto
-
-| Field | Type | Description |
-|---|---|---|
-| `target_npid` | string | Target's NP ID |
-| `target_ip` | string | Target's external IP address |
-| `target_port` | uint32 | Target's external UDP port |
-| `target_member_id` | uint32 | Target's member ID in the shared room |
+**Reply:** `ErrorType(u8)` + `RequestSignalingInfosReply` (target_npid, target_ip, target_port, target_member_id).
 
 **Endpoint resolution order:**
-1. Check `udpExt` map (populated by STUN ping)
-2. Fallback: search all rooms for a matching member's addr/port
+1. `udpExt` map (populated by STUN ping).
+2. Fallback: search the caller's rooms for a member with that npid.
 
-**Notifications pushed:**
-- **SignalingHelper** (to target) — requester's npid, memberId, addr, port
-
----
-
-### SignalingEstablished (18)
-
-Notify the server that a P2P connection to a peer has been established (TCP-side logging).
-
-**Request:** `SignalingEstablishedRequest` proto
-
-| Field | Type | Description |
-|---|---|---|
-| `target_npid` | string | NP ID of the connected peer |
-| `conn_id` | uint32 | Connection ID |
-
-**Reply:** `ErrorType(u8)` only — no proto body.
-
-Informational — the server logs the event but takes no state-changing action.
-
----
-
-### ActivationConfirm (19)
-
-Confirm NpSignaling activation on the TCP channel after the UDP handshake completes.
-
-**Request:** `ActivationConfirmRequest` proto
-
-| Field | Type | Description |
-|---|---|---|
-| `me_id` | string | Own NP ID |
-| `initiator_ip` | string | Initiator's IP address as a string |
-| `ctx_tag` | uint32 | Context tag from the STUN `HandleActivationIntent` command |
-
-**Reply:** `ErrorType(u8)` only — no proto body.
-
-The server looks up the activation intent (stored by the STUN server's `HandleActivationIntent` command) using the initiator IP and context tag. If found, it sends an `NpSignalingEvent` notification to the initiator confirming the connection is activated.
+No notifications.
 
 ---
 
 ### SetRoomDataInternal (20)
 
-Update the room's internal binary attributes and flags. Typically called by the room owner.
+Update the room's internal binary attributes and flags. Typically called by the owner.
 
-**Request:** `SetRoomDataInternalRequest` proto
+**Request:** `SetRoomDataInternalRequest` (req_id, room_id, flag_filter, flag_attr, bin_attrs, optional passwd_slot_mask).
 
-| Field | Type | Description |
-|---|---|---|
-| `req_id` | uint32 | Client request ID |
-| `room_id` | uint64 | Target room |
-| `flag_filter` | uint32 | Bitmask of which flag bits to modify |
-| `flag_attr` | uint32 | New flag bit values (applied via filter) |
-| `bin_attrs` | repeated `MatchingBinAttr` | Binary attributes to update |
-| `has_passwd_mask` | bool | Whether `passwd_slot_mask` is present |
-| `passwd_slot_mask` | uint64 | Password slot mask (only meaningful if `has_passwd_mask`) |
+**Reply:** `ErrorType(u8)` + `SetRoomDataInternalReply { room_id }`
 
-**Reply:** `ErrorType(u8)` + `SetRoomDataInternalReply` proto
-
-| Field | Type | Description |
-|---|---|---|
-| `room_id` | uint64 | Room that was updated |
-
-**Flag update formula:** `room.flags = (room.flags & ~flag_filter) | (flag_attr & flag_filter)`
-
-Binary attributes are updated or inserted by `attr_id`.
+**Flag update:** `room.flagAttr = (room.flagAttr & ~flag_filter) | (flag_attr & flag_filter)` (the FULL bit is protected). Binary attributes are updated or inserted by slot.
 
 **Notifications pushed:**
-- **RequestEvent** (to self) — `req_event = 0x0109` (SetRoomDataInternal), `response_blob` carries serialized `SetRoomDataInternalReply`
-- **RoomDataInternalUpdated** (broadcast to all room members except sender)
+- **RoomEvent** `UPDATED_ROOM_DATA_INTERNAL (0x1106)` broadcast to all members except the sender.
 
 ---
 
 ### SetRoomDataExternal (21)
 
-Update the room's searchable and external attributes. Used for room discovery metadata.
+Update the room's searchable/external attributes (room-discovery metadata).
 
-**Request:** `SetRoomDataExternalRequest` proto
+**Request:** `SetRoomDataExternalRequest` (req_id, room_id, search_int_attrs, search_bin_attrs, ext_bin_attrs).
 
-| Field | Type | Description |
-|---|---|---|
-| `req_id` | uint32 | Client request ID |
-| `room_id` | uint64 | Target room |
-| `search_int_attrs` | repeated `MatchingIntAttr` | Searchable integer attributes |
-| `search_bin_attrs` | repeated `MatchingBinAttr` | Searchable binary attributes |
-| `ext_bin_attrs` | repeated `MatchingBinAttr` | External non-searchable binary attributes |
-
-**Reply:** `ErrorType(u8)` + `SetRoomDataExternalReply` proto
-
-| Field | Type | Description |
-|---|---|---|
-| `room_id` | uint64 | Room that was updated |
-
-**Notifications pushed:**
-- **RequestEvent** (to self) — `req_event = 0x0004` (SetRoomDataExternal), `response_blob` carries serialized `SetRoomDataExternalReply`
+**Reply:** `ErrorType(u8)` + `SetRoomDataExternalReply { room_id }`. No notifications.
 
 ---
 
 ### KickoutRoomMember (22)
 
-Remove a member from the room. Only the room owner may call this.
+Remove a member from the room. Owner only.
 
-**Request:** `KickoutRoomMemberRequest` proto
+**Request:** `KickoutRoomMemberRequest` (room_id, req_id, target_member_id, block_kick_flag).
 
-| Field | Type | Description |
-|---|---|---|
-| `room_id` | uint64 | Target room |
-| `req_id` | uint32 | Client request ID |
-| `target_member_id` | uint32 | Member ID of the player to kick |
-| `block_kick_flag` | uint32 | Flags controlling the kick behavior |
-
-**Reply:** `ErrorType(u8)` + `KickoutRoomMemberReply` proto
-
-| Field | Type | Description |
-|---|---|---|
-| `room_id` | uint64 | Room from which the member was removed |
+**Reply:** `ErrorType(u8)` + `KickoutRoomMemberReply { room_id }`
 
 **Notifications pushed:**
-- **KickedOut** (to the kicked member) — room_id, status_code, guard_value
-- **MemberLeft** (to remaining members) — kicked member's roomId, memberId, npid
-- **RequestEvent** (to self/owner) — `req_event` for KickoutRoomMember, `response_blob` carries serialized `KickoutRoomMemberReply`
+- **RoomEvent** `KICKEDOUT (0x1103)` to the kicked member (cause `KICKOUT_ACTION`, error/status code).
+- **RoomEvent** `MEMBER_LEFT (0x1102)` to remaining members (cause `KICKOUT_ACTION`).
 
 ---
 
-### CancelActivationIntent (23)
+### GetWorldInfoList (23)
 
-Cancel a pending NpSignaling activation intent. Used when a peer-to-peer connection attempt is abandoned before the `ActivationConfirm` TCP command is sent.
+Retrieve the world layout for a server id.
 
-**Request:** `CancelActivationIntentRequest` proto
+**Request:** `GetWorldInfoListRequest { server_id }`
 
-| Field | Type | Description |
-|---|---|---|
-| `me_npid` | string | Own NP ID (the activation initiator) |
-| `peer_npid` | string | Target peer's NP ID |
+**Reply:** `ErrorType(u8)` + `GetWorldInfoListReply { repeated MatchingWorld worlds }`
 
-**Reply:** `ErrorType(u8)` only — no proto body.
-
-Removes all matching entries from `MatchingSharedState.activationIntents` where the initiator and peer match the provided NP IDs. Multiple matching entries may exist (e.g. from multiple UDP `HandleActivationIntent` datagrams) — all are removed.
+For the caller's matching key: if `worldConfigs` has configured worlds, those are returned (filtered by `server_id`); otherwise worlds are derived from active rooms, or a single default world. Each world carries live `rooms_num` / `room_members_num` counts computed from current rooms.
 
 ---
 
 ## Notifications
 
-Matchmaking notifications are server-initiated `PacketType::Notification` packets. They are pushed asynchronously and require no reply. Each notification payload is `u32-LE size` + serialized proto bytes.
+Matchmaking uses a **single** notification type. The server pushes `PacketType::Notification` packets; no reply is expected.
 
 | Value | Name | Proto message | Description |
 |---|---|---|---|
-| `9` | `RequestEvent` | `NotifyRequestEvent` | Room request completed |
-| `10` | `MemberJoined` | `NotifyMemberJoined` | A new member joined the room |
-| `11` | `MemberLeft` | `NotifyMemberLeft` | A member left the room |
-| `12` | `SignalingHelper` | `NotifySignalingHelper` | Peer address exchange for P2P discovery |
-| `13` | `SignalingEvent` | `NotifySignalingEvent` | NpMatching2-layer signaling event |
-| `14` | `NpSignalingEvent` | `NotifyNpSignalingEvent` | NpSignaling-layer activation or teardown event |
-| `15` | `RoomDataInternalUpdated` | `NotifyRoomDataInternalUpdated` | Room internal binary attributes changed |
-| `16` | `KickedOut` | `NotifyKickedOut` | This client was kicked from the room |
+| `10` | `RoomEvent` | `NotifyRoomEvent` | Any room event (mapped to the room-event callback) |
 
----
+### RoomEvent (10)
 
-### RequestEvent (9)
+Every room event maps onto `OrbisNpMatching2RoomEventCallback(ctxId, roomId, event, data)`. The Orbis event id is carried in `event`; the data shape depends on it.
 
-Pushed to the requesting client after a room operation completes. Wraps the operation result so the client's Request handler callback fires.
-
-**Proto:** `NotifyRequestEvent`
+**Proto:** `NotifyRoomEvent`
 
 | Field | Type | Description |
 |---|---|---|
-| `ctx_id` | uint32 | Matching context ID |
-| `server_id` | uint32 | Server in hierarchy |
-| `world_id` | uint32 | World in hierarchy |
-| `lobby_id` | uint32 | Lobby in hierarchy |
-| `req_event` | uint32 | Operation code that completed (see table below) |
-| `req_id` | uint32 | Client request ID echoed from the command |
-| `error_code` | uint32 | Result code |
+| `ctx_id` | uint32 | Owning matching context |
 | `room_id` | uint64 | Room involved |
-| `member_id` | uint32 | Caller's member ID |
-| `max_slots` | uint32 | Room capacity |
-| `flags` | uint32 | Room flags |
-| `is_owner` | bool | Whether caller is the room owner |
-| `response_blob` | bytes | Serialized inner proto — type inferred from `req_event` |
+| `event` | uint32 | Orbis room event id (`0x11xx`) |
+| `event_cause` | uint32 | `OrbisNpMatching2EventCause` |
+| `error_code` | int32 | Result/status code (room-update events) |
+| `member` | `MatchingRoomMemberData` | Full member (member events) |
+| `bin_attrs` | repeated `MatchingBinAttr` | Updated attrs (room-data-updated) |
+| `flags` | uint32 | Updated room flags (room-data-updated) |
 
-**`req_event` codes and their `response_blob` types:**
+**Event ids:**
 
-| `req_event` | Operation | `response_blob` proto |
+| `event` | Meaning | Carries |
 |---|---|---|
-| `0x0101` | CreateJoinRoom | `CreateJoinRoomResponse` |
-| `0x0103` | LeaveRoom | `LeaveRoomReply` |
-| `0x0109` | SetRoomDataInternal | `SetRoomDataInternalReply` |
-| `0x0004` | SetRoomDataExternal | `SetRoomDataExternalReply` |
+| `0x1101` | MEMBER_JOINED | full `member`, cause `SERVER_OPERATION` |
+| `0x1102` | MEMBER_LEFT | full `member`, cause `LEAVE_ACTION` or `KICKOUT_ACTION` |
+| `0x1103` | KICKEDOUT | `error_code`, cause `KICKOUT_ACTION` |
+| `0x1106` | UPDATED_ROOM_DATA_INTERNAL | `flags` + `bin_attrs` |
 
----
-
-### MemberJoined (10)
-
-Pushed to all existing room members when a new member joins.
-
-**Proto:** `NotifyMemberJoined`
-
-| Field | Type | Description |
-|---|---|---|
-| `room_id` | uint64 | Room the member joined |
-| `member_id` | uint32 | Joiner's member ID |
-| `npid` | string | Joiner's NP ID |
-| `addr` | string | Joiner's UDP address |
-| `port` | uint32 | Joiner's UDP port |
-| `bin_attrs` | repeated `MatchingBinAttr` | Joiner's member binary attributes |
-
----
-
-### MemberLeft (11)
-
-Pushed to remaining room members when a member leaves or disconnects.
-
-**Proto:** `NotifyMemberLeft`
-
-| Field | Type | Description |
-|---|---|---|
-| `room_id` | uint64 | Room the member left |
-| `member_id` | uint32 | Leaving member's ID |
-| `npid` | string | Leaving member's NP ID |
-
----
-
-### SignalingHelper (12)
-
-Exchanged bidirectionally between peers for P2P address discovery. Sent during JoinRoom and RequestSignalingInfos.
-
-**Proto:** `NotifySignalingHelper`
-
-| Field | Type | Description |
-|---|---|---|
-| `npid` | string | Peer's NP ID |
-| `member_id` | uint32 | Peer's member ID in the room |
-| `addr` | string | Peer's UDP address |
-| `port` | uint32 | Peer's UDP port |
-
----
-
-### SignalingEvent (13)
-
-NpMatching2-layer signaling completion. Sent on a 2-second delay after a JoinRoom to give peers time to establish their UDP connection.
-
-**Proto:** `NotifySignalingEvent`
-
-| Field | Type | Description |
-|---|---|---|
-| `event_type` | uint32 | Always `0x5102` (ESTABLISHED) |
-| `room_id` | uint64 | Room |
-| `member_id` | uint32 | Member ID of the peer |
-| `conn_id` | uint32 | Connection ID (same as `member_id`) |
-
----
-
-### NpSignalingEvent (14)
-
-NpSignaling-layer event. Sent either to confirm activation after `ActivationConfirm` resolves a STUN intent, or to signal teardown when a peer leaves the room or disconnects.
-
-**Proto:** `NotifyNpSignalingEvent`
-
-| Field | Type | Description |
-|---|---|---|
-| `event` | uint32 | `1` = connection activated; `0` = connection dead (DEAD) |
-| `npid` | string | NP ID of the affected peer |
-| `error_code` | uint32 | Only set when `event = 0`. `0x80552710` = terminated by peer; `0x80552718` = terminated by myself |
-
-**event=1 (activation):** Sent to the initiator after `ActivationConfirm` resolves the STUN activation intent. `error_code` is omitted (proto3 default 0).
-
-**event=0 (DEAD):** Sent on a 2-second delay when a peer leaves or is kicked from the room, or when a peer disconnects. The remaining member receives `error_code = 0x80552710` (`NP_SIG_ERROR_TERMINATED_BY_PEER`) with the leaver's npid. The leaver receives `error_code = 0x80552718` (`NP_SIG_ERROR_TERMINATED_BY_MYSELF`) with each remaining member's npid.
-
----
-
-### RoomDataInternalUpdated (15)
-
-Broadcast to all room members (except sender) when `SetRoomDataInternal` modifies the room's binary attributes.
-
-**Proto:** `NotifyRoomDataInternalUpdated`
-
-| Field | Type | Description |
-|---|---|---|
-| `room_id` | uint64 | Room that was updated |
-| `flags` | uint32 | Updated room flags |
-| `bin_attrs` | repeated `MatchingBinAttr` | Updated internal binary attributes |
-
----
-
-### KickedOut (16)
-
-Sent to a member that has been removed from the room by the owner.
-
-**Proto:** `NotifyKickedOut`
-
-| Field | Type | Description |
-|---|---|---|
-| `room_id` | uint64 | Room from which the client was kicked |
-| `status_code` | int32 | Status code indicating reason for kick |
-| `guard_value` | uint32 | Guard value from the kickout request |
+`MatchingRoomMemberData` carries the **complete** member: npid, member_id, team_id, is_owner, group_id, nat_type, flag_attr, join_date, addr/port, and `bin_attrs_internal`. The emulator stores this in its local room cache and forwards it directly to the callback.
 
 ---
 
 ## Disconnect Cleanup
 
-When a client disconnects (TCP connection closed), the server automatically:
-
-1. Calls `DoLeaveRoom` if the client is in a room — notifying remaining members via `MemberLeft`, then sending `SignalingEvent 0x5101` immediately and `NpSignalingEvent event=0` (DEAD) after a 2-second delay for each affected peer pair
-2. Transfers room ownership if the disconnecting client was the owner
-3. Destroys the room if it becomes empty
-4. Purges stale signaling pairs and activation intents associated with the client
+When a client disconnects (TCP closed), the server automatically:
+1. Calls `DoLeaveRoom` if the client is in a room — notifying remaining members via `RoomEvent` `MEMBER_LEFT`.
+2. Transfers room ownership if the disconnecting client was the owner.
+3. Destroys the room if it becomes empty.
 
 ---
 
 ## Thread Safety
 
-- All shared matchmaking state is protected by `QReadWriteLock`
-- Room IDs are allocated via `atomic fetch_add` to avoid lock contention
-- Lock ordering is always `roomsLock` before `clientsLock` to prevent deadlocks
-- Each `ClientSession` runs in its own `QThread`
+- All shared matchmaking state is protected by `QReadWriteLock`.
+- Room IDs are allocated via `atomic fetch_add`.
+- Lock ordering is always `roomsLock` before `clientsLock`.
+- Each `ClientSession` runs in its own `QThread`. Notifications to other sessions are marshaled onto the target session's thread via `QMetaObject::invokeMethod`.
