@@ -26,12 +26,12 @@ namespace {
 // GET /v1/profiles?onlineId=<a[,b,...]>
 // Defined below; declared here so the batch builder can delegate to it.
 QJsonObject BuildProfile(Database& db, SharedState& shared, qint64 userId, const QString& onlineId,
-                         const QStringList& fields, bool isDefault);
+                         const QStringList& fields, bool isDefault, qint64 callerUserId);
 
 // Batch profiles: accountIds are numeric account IDs. Each entry reuses the single-user
 // builder so every field behaves identically.
 QJsonObject BuildProfiles(Database& db, SharedState& shared, const QStringList& accountIds,
-                          const QStringList& fields, bool isDefault) {
+                          const QStringList& fields, bool isDefault, qint64 callerUserId) {
     QJsonArray arr;
     for (const QString& idStr : accountIds) {
         bool ok = false;
@@ -41,7 +41,7 @@ QJsonObject BuildProfiles(Database& db, SharedState& shared, const QStringList& 
         const auto name = db.GetUsername(accId);
         if (!name)
             continue; // unknown account -- skip rather than fail the whole request
-        arr.append(BuildProfile(db, shared, accId, *name, fields, isDefault));
+        arr.append(BuildProfile(db, shared, accId, *name, fields, isDefault, callerUserId));
     }
     QJsonObject body;
     body.insert(QStringLiteral("profiles"), arr);
@@ -51,7 +51,7 @@ QJsonObject BuildProfiles(Database& db, SharedState& shared, const QStringList& 
 
 // GET /v1/users/{userId}/profile -- a single user's Profile object
 QJsonObject BuildProfile(Database& db, SharedState& shared, qint64 userId, const QString& onlineId,
-                         const QStringList& fields, bool isDefault) {
+                         const QStringList& fields, bool isDefault, qint64 callerUserId) {
     const bool wantUser = isDefault || fields.contains(QStringLiteral("user"));
     const bool wantRegion = isDefault || fields.contains(QStringLiteral("region"));
     const bool wantNpId = isDefault || fields.contains(QStringLiteral("npId"));
@@ -100,23 +100,38 @@ QJsonObject BuildProfile(Database& db, SharedState& shared, qint64 userId, const
     if (wantPresence) {
         // Profile embeds presence as {primaryInfo: <entry>} -- note: unlike friendList and
         // GET presence, the profile presence object has no top-level onlineStatus member.
-        bool online = false;
+        bool actualOnline = false;
+        bool tgtAppearOffline = false;
         QString platform, gameStatus, npTitleId, titleName;
         {
             QReadLocker lk(&shared.clientsLock);
             auto it = shared.clients.constFind(userId);
-            if (it != shared.clients.constEnd() && !it->appearOffline) {
-                online = true;
+            if (it != shared.clients.constEnd()) {
+                actualOnline = true;
+                tgtAppearOffline = it->appearOffline;
                 platform = it->platform;
                 gameStatus = it->gameStatus;
                 npTitleId = it->npTitleId;
                 titleName = it->titleName;
             }
         }
+        // Self always sees real status; a same-comId caller sees the target even when
+        // Appear-Offline; gameStatus is obtainable only by self or same-comId callers
+        // (consistent with friendList and GET presence).
+        const bool self = (callerUserId == userId);
+        bool sameGame = false;
+        if (actualOnline && !self) {
+            QReadLocker ul(&shared.usageLock);
+            const QString callerComId = shared.usageClientGame.value(callerUserId);
+            sameGame =
+                !callerComId.isEmpty() && callerComId == shared.usageClientGame.value(userId);
+        }
+        const bool online = actualOnline && (self || sameGame || !tgtAppearOffline);
+        const QString gs = (self || sameGame) ? gameStatus : QString();
         QJsonObject presence;
         presence.insert(QStringLiteral("primaryInfo"),
-                        MakePresenceEntry(online, platform, gameStatus, QString(), npTitleId,
-                                          titleName, /*includeDetail=*/true,
+                        MakePresenceEntry(online, platform, gs, QString(), npTitleId, titleName,
+                                          /*includeDetail=*/true,
                                           /*forcePlatform=*/false));
         p.insert(QStringLiteral("presence"), presence);
     }
@@ -170,7 +185,7 @@ void RegisterProfileRoutes(QHttpServer& http, Database& db, SharedState& shared)
                                      QStringLiteral("Invalid parameter in query string (parameter: "
                                                     "'onlineId')"));
                 }
-                // Resolve each handle to an account ID,unknown handles are omitted from the
+                // Resolve each handle to an account ID; unknown handles are omitted from the
                 // result (matching batch-lookup semantics).
                 for (const QString& oid : onlineIds) {
                     const auto uid = db.GetUserId(oid);
@@ -191,7 +206,8 @@ void RegisterProfileRoutes(QHttpServer& http, Database& db, SharedState& shared)
             const QStringList fields = fieldsStr.split(QLatin1Char(','), Qt::SkipEmptyParts);
             const bool isDefault = fields.contains(QStringLiteral("@default"));
 
-            const QJsonObject body = BuildProfiles(db, shared, accountIds, fields, isDefault);
+            const QJsonObject body =
+                BuildProfiles(db, shared, accountIds, fields, isDefault, *auth.userId);
             qInfo() << "WebAPI: profiles lookup" << accountIds.size() << "account(s) -> returned"
                     << body.value(QStringLiteral("size")).toInt();
             return JsonOk(body);
@@ -239,7 +255,7 @@ void RegisterProfileRoutes(QHttpServer& http, Database& db, SharedState& shared)
                    const bool isDefault = fields.contains(QStringLiteral("@default"));
 
                    const QJsonObject body =
-                       BuildProfile(db, shared, userId, onlineId, fields, isDefault);
+                       BuildProfile(db, shared, userId, onlineId, fields, isDefault, *auth.userId);
                    qInfo() << "WebAPI: profile for" << onlineId << "fields" << fields;
                    return JsonOk(body);
                });
