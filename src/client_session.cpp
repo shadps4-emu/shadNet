@@ -9,6 +9,7 @@
 #include "protocol.h"
 #include "shadnet.pb.h"
 #include "stream_extractor.h"
+#include "webapi_routes_session.h"
 
 ClientSession::ClientSession(QTcpSocket* socket, SharedState* shared, const QString& dbPath,
                              bool isSsl, QObject* parent)
@@ -231,6 +232,10 @@ void ClientSession::CleanupOnDisconnect() {
 
     // Leave any matchmaking room before tearing down the client entry
     CleanupMatchingOnDisconnect();
+
+    // A user's joined-session state is linked to presence: going offline
+    // auto-leaves all their sessions (owner-migration / owner-bind teardown)
+    WebApiRoutes::PurgeUserFromSessions(*m_shared, m_info.userId);
 
     // Collect send functions for every online friend before releasing the lock,
     // then remove ourselves from the map.

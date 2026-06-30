@@ -10,4 +10,8 @@ namespace WebApiRoutes {
 
 void RegisterSessionRoutes(QHttpServer& http, Database& db, SharedState& shared);
 
+// Remove a user from every session they are in (owner-migration / owner-bind teardown).
+// Called from the client disconnect path: an offline user auto-leaves their sessions.
+void PurgeUserFromSessions(SharedState& shared, int64_t userId);
+
 } // namespace WebApiRoutes

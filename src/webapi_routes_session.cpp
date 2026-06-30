@@ -1052,11 +1052,32 @@ QHttpServerResponse HandleSessionGetData(Database& db, SharedState& shared,
                                QHttpServerResponse::StatusCode::Ok);
 }
 
-// DELETE /v1/sessions/<arg>/members/<arg> -- leave a session. The member segment is "me" (or the
-// caller's account/onlineId); a member always removes themselves, and the session owner may remove
-// another member, otherwise 2114560. Removing the owner migrates ownership (owner-migration) or
-// deletes the session (owner-bind, or last member). Idempotent: leaving a session/membership that
-// no longer exists still returns 204. Body: none. Success: 204.
+// Remove userId from sn if present (sets *outRemoved). Applies owner teardown and returns true
+// when the session is now orphaned and the caller should delete it: owner-bind owner left, or
+// no members remain. owner-migration hands ownership to the next remaining member.
+bool RemoveMemberApplyOwner(SharedState::Session& sn, int64_t userId, bool* outRemoved) {
+    const bool wasOwner = (sn.ownerUserId == userId);
+    bool removed = false;
+    for (int m = 0; m < sn.members.size(); ++m) {
+        if (sn.members[m].userId == userId) {
+            sn.members.removeAt(m);
+            removed = true;
+            break;
+        }
+    }
+    if (outRemoved)
+        *outRemoved = removed;
+    if (!removed)
+        return false;
+    if ((sn.sessionType == QStringLiteral("owner-bind") && wasOwner) || sn.members.isEmpty())
+        return true;
+    if (wasOwner) {
+        sn.ownerUserId = sn.members.first().userId;
+        sn.ownerNpid = sn.members.first().npid;
+    }
+    return false;
+}
+
 QHttpServerResponse HandleSessionLeave(Database& db, SharedState& shared, const QString& sessionId,
                                        const QString& memberKey, const QHttpServerRequest& req) {
     auto auth = WebApiAuth::Authenticate(req, db);
@@ -1079,25 +1100,13 @@ QHttpServerResponse HandleSessionLeave(Database& db, SharedState& shared, const 
         return JsonError(QHttpServerResponse::StatusCode::Forbidden, SESSION_NOT_PERMITTED,
                          QStringLiteral("Not permitted to access the session"));
     }
-    const bool wasOwner = (sn.ownerUserId == targetId);
     bool removed = false;
-    for (int m = 0; m < sn.members.size(); ++m) {
-        if (sn.members[m].userId == targetId) {
-            sn.members.removeAt(m);
-            removed = true;
-            break;
-        }
-    }
+    const bool shouldDelete = RemoveMemberApplyOwner(sn, targetId, &removed);
     if (!removed) {
         return QHttpServerResponse{QHttpServerResponse::StatusCode::NoContent}; // wasn't a member
     }
-    if ((sn.sessionType == QStringLiteral("owner-bind") && wasOwner) || sn.members.isEmpty()) {
+    if (shouldDelete)
         shared.sessions.remove(sessionId);
-    } else if (wasOwner) {
-        // owner-migration: hand ownership to the next remaining member.
-        sn.ownerUserId = sn.members.first().userId;
-        sn.ownerNpid = sn.members.first().npid;
-    }
     qInfo() << "WebAPI: session leave" << sessionId << "member" << targetId << "by" << auth.npid;
     return QHttpServerResponse{QHttpServerResponse::StatusCode::NoContent};
 }
@@ -1164,6 +1173,22 @@ void RegisterSessionRoutes(QHttpServer& http, Database& db, SharedState& shared)
                               const QHttpServerRequest& req) -> QHttpServerResponse {
                    return HandleSessionUpdate(db, shared, sessionId, req);
                });
+}
+
+// Remove a user from every session they are in, applying owner-migration / owner-bind
+// teardown. Called on disconnect so an offline user automatically leaves their sessions
+void PurgeUserFromSessions(SharedState& shared, int64_t userId) {
+    QWriteLocker lk(&shared.sessionsLock);
+    QStringList toRemove;
+    for (auto it = shared.sessions.begin(); it != shared.sessions.end(); ++it) {
+        if (RemoveMemberApplyOwner(it.value(), userId, nullptr))
+            toRemove.append(it.key());
+    }
+    for (const QString& sid : toRemove)
+        shared.sessions.remove(sid);
+    if (!toRemove.isEmpty())
+        qInfo() << "Sessions: purged user" << userId << "from" << toRemove.size()
+                << "session(s) on disconnect";
 }
 
 } // namespace WebApiRoutes
