@@ -10,6 +10,8 @@
 #include "config.h"
 #include "database.h"
 
+struct SharedState;
+
 class WebApiServer : public QObject {
     Q_OBJECT
 public:
@@ -18,7 +20,7 @@ public:
 
     // Bind, register routes, and start listening.
     // dbPath is the same SQLite file used by ShadNetServer / ClientSession.
-    bool Start(ConfigManager* config, const QString& dbPath);
+    bool Start(ConfigManager* config, const QString& dbPath, SharedState* shared);
 
 private:
     void RegisterRoutes();
@@ -26,4 +28,5 @@ private:
     std::unique_ptr<QHttpServer> m_http;
     std::unique_ptr<QTcpServer> m_tcp;
     std::unique_ptr<Database> m_db;
+    SharedState* m_shared = nullptr;
 };

@@ -8,6 +8,6 @@ struct SharedState;
 
 namespace WebApiRoutes {
 
-void RegisterProfileRoutes(QHttpServer& http, Database& db, SharedState& shared);
+void RegisterPresenceRoutes(QHttpServer& http, Database& db, SharedState& shared);
 
 } // namespace WebApiRoutes

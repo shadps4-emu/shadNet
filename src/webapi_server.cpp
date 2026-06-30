@@ -11,13 +11,15 @@
 #include <QJsonObject>
 #include <webapi_routes_users.h>
 #include "webapi_auth.h"
+#include "webapi_routes_presence.h"
 #include "webapi_routes_profile.h"
 
 WebApiServer::WebApiServer(QObject* parent) : QObject(parent) {}
 WebApiServer::~WebApiServer() = default;
 
-bool WebApiServer::Start(ConfigManager* config, const QString& dbPath) {
+bool WebApiServer::Start(ConfigManager* config, const QString& dbPath, SharedState* shared) {
     m_config = config;
+    m_shared = shared;
 
     m_db = std::make_unique<Database>(QStringLiteral("webapi_main"));
     if (!m_db->Open(dbPath)) {
@@ -58,8 +60,9 @@ void WebApiServer::RegisterRoutes() {
     });
 
     // user routes
-    WebApiRoutes::RegisterUserRoutes(*m_http, *m_db);
-    WebApiRoutes::RegisterProfileRoutes(*m_http, *m_db);
+    WebApiRoutes::RegisterUserRoutes(*m_http, *m_db, *m_shared);
+    WebApiRoutes::RegisterProfileRoutes(*m_http, *m_db, *m_shared);
+    WebApiRoutes::RegisterPresenceRoutes(*m_http, *m_db, *m_shared);
 
     m_http->setMissingHandler(
         this, [](const QHttpServerRequest& req, QHttpServerResponder& responder) {
