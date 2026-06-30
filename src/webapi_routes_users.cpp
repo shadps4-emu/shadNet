@@ -369,7 +369,7 @@ void RegisterUserRoutes(QHttpServer& http, Database& db, SharedState& shared) {
             const QString filter = query.queryItemValue(QStringLiteral("filter"));
             const QString sortKey = query.queryItemValue(QStringLiteral("sort"));
             const QString direction = query.queryItemValue(QStringLiteral("direction"));
-            // Per the SDK, onlineStatus / onlineStatus+onlineId sorts may be used only when
+            // PonlineStatus / onlineStatus+onlineId sorts may be used only when
             // presenceType is specified; otherwise the request is rejected.
             if ((sortKey == QStringLiteral("onlineStatus") ||
                  sortKey == QStringLiteral("onlineStatus+onlineId")) &&

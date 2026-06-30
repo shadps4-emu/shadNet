@@ -70,7 +70,7 @@ QHttpServerResponse HandlePresenceWrite(Database& db, SharedState& shared, const
                          QStringLiteral("'gameStatus' is required in the request body"));
     }
 
-    // SDK: localizedGameStatus may only be set alongside a default gameStatus.
+    // localizedGameStatus may only be set alongside a default gameStatus.
     if (obj.contains(QStringLiteral("localizedGameStatus")) &&
         !obj.contains(QStringLiteral("gameStatus"))) {
         return JsonError(QHttpServerResponse::StatusCode::BadRequest, UP_QUERY_PARAM_REQUIRED,
@@ -78,11 +78,11 @@ QHttpServerResponse HandlePresenceWrite(Database& db, SharedState& shared, const
                                         "'localizedGameStatus' is specified"));
     }
 
-    // Write the published detail into the caller's live presence entry. Per the SDK the
+    // Write the published detail into the caller's live presence entry. The
     // status/data may be set even while Appear-Offline; it just isn't observable until the
     // user disables it -- so we store unconditionally but suppress the update events below.
     // notificationWithData is sticky: once specified it persists across subsequent update
-    // events (cleared on game-end / offline / game-data DELETE), per the SDK.
+    // events (cleared on game-end / offline / game-data DELETE)
     const bool reqNotify = QUrlQuery(req.url()).queryItemValue(
                                QStringLiteral("notificationWithData")) == QStringLiteral("true");
     bool updaterAppearOffline = false;
@@ -130,7 +130,7 @@ QHttpServerResponse HandlePresenceWrite(Database& db, SharedState& shared, const
     if (updaterAppearOffline)
         return QHttpServerResponse{QHttpServerResponse::StatusCode::NoContent};
 
-    // SDK: game-status / game-data presence update events are received ONLY by users on a
+    // game-status / game-data presence update events are received ONLY by users on a
     // title with the same NP Communication ID as the updater. Snapshot the updater's comId
     // and the set of users sharing it (usageLock), separately from clientsLock to avoid lock
     // nesting. If the updater's comId isn't known yet, fall back to all online friends.
@@ -157,7 +157,7 @@ QHttpServerResponse HandlePresenceWrite(Database& db, SharedState& shared, const
             for (auto fr = it->friends.cbegin(); fr != it->friends.cend(); ++fr) {
                 const int64_t fid = fr.key();
                 if (!updaterComId.isEmpty() && !sameComId.contains(fid))
-                    continue; // SDK comId gate
+                    continue;
                 auto fit = shared.clients.constFind(fid);
                 if (fit != shared.clients.constEnd() && fit->send)
                     recipients.append({fit->npid, fit->send});
@@ -165,7 +165,7 @@ QHttpServerResponse HandlePresenceWrite(Database& db, SharedState& shared, const
         }
     }
 
-    // Emit the per-field presence update events (SDK): gameStatus -> np:service:presence:
+    // Emit the per-field presence update events gameStatus -> np:service:presence:
     // gameStatus, gameData -> np:service:presence:gameData, both with NP service name
     // 'inGamePresence'. The JSON body ({"gameStatus":..} / {"gameData":..}) is included only
     // when notify (sticky notificationWithData) is set; otherwise the event fires with no
@@ -193,7 +193,7 @@ QHttpServerResponse HandlePresenceWrite(Database& db, SharedState& shared, const
     static const QString kInGamePresence = QStringLiteral("inGamePresence");
     for (const auto& ev : events) {
         for (const auto& rcpt : recipients) {
-            // from = updater, to = recipient (per SDK event content).
+            // from = updater, to = recipient
             const QByteArray pkt = ClientSession::BuildNotification(
                 NotificationType::WebApiPushEvent,
                 ClientSession::BuildWebApiPushPayload(kInGamePresence, 0, ev.first, ev.second,
@@ -211,7 +211,7 @@ QHttpServerResponse HandlePresenceWrite(Database& db, SharedState& shared, const
 // Shared DELETE handler for the presence delete routes (gameData, gameStatus). Self only.
 // Clears the named field, emits a bodiless update event of `dataType` (deletion is a change)
 // to same-comId friends unless Appear-Offline, and -- for gameData only -- resets the sticky
-// notificationWithData latch (the SDK reset trigger is DELETE game data, not game status).
+// notificationWithData latch
 enum class DeleteField { GameData, GameStatus };
 static QHttpServerResponse HandlePresenceDelete(Database& db, SharedState& shared,
                                                 DeleteField field, const QString& dataType,
@@ -237,7 +237,7 @@ static QHttpServerResponse HandlePresenceDelete(Database& db, SharedState& share
             appearOffline = it->appearOffline;
             if (field == DeleteField::GameData) {
                 it->gameData.clear();
-                it->notifyWithData = false; // SDK: DELETE game data resets notificationWithData
+                it->notifyWithData = false; // DELETE game data resets notificationWithData
             } else {
                 it->gameStatus.clear();
                 it->localizedGameStatus.clear(); // localized variants follow the default status
@@ -280,7 +280,7 @@ static QHttpServerResponse HandlePresenceDelete(Database& db, SharedState& share
             }
         }
     }
-    // Deletion event carries no body (SDK: update events upon deletion omit the member).
+    // Deletion event carries no body (update events upon deletion omit the member).
     static const QString kInGamePresence = QStringLiteral("inGamePresence");
     for (const auto& rcpt : recipients) {
         const QByteArray pkt = ClientSession::BuildNotification(

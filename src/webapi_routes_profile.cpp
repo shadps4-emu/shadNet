@@ -29,7 +29,7 @@ QJsonObject BuildProfile(Database& db, SharedState& shared, qint64 userId, const
                          const QStringList& fields, bool isDefault);
 
 // Batch profiles: accountIds are numeric account IDs. Each entry reuses the single-user
-// builder so every field behaves identically. (presence is not a batch field per the SDK.)
+// builder so every field behaves identically.
 QJsonObject BuildProfiles(Database& db, SharedState& shared, const QStringList& accountIds,
                           const QStringList& fields, bool isDefault) {
     QJsonArray arr;
