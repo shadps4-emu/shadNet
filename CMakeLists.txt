@@ -63,7 +63,6 @@ set(SOURCES
     "${PROTO_OUT}/shadnet.pb.cc"
     # Matchmaking
     src/matching.h
-    src/matching_types.h
     src/cmd_matching.cpp
     src/stun_server.h
     src/stun_server.cpp
@@ -78,6 +77,8 @@ set(SOURCES
     src/webapi_routes_profile.cpp
     src/webapi_routes_presence.h
     src/webapi_routes_presence.cpp
+    src/webapi_routes_session.h
+    src/webapi_routes_session.cpp
     src/webapi_routes_common.h
     # Read-only stats HTTP/JSON listener
     src/stats_server.h

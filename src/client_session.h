@@ -102,6 +102,39 @@ struct SharedState {
         ++usageGameUsers[comId];
         return true;
     }
+    // Session Manager (Session/Invitation Web API). Sessions are created+joined via
+    // POST /v1/sessions and live here keyed by sessionId ("001-<uuid>").
+    mutable QReadWriteLock sessionsLock;
+    struct SessionMember {
+        int64_t userId = 0;
+        QString npid;
+        QString platform;
+        int index = 0; // which of the member's 64 session slots this occupies
+        int priority = 0;
+        qint64 joinedAt = 0;
+    };
+    struct Session {
+        QString sessionId;
+        int64_t ownerUserId = 0;
+        QString ownerNpid;
+        QString sessionName;
+        QString sessionStatus;
+        QHash<QString, QString> localizedSessionNames;  // npLanguage -> name
+        QHash<QString, QString> localizedSessionStatus; // npLanguage -> status
+        QString sessionType;                            // "owner-bind" | "owner-migration"
+        QString sessionPrivacy;                         // "private" | "public"
+        int sessionMaxUser = 0;
+        QStringList availablePlatforms;
+        QString npTitleId;
+        bool sessionLockFlag = false;
+        bool sendNotificationFlag = false;
+        QByteArray sessionImage;          // JPEG (<=160 KiB)
+        QByteArray sessionData;           // <=1 MiB
+        QByteArray changeableSessionData; // <=1 KiB
+        QList<SessionMember> members;
+        qint64 createdAt = 0;
+    };
+    QHash<QString, Session> sessions;
 };
 
 // Per-connection session info
