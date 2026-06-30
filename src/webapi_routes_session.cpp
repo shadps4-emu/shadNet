@@ -965,6 +965,12 @@ QHttpServerResponse HandleSessionJoin(Database& db, SharedState& shared, const Q
                 return QHttpServerResponse{QHttpServerResponse::StatusCode::NoContent};
             }
         }
+        // A locked session is closed to new members (max reached, join window ended, etc.);
+        // an already-joined member updating priority above is unaffected.
+        if (s.sessionLockFlag) {
+            return JsonError(QHttpServerResponse::StatusCode::Forbidden, SESSION_NOT_PERMITTED,
+                             QStringLiteral("The session is locked"));
+        }
         // Not a member -> capacity check (min(sessionMaxUser, 256)).
         const int maxUsers =
             (s.sessionMaxUser > 0 && s.sessionMaxUser < 256) ? s.sessionMaxUser : 256;
