@@ -149,7 +149,8 @@ struct SharedState {
         int64_t toUserId = 0; // single recipient (one record per invitee)
         QString toNpid;
         QString message;
-        QByteArray invitationData; // optional, <=1 MiB; if absent, GET returns session data
+        QStringList availablePlatforms; // snapshot of the session's platforms at send time
+        QByteArray invitationData;   // optional, <=1 MiB; if absent, GET returns session data
         bool hasInvitationData = false;
         qint64 createdAt = 0;
         qint64 validUntil = 0; // 0 = no expiry policy yet

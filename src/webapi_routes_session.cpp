@@ -12,6 +12,7 @@
 #include <QSet>
 #include <QString>
 #include <QStringList>
+#include <QTimeZone>
 #include <QUuid>
 
 #include "client_session.h"
@@ -38,6 +39,9 @@ constexpr quint32 WEBAPI_INVALID_BODY = 2113920;         // request body value i
 constexpr quint32 WEBAPI_INVALID_BODY_PARAM = 2113922;   // body member value invalid
 constexpr quint32 WEBAPI_INVALID_NUM_ELEMS = 2113923;    // array element count invalid
 constexpr quint32 WEBAPI_BODY_PARAM_REQUIRED = 2113926;  // required body member missing
+
+// Invitation-specific error
+constexpr quint32 INVITATION_EXPIRED = 2115584; // invitation expired or data already used
 
 // 0 == permitted. owner-bind: only the creator may mutate/delete; owner-migration: any member.
 quint32 SessionPermissionError(const SharedState::Session& s, int64_t userId) {
@@ -975,8 +979,7 @@ QHttpServerResponse HandleSessionJoin(Database& db, SharedState& shared, const Q
             }
         }
         // A locked session is closed to new members (max reached, join window ended, etc.);
-        // an already-joined member updating priority above is unaffected. The POST Member spec
-        // lists no dedicated 'locked' code, so this reuses SESSION_NOT_PERMITTED (2114560).
+        // an already-joined member updating priority above is unaffected.
         if (s.sessionLockFlag) {
             return JsonError(QHttpServerResponse::StatusCode::Forbidden, SESSION_NOT_PERMITTED,
                              QStringLiteral("The session is locked"));
@@ -1068,6 +1071,11 @@ QHttpServerResponse HandleSessionGetData(Database& db, SharedState& shared,
                                QHttpServerResponse::StatusCode::Ok);
 }
 
+// DELETE /v1/sessions/<arg>/members/<arg> -- leave a session. The member segment is "me" (or the
+// caller's account/onlineId); a member always removes themselves, and the session owner may remove
+// another member, otherwise 2114560. Removing the owner migrates ownership (owner-migration) or
+// deletes the session (owner-bind, or last member). Idempotent: leaving a session/membership that
+// no longer exists still returns 204. Body: none. Success: 204.
 // Remove userId from sn if present (sets *outRemoved). Applies owner teardown and returns true
 // when the session is now orphaned and the caller should delete it: owner-bind owner left, or
 // no members remain. owner-migration hands ownership to the next remaining member.
@@ -1201,15 +1209,18 @@ QHttpServerResponse HandleSessionInvite(Database& db, SharedState& shared, const
     const qint64 now = QDateTime::currentMSecsSinceEpoch();
     {
         QWriteLocker lk(&shared.sessionsLock);
-        if (!shared.sessions.contains(sessionId)) {
+        auto sit = shared.sessions.constFind(sessionId);
+        if (sit == shared.sessions.constEnd()) {
             return JsonError(QHttpServerResponse::StatusCode::NotFound, WEBAPI_RESOURCE_NOT_FOUND,
                              QStringLiteral("The session does not exist"));
         }
+        const QStringList sessionPlatforms = sit->availablePlatforms;
         for (const auto& r : recipients) {
             SharedState::Invitation inv;
             inv.invitationId =
                 QStringLiteral("002-") + QUuid::createUuid().toString(QUuid::WithoutBraces);
             inv.sessionId = sessionId;
+            inv.availablePlatforms = sessionPlatforms;
             inv.fromUserId = *auth.userId;
             inv.fromNpid = auth.npid;
             inv.toUserId = r.first;
@@ -1225,6 +1236,165 @@ QHttpServerResponse HandleSessionInvite(Database& db, SharedState& shared, const
     qInfo() << "WebAPI: session invite" << sessionId << "from" << auth.npid << "to"
             << recipients.size() << "recipient(s)" << (haveData ? "(with data)" : "");
     return QHttpServerResponse{QHttpServerResponse::StatusCode::NoContent};
+}
+
+// GET /v1/users/me/invitations/<invitationId> -- info on an invitation received by the caller.
+// fields: @default (receivedDate, expired, usedFlag, message, availablePlatforms, fromUser); add
+// `session` (or `session.sessionLockFlag`) for the linked session object, `members` for its
+// member list. npLanguage localizes the session name/status. 200 application/json.
+QHttpServerResponse HandleInvitationGet(Database& db, SharedState& shared, const QString& userKey,
+                                        const QString& invitationId,
+                                        const QHttpServerRequest& req) {
+    auto auth = WebApiAuth::Authenticate(req, db);
+    if (!auth.userId.has_value()) {
+        return std::move(auth.errorResponse);
+    }
+    Q_UNUSED(userKey); // path is /users/me/...; the bearer token identifies the recipient
+
+    const QUrlQuery query(req.url());
+    const QStringList fields =
+        query.queryItemValue(QStringLiteral("fields")).split(QLatin1Char(','), Qt::SkipEmptyParts);
+    const bool isDefault = fields.isEmpty() || fields.contains(QStringLiteral("@default"));
+    const bool wantSession = fields.contains(QStringLiteral("session")) ||
+                             fields.contains(QStringLiteral("session.sessionLockFlag"));
+    const bool wantLockFlag = fields.contains(QStringLiteral("session.sessionLockFlag"));
+    const bool wantMembers = fields.contains(QStringLiteral("members"));
+    const QString npLanguage = query.queryItemValue(QStringLiteral("npLanguage"));
+
+    QJsonObject body;
+    {
+        QReadLocker lk(&shared.sessionsLock);
+        auto iit = shared.invitations.constFind(invitationId);
+        if (iit == shared.invitations.constEnd() || iit->toUserId != *auth.userId) {
+            return JsonError(QHttpServerResponse::StatusCode::NotFound, WEBAPI_RESOURCE_NOT_FOUND,
+                             QStringLiteral("The invitation does not exist"));
+        }
+        const auto& inv = iit.value();
+
+        if (isDefault) {
+            body.insert(QStringLiteral("receivedDate"),
+                        QDateTime::fromMSecsSinceEpoch(inv.createdAt, QTimeZone::UTC)
+                            .toString(Qt::ISODate));
+            body.insert(QStringLiteral("expired"),
+                        inv.validUntil != 0 &&
+                            QDateTime::currentMSecsSinceEpoch() > inv.validUntil);
+            body.insert(QStringLiteral("usedFlag"), inv.used);
+            body.insert(QStringLiteral("message"), inv.message);
+            QJsonArray plats;
+            for (const auto& pf : inv.availablePlatforms)
+                plats.append(pf);
+            body.insert(QStringLiteral("availablePlatforms"), plats);
+            QJsonObject fromUser;
+            fromUser.insert(QStringLiteral("onlineId"), inv.fromNpid);
+            fromUser.insert(QStringLiteral("accountId"), QString::number(inv.fromUserId));
+            body.insert(QStringLiteral("fromUser"), fromUser);
+        }
+
+        // Session member: omitted if the linked session was deleted / no longer exists (per doc).
+        if (wantSession) {
+            auto ssit = shared.sessions.constFind(inv.sessionId);
+            if (ssit != shared.sessions.constEnd()) {
+                const auto& sn = ssit.value();
+                QString name = sn.sessionName, status = sn.sessionStatus;
+                if (!npLanguage.isEmpty()) {
+                    const auto n = sn.localizedSessionNames.constFind(npLanguage);
+                    if (n != sn.localizedSessionNames.constEnd())
+                        name = n.value();
+                    const auto st = sn.localizedSessionStatus.constFind(npLanguage);
+                    if (st != sn.localizedSessionStatus.constEnd())
+                        status = st.value();
+                }
+                QJsonObject so;
+                so.insert(QStringLiteral("sessionId"), sn.sessionId);
+                so.insert(QStringLiteral("sessionType"), sn.sessionType);
+                so.insert(QStringLiteral("sessionPrivacy"), sn.sessionPrivacy);
+                so.insert(QStringLiteral("sessionMaxUser"), sn.sessionMaxUser);
+                so.insert(QStringLiteral("sessionName"), name);
+                so.insert(QStringLiteral("sessionStatus"), status);
+                QJsonObject creator;
+                creator.insert(QStringLiteral("onlineId"), sn.ownerNpid);
+                creator.insert(QStringLiteral("accountId"), QString::number(sn.ownerUserId));
+                so.insert(QStringLiteral("sessionCreator"), creator);
+                so.insert(QStringLiteral("sessionCreateTimestamp"), sn.createdAt);
+                if (wantLockFlag)
+                    so.insert(QStringLiteral("sessionLockFlag"), sn.sessionLockFlag);
+                if (wantMembers) {
+                    QJsonArray members;
+                    for (const auto& m : sn.members) {
+                        QJsonObject mo;
+                        mo.insert(QStringLiteral("accountId"), QString::number(m.userId));
+                        mo.insert(QStringLiteral("onlineId"), m.npid);
+                        mo.insert(QStringLiteral("platform"), m.platform);
+                        members.append(mo);
+                    }
+                    so.insert(QStringLiteral("members"), members);
+                }
+                body.insert(QStringLiteral("session"), so);
+            }
+        }
+    }
+    return JsonOk(body);
+}
+
+// GET /v1/users/me/invitations/<invitationId>/invitationData -- the invitation's binary data.
+// Falls back to the linked session's sessionData, then changeableSessionData, when no invitation
+// data was set. 200 application/octet-stream. Expired/used -> 2115584; not-found, wrong recipient,
+// or a platform outside availablePlatforms -> 2113549.
+QHttpServerResponse HandleInvitationData(Database& db, SharedState& shared, const QString& userKey,
+                                         const QString& invitationId,
+                                         const QHttpServerRequest& req) {
+    auto auth = WebApiAuth::Authenticate(req, db);
+    if (!auth.userId.has_value()) {
+        return std::move(auth.errorResponse);
+    }
+    Q_UNUSED(userKey);
+
+    // Caller's platform for the availablePlatforms gate (empty if offline).
+    QString callerPlatform;
+    {
+        QReadLocker lk(&shared.clientsLock);
+        auto it = shared.clients.constFind(*auth.userId);
+        if (it != shared.clients.constEnd())
+            callerPlatform = it->platform;
+    }
+
+    QByteArray data;
+    {
+        QReadLocker lk(&shared.sessionsLock);
+        auto iit = shared.invitations.constFind(invitationId);
+        if (iit == shared.invitations.constEnd() || iit->toUserId != *auth.userId) {
+            return JsonError(QHttpServerResponse::StatusCode::NotFound, WEBAPI_RESOURCE_NOT_FOUND,
+                             QStringLiteral("The invitation does not exist"));
+        }
+        const auto& inv = iit.value();
+
+        const bool expired =
+            inv.validUntil != 0 && QDateTime::currentMSecsSinceEpoch() > inv.validUntil;
+        if (expired || inv.used) {
+            return JsonError(QHttpServerResponse::StatusCode::NotFound, INVITATION_EXPIRED,
+                             QStringLiteral("Invitation is expired or data has been used"));
+        }
+        if (!callerPlatform.isEmpty() && !inv.availablePlatforms.isEmpty() &&
+            !inv.availablePlatforms.contains(callerPlatform)) {
+            return JsonError(QHttpServerResponse::StatusCode::NotFound, WEBAPI_RESOURCE_NOT_FOUND,
+                             QStringLiteral("The platform cannot use this session"));
+        }
+
+        if (inv.hasInvitationData) {
+            data = inv.invitationData;
+        } else {
+            // Fallback: session data, then changeable session data.
+            auto ssit = shared.sessions.constFind(inv.sessionId);
+            if (ssit == shared.sessions.constEnd()) {
+                return JsonError(QHttpServerResponse::StatusCode::NotFound,
+                                 WEBAPI_RESOURCE_NOT_FOUND,
+                                 QStringLiteral("The linked session does not exist"));
+            }
+            data = !ssit->sessionData.isEmpty() ? ssit->sessionData : ssit->changeableSessionData;
+        }
+    }
+    return QHttpServerResponse(QByteArrayLiteral("application/octet-stream"), data,
+                               QHttpServerResponse::StatusCode::Ok);
 }
 
 } // namespace
@@ -1248,6 +1418,20 @@ void RegisterSessionRoutes(QHttpServer& http, Database& db, SharedState& shared)
                [&db, &shared](const QString& sessionId,
                               const QHttpServerRequest& req) -> QHttpServerResponse {
                    return HandleSessionInvite(db, shared, sessionId, req);
+               });
+
+    // GET /v1/users/<arg>/invitations/<arg> -- info on a received invitation.
+    http.route("/v1/users/<arg>/invitations/<arg>", QHttpServerRequest::Method::Get,
+               [&db, &shared](const QString& userKey, const QString& invitationId,
+                              const QHttpServerRequest& req) -> QHttpServerResponse {
+                   return HandleInvitationGet(db, shared, userKey, invitationId, req);
+               });
+
+    // GET /v1/users/<arg>/invitations/<arg>/invitationData -- the invitation's binary data.
+    http.route("/v1/users/<arg>/invitations/<arg>/invitationData", QHttpServerRequest::Method::Get,
+               [&db, &shared](const QString& userKey, const QString& invitationId,
+                              const QHttpServerRequest& req) -> QHttpServerResponse {
+                   return HandleInvitationData(db, shared, userKey, invitationId, req);
                });
 
     // GET /v1/sessions/<arg>/sessionData -- the session's binary data blob.
@@ -1299,7 +1483,7 @@ void RegisterSessionRoutes(QHttpServer& http, Database& db, SharedState& shared)
 }
 
 // Remove a user from every session they are in, applying owner-migration / owner-bind
-// teardown. Called on disconnect so an offline user automatically leaves their sessions
+// teardown. Called on disconnect so an offline user automatically leaves their sessions.
 void PurgeUserFromSessions(SharedState& shared, int64_t userId) {
     QWriteLocker lk(&shared.sessionsLock);
     QStringList toRemove;
