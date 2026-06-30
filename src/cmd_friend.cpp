@@ -2,6 +2,10 @@
 // SPDX-FileCopyrightText: Copyright 2026 shadNet Project
 // SPDX-License-Identifier: GPL-2.0-or-later
 #include <QDebug>
+#include <QJsonDocument>
+#include <QJsonObject>
+#include <QList>
+#include <QPair>
 #include "client_session.h"
 #include "proto_utils.h"
 #include "shadnet.pb.h"
@@ -23,6 +27,24 @@ static QByteArray buildNotifPayload(const T& msg) {
 // notifications so libSceNpWebApi consumers re-fetch via the friendList/blockingUsers
 // routes. See ClientSession::PushWebApiEvent.
 static const QString kWebApiFriendDataType = QStringLiteral("np:service:friendlist:friend");
+
+// Build the friendlist:friend extended-data pairs
+static QList<QPair<QString, QString>> FriendExtd(const QString& friendNpid, int64_t friendAccountId,
+                                                 const char* event) {
+    const QString ev = QString::fromLatin1(event);
+    QJsonObject trigger;
+    trigger.insert(QStringLiteral("friend"), friendNpid);
+    trigger.insert(QStringLiteral("event"), ev);
+    QJsonObject addl;
+    addl.insert(QStringLiteral("friendAccountId"), QString::number(friendAccountId));
+    addl.insert(QStringLiteral("event"), ev);
+    return {
+        {QStringLiteral("trigger"),
+         QString::fromUtf8(QJsonDocument(trigger).toJson(QJsonDocument::Compact))},
+        {QStringLiteral("additionalTrigger"),
+         QString::fromUtf8(QJsonDocument(addl).toJson(QJsonDocument::Compact))},
+    };
+}
 static const QString kWebApiBlockDataType = QStringLiteral("np:service:blocklist");
 
 ErrorType ClientSession::CmdAddFriend(StreamExtractor& data) {
@@ -94,10 +116,10 @@ ErrorType ClientSession::CmdAddFriend(StreamExtractor& data) {
         }
 
         // WebApi: both friend lists changed -> tell each side's push listener to refresh.
-        PushWebApiEvent(QString(), 0, kWebApiFriendDataType, QByteArray(), friendNpid, QString(),
-                        m_info.userId);
-        PushWebApiEvent(QString(), 0, kWebApiFriendDataType, QByteArray(), m_info.npid, QString(),
-                        friendId);
+        PushWebApiEvent(QString(), 0, kWebApiFriendDataType, QByteArray(), QString(), m_info.npid,
+                        m_info.userId, FriendExtd(friendNpid, friendId, "add"));
+        PushWebApiEvent(QString(), 0, kWebApiFriendDataType, QByteArray(), QString(), friendNpid,
+                        friendId, FriendExtd(m_info.npid, m_info.userId, "add"));
 
         qInfo() << "Friendship formed:" << m_info.npid << "<->" << friendNpid;
     } else {
@@ -107,7 +129,7 @@ ErrorType ClientSession::CmdAddFriend(StreamExtractor& data) {
         SendNotification(NotificationType::FriendQuery, buildNotifPayload(q), friendId);
 
         // WebApi: the requestee's friend data changed (incoming request).
-        PushWebApiEvent(QString(), 0, kWebApiFriendDataType, QByteArray(), m_info.npid, QString(),
+        PushWebApiEvent(QString(), 0, kWebApiFriendDataType, QByteArray(), QString(), friendNpid,
                         friendId);
 
         qInfo() << "Friend request sent:" << m_info.npid << "->" << friendNpid;
@@ -173,10 +195,10 @@ ErrorType ClientSession::CmdRemoveFriend(StreamExtractor& data) {
     }
 
     // WebApi: both friend lists changed.
-    PushWebApiEvent(QString(), 0, kWebApiFriendDataType, QByteArray(), friendNpid, QString(),
-                    m_info.userId);
-    PushWebApiEvent(QString(), 0, kWebApiFriendDataType, QByteArray(), m_info.npid, QString(),
-                    friendId);
+    PushWebApiEvent(QString(), 0, kWebApiFriendDataType, QByteArray(), QString(), m_info.npid,
+                    m_info.userId, FriendExtd(friendNpid, friendId, "remove"));
+    PushWebApiEvent(QString(), 0, kWebApiFriendDataType, QByteArray(), QString(), friendNpid,
+                    friendId, FriendExtd(m_info.npid, m_info.userId, "remove"));
 
     qInfo() << "Friend removed:" << m_info.npid << "removed" << friendNpid;
     return ErrorType::NoError;
@@ -236,14 +258,14 @@ ErrorType ClientSession::CmdAddBlock(StreamExtractor& data) {
         SendNotification(NotificationType::FriendLost, buildNotifPayload(toTarget), targetId);
 
         // WebApi: blocking also removed the friendship on both sides.
-        PushWebApiEvent(QString(), 0, kWebApiFriendDataType, QByteArray(), targetNpid, QString(),
-                        m_info.userId);
-        PushWebApiEvent(QString(), 0, kWebApiFriendDataType, QByteArray(), m_info.npid, QString(),
-                        targetId);
+        PushWebApiEvent(QString(), 0, kWebApiFriendDataType, QByteArray(), QString(), m_info.npid,
+                        m_info.userId, FriendExtd(targetNpid, targetId, "remove"));
+        PushWebApiEvent(QString(), 0, kWebApiFriendDataType, QByteArray(), QString(), targetNpid,
+                        targetId, FriendExtd(m_info.npid, m_info.userId, "remove"));
     }
 
     // WebApi: our block list changed.
-    PushWebApiEvent(QString(), 0, kWebApiBlockDataType, QByteArray(), targetNpid, QString(),
+    PushWebApiEvent(QString(), 0, kWebApiBlockDataType, QByteArray(), QString(), m_info.npid,
                     m_info.userId);
 
     qInfo() << m_info.npid << "blocked" << targetNpid;
@@ -285,7 +307,7 @@ ErrorType ClientSession::CmdRemoveBlock(StreamExtractor& data) {
         return ErrorType::DbFail;
 
     // WebApi: our block list changed.
-    PushWebApiEvent(QString(), 0, kWebApiBlockDataType, QByteArray(), targetNpid, QString(),
+    PushWebApiEvent(QString(), 0, kWebApiBlockDataType, QByteArray(), QString(), m_info.npid,
                     m_info.userId);
 
     qInfo() << m_info.npid << "unblocked" << targetNpid;

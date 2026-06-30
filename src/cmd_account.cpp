@@ -123,7 +123,9 @@ ErrorType ClientSession::CmdLogin(StreamExtractor& data, QByteArray& reply) {
         for (const auto& [friendId, friendNpid] : rels.friends) {
             auto* fe = pb.add_friends();
             fe->set_npid(friendNpid.toStdString());
-            fe->set_online(m_shared->clients.contains(friendId));
+            // Appear-Offline friends are reported offline.
+            const auto fit = m_shared->clients.constFind(friendId);
+            fe->set_online(fit != m_shared->clients.constEnd() && !fit->appearOffline);
             // presence field intentionally left empty
         }
     }
@@ -145,6 +147,10 @@ ErrorType ClientSession::CmdLogin(StreamExtractor& data, QByteArray& reply) {
         QWriteLocker lk(&m_shared->clientsLock);
         SharedState::ClientEntry entry;
         entry.npid = npid;
+        entry.appearOffline = req.appear_offline();
+        // Title context reported by the emulator at login -> presence gameTitleInfo.
+        entry.npTitleId = QString::fromStdString(req.title_id());
+        entry.titleName = QString::fromStdString(req.title_name());
         entry.send = [this](QByteArray pkt) {
             QMetaObject::invokeMethod(
                 this, [this, pkt]() { SendPacket(pkt); }, Qt::QueuedConnection);
@@ -168,8 +174,9 @@ ErrorType ClientSession::CmdLogin(StreamExtractor& data, QByteArray& reply) {
     // Count this authenticated session in live usage stats
     m_shared->UsageOnLogin();
 
-    // Notify online friends: FriendStatus notification (we just came online).
-    if (!onlineFriendSenders.isEmpty()) {
+    // Notify online friends we came online -- unless Appear-Offline is set, in which case
+    // we stay invisible (handled as offline by everyone else).
+    if (!onlineFriendSenders.isEmpty() && !req.appear_offline()) {
         shadnet::NotifyFriendStatus ns;
         ns.set_npid(npid.toStdString());
         ns.set_online(true);
@@ -181,18 +188,16 @@ ErrorType ClientSession::CmdLogin(StreamExtractor& data, QByteArray& reply) {
         appendProto(notifPayload, ns);
         QByteArray pkt =
             ClientSession::BuildNotification(NotificationType::FriendStatus, notifPayload);
-        // WebApi: tell each friend's push listener our presence changed (it re-fetches
-        // presence via the friendList route). Empty service name + exact dataType match
-        // the system "npweblis" listener's filter.
-        QByteArray webApiPkt = ClientSession::BuildNotification(
-            NotificationType::WebApiPushEvent,
-            ClientSession::BuildWebApiPushPayload(
-                QString(), 0, QStringLiteral("np:service:presence:onlineStatus"), QByteArray(),
-                npid, QString()));
+        // WebApi onlineStatus presence update: service name None (basic push) + exact
+        // dataType match the system "npweblis" listener's filter. from = us, to = each
+        // recipient
         for (const auto& [send, friendNpid] : onlineFriendSenders) {
-            Q_UNUSED(friendNpid);
             send(pkt);
-            send(webApiPkt);
+            send(ClientSession::BuildNotification(
+                NotificationType::WebApiPushEvent,
+                ClientSession::BuildWebApiPushPayload(
+                    QString(), 0, QStringLiteral("np:service:presence:onlineStatus"), QByteArray(),
+                    npid, friendNpid)));
         }
     }
 
