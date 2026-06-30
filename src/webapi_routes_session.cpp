@@ -58,6 +58,7 @@ QHttpServerResponse SessionPermissionResponse(quint32 err) {
 constexpr int kImageMax = 160 * 1024;
 constexpr int kDataMax = 1024 * 1024;
 constexpr int kChangeableMax = 1024;
+constexpr int kInvitationDataMax = 1024 * 1024;
 
 struct MultipartPart {
     QByteArray contentType;
@@ -1117,6 +1118,106 @@ QHttpServerResponse HandleSessionLeave(Database& db, SharedState& shared, const 
     return QHttpServerResponse{QHttpServerResponse::StatusCode::NoContent};
 }
 
+// POST /v1/sessions/<sessionId>/invitations -- send an invitation linked to a session.
+// multipart/mixed: required 'invitation-request' JSON part ({to:[accountId...], message})
+// plus an optional 'invitation-data' octet-stream part (<=1 MiB). One Invitation record is
+// stored per recipient; 204 on success (no body -- ids are delivered to recipients, not the
+// sender). The session must exist. Per the spec the sender need not be a member, so that is
+// not enforced here.
+QHttpServerResponse HandleSessionInvite(Database& db, SharedState& shared, const QString& sessionId,
+                                        const QHttpServerRequest& req) {
+    auto auth = WebApiAuth::Authenticate(req, db);
+    if (!auth.userId.has_value()) {
+        return std::move(auth.errorResponse);
+    }
+
+    const QByteArray boundary = ExtractBoundary(req.value("Content-Type"));
+    if (boundary.isEmpty()) {
+        return JsonError(QHttpServerResponse::StatusCode::BadRequest, SESSION_BAD_REQUEST,
+                         QStringLiteral("Expected multipart/mixed body with a boundary"));
+    }
+    const QList<MultipartPart> parts = ParseMultipartMixed(req.body(), boundary);
+
+    QByteArray jsonPart, dataPart;
+    bool haveJson = false, haveData = false;
+    for (const auto& p : parts) {
+        const QByteArray& d = p.contentDescription;
+        if (d == "invitation-request") {
+            jsonPart = p.data;
+            haveJson = true;
+        } else if (d == "invitation-data") {
+            dataPart = p.data;
+            haveData = true;
+        }
+    }
+    if (!haveJson) {
+        return JsonError(QHttpServerResponse::StatusCode::BadRequest, SESSION_BAD_REQUEST,
+                         QStringLiteral("Missing required invitation-request part"));
+    }
+    if (dataPart.size() > kInvitationDataMax) {
+        return JsonError(QHttpServerResponse::StatusCode::BadRequest, SESSION_BAD_REQUEST,
+                         QStringLiteral("invitation-data exceeds the 1 MiB limit"));
+    }
+
+    QJsonParseError perr{};
+    const QJsonDocument doc = QJsonDocument::fromJson(jsonPart, &perr);
+    if (perr.error != QJsonParseError::NoError || !doc.isObject()) {
+        return JsonError(QHttpServerResponse::StatusCode::BadRequest, SESSION_BAD_REQUEST,
+                         QStringLiteral("Malformed invitation-request JSON"));
+    }
+    const QJsonObject obj = doc.object();
+    const QString message = obj.value(QStringLiteral("message")).toString();
+
+    // 'to' is a list of target account IDs (numeric == userId in shadNet). Resolve each to a
+    // (userId, npid) pair before taking the lock; unparseable/zero ids are skipped.
+    QList<QPair<int64_t, QString>> recipients;
+    for (const auto& v : obj.value(QStringLiteral("to")).toArray()) {
+        bool ok = false;
+        const int64_t uid = v.toString().toLongLong(&ok);
+        if (!ok || uid == 0) {
+            continue;
+        }
+        QString npid;
+        if (auto n = db.GetUsername(uid)) {
+            npid = *n;
+        }
+        recipients.append({uid, npid});
+    }
+    if (recipients.isEmpty()) {
+        return JsonError(
+            QHttpServerResponse::StatusCode::BadRequest, SESSION_BAD_REQUEST,
+            QStringLiteral("invitation-request 'to' must list at least one account ID"));
+    }
+
+    const qint64 now = QDateTime::currentMSecsSinceEpoch();
+    {
+        QWriteLocker lk(&shared.sessionsLock);
+        if (!shared.sessions.contains(sessionId)) {
+            return JsonError(QHttpServerResponse::StatusCode::NotFound, SESSION_BAD_REQUEST,
+                             QStringLiteral("The session does not exist"));
+        }
+        for (const auto& r : recipients) {
+            SharedState::Invitation inv;
+            inv.invitationId =
+                QStringLiteral("002-") + QUuid::createUuid().toString(QUuid::WithoutBraces);
+            inv.sessionId = sessionId;
+            inv.fromUserId = *auth.userId;
+            inv.fromNpid = auth.npid;
+            inv.toUserId = r.first;
+            inv.toNpid = r.second;
+            inv.message = message;
+            inv.invitationData = dataPart;
+            inv.hasInvitationData = haveData;
+            inv.createdAt = now;
+            inv.used = false;
+            shared.invitations.insert(inv.invitationId, inv);
+        }
+    }
+    qInfo() << "WebAPI: session invite" << sessionId << "from" << auth.npid << "to"
+            << recipients.size() << "recipient(s)" << (haveData ? "(with data)" : "");
+    return QHttpServerResponse{QHttpServerResponse::StatusCode::NoContent};
+}
+
 } // namespace
 
 void RegisterSessionRoutes(QHttpServer& http, Database& db, SharedState& shared) {
@@ -1131,6 +1232,13 @@ void RegisterSessionRoutes(QHttpServer& http, Database& db, SharedState& shared)
                [&db, &shared](const QString& sessionId,
                               const QHttpServerRequest& req) -> QHttpServerResponse {
                    return HandleSessionJoin(db, shared, sessionId, req);
+               });
+
+    // POST /v1/sessions/<arg>/invitations -- send an invitation linked to a session.
+    http.route("/v1/sessions/<arg>/invitations", QHttpServerRequest::Method::Post,
+               [&db, &shared](const QString& sessionId,
+                              const QHttpServerRequest& req) -> QHttpServerResponse {
+                   return HandleSessionInvite(db, shared, sessionId, req);
                });
 
     // GET /v1/sessions/<arg>/sessionData -- the session's binary data blob.

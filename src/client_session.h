@@ -135,6 +135,27 @@ struct SharedState {
         qint64 createdAt = 0;
     };
     QHash<QString, Session> sessions;
+
+    // Invitations linked to a session (POST /v1/sessions/<id>/invitations). One record per
+    // recipient, keyed by a server-generated invitationId ("002-<uuid>"); the sender gets no id
+    // back (POST returns 204), so ids are delivered to recipients out of band. Guarded by the
+    // same sessionsLock as `sessions` (invitations and sessions are one consistency domain, so the
+    // private-session disclosure gate can consult both without a second lock).
+    struct Invitation {
+        QString invitationId;
+        QString sessionId; // the session this invites to (must exist when sent)
+        int64_t fromUserId = 0;
+        QString fromNpid;
+        int64_t toUserId = 0; // single recipient (one record per invitee)
+        QString toNpid;
+        QString message;
+        QByteArray invitationData; // optional, <=1 MiB; if absent, GET returns session data
+        bool hasInvitationData = false;
+        qint64 createdAt = 0;
+        qint64 validUntil = 0; // 0 = no expiry policy yet
+        bool used = false;
+    };
+    QHash<QString, Invitation> invitations;
 };
 
 // Per-connection session info
