@@ -7,10 +7,13 @@
 #include <QAtomicInt>
 #include <QByteArray>
 #include <QHash>
+#include <QList>
 #include <QObject>
+#include <QPair>
 #include <QReadWriteLock>
 #include <QSet>
 #include <QSslSocket>
+#include <QStringList>
 #include <QTcpSocket>
 #include <database.h>
 #include "config.h"
@@ -32,9 +35,23 @@ struct SharedState {
         QString npid;
         std::function<void(QByteArray)> send;
         std::function<void(uint64_t)> resetMatchingRoomState;
-        // Online friends for this session: userId → npid.
+        // Online friends for this session
         // Protected by clientsLock (same lock as the outer clients map).
         QHash<int64_t, QString> friends;
+        // Presence detail published via the WebAPI presence PUTs (gameStatus /
+        // inGamePresence)
+        QString gameStatus;                          // default gameStatus
+        QString gameData;                            // base64 free-form data
+        QHash<QString, QString> localizedGameStatus; // npLanguage
+        QString npTitleId;                           // title context
+        QString titleName;                           // title context
+        QString platform = QStringLiteral("PS4");
+        qint64 presenceUpdatedAt = 0;
+        bool appearOffline = false;
+        // Sticky notificationWithData: once a presence PUT sets notificationWithData=true,
+        // game-status/game-data update events carry the current status/data until the user
+        // ends the game, goes offline, or DELETEs game data.
+        bool notifyWithData = false;
     };
     QHash<int64_t, ClientEntry> clients;
     QHash<QString, int64_t> npidToUserId; // reverse lookup, protected by clientsLock
@@ -64,14 +81,17 @@ struct SharedState {
             usageClientGame.erase(it);
         }
     }
-    void UsageTouchGame(int64_t userId, const QString& comId) {
+    // Returns true when the user's comId was newly set or changed (false if unchanged /
+    // empty), so callers can react to the transition (e.g. emit a gameTitleInfo presence
+    // update once same-comId grouping becomes possible).
+    bool UsageTouchGame(int64_t userId, const QString& comId) {
         if (comId.isEmpty())
-            return;
+            return false;
         QWriteLocker lk(&usageLock);
         auto it = usageClientGame.find(userId);
         if (it != usageClientGame.end()) {
             if (it.value() == comId)
-                return;
+                return false;
             auto old = usageGameUsers.find(it.value());
             if (old != usageGameUsers.end() && --old.value() <= 0)
                 usageGameUsers.erase(old);
@@ -80,6 +100,7 @@ struct SharedState {
             usageClientGame.insert(userId, comId);
         }
         ++usageGameUsers[comId];
+        return true;
     }
 };
 
@@ -119,6 +140,7 @@ public:
     ErrorType CmdRemoveFriend(StreamExtractor& data);
     ErrorType CmdAddBlock(StreamExtractor& data);
     ErrorType CmdRemoveBlock(StreamExtractor& data);
+    ErrorType CmdSetAppearOffline(StreamExtractor& data);
 
     // commands cmd_score.cpp
     ErrorType CmdGetBoardInfos(StreamExtractor& data, QByteArray& reply);
@@ -159,19 +181,23 @@ private:
     // Notification helpers
     void SendNotification(NotificationType type, const QByteArray& payload, int64_t targetUserId);
     void SendSelfNotification(NotificationType type, const QByteArray& payload);
-    static QByteArray BuildNotification(NotificationType type, const QByteArray& payload);
 
-    // Build the length-prefixed payload for a WebApiPushEvent notification. Exposed so
-    // fan-out sites that already hold per-recipient send() lambdas (presence) can reuse it.
+public:
+    // Static packet builders (no instance state). Public so WebAPI fan-out sites can build
+    // notification / push packets without a ClientSession instance.
+    static QByteArray BuildNotification(NotificationType type, const QByteArray& payload);
     static QByteArray BuildWebApiPushPayload(const QString& npServiceName, quint32 npServiceLabel,
                                              const QString& dataType, const QByteArray& data,
-                                             const QString& fromNpid, const QString& toNpid);
-    // Push a generic NP WebApi push event to one online user. The emulator forwards it
-    // verbatim to libSceNpWebApi push-event callbacks. data may be empty (the listener
-    // re-fetches via the REST routes); from/to npids may be empty.
+                                             const QString& fromNpid, const QString& toNpid,
+                                             const QList<QPair<QString, QString>>& extdData = {});
+
+private:
+    // Push a generic NP WebApi push event to one online user
+    void EmitPresenceGameTitleInfo();
     void PushWebApiEvent(const QString& npServiceName, quint32 npServiceLabel,
                          const QString& dataType, const QByteArray& data, const QString& fromNpid,
-                         const QString& toNpid, int64_t targetUserId);
+                         const QString& toNpid, int64_t targetUserId,
+                         const QList<QPair<QString, QString>>& extdData = {});
 
     // Matching helpers (cmd_matching.cpp)
     void SendMatchingNotification(NotificationType type, const QByteArray& payload,

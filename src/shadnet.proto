@@ -11,10 +11,17 @@ option optimize_for = LITE_RUNTIME;
 // Account
 
 message LoginRequest {
-    string npid     = 1;
-    string password = 2;
-    string token    = 3;
-    string title_id = 4;
+    string npid        = 1;
+    string password    = 2;
+    string token       = 3;
+    string title_id    = 4;  // running title serial (param.sfo TITLE_ID), for presence gameTitleInfo
+    string title_name  = 5;  // running title name (param.sfo TITLE)
+    bool appear_offline = 6; // user's Appear-Offline preference (handled as offline by others)
+}
+
+// Mid-session Appear-Offline toggle.
+message SetAppearOfflineRequest {
+    bool appear_offline = 1;
 }
 
 message FriendEntry {
