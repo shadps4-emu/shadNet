@@ -54,6 +54,8 @@ enum class CommandType : uint16_t {
     GetScoreAccountId = 37,
     GetScoreGameDataByAccId = 38,
     GetToken = 39,
+    // Presence: mid-session Appear-Offline toggle (payload: SetAppearOfflineRequest).
+    SetAppearOffline = 40,
 };
 
 // Notification type IDs (u16 LE in Notification packet header).

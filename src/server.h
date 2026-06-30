@@ -25,6 +25,10 @@ public:
     bool Start(ConfigManager* config);
     void Stop();
 
+    // Live shared state (online clients map, presence, matching) owned by the server.
+    // Exposed so the WebAPI server can read online/presence status for its routes.
+    SharedState& Shared() { return m_shared; }
+
 private slots:
     void OnNewUnsecuredConnection();
 
