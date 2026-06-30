@@ -150,7 +150,7 @@ struct SharedState {
         QString toNpid;
         QString message;
         QStringList availablePlatforms; // snapshot of the session's platforms at send time
-        QByteArray invitationData;   // optional, <=1 MiB; if absent, GET returns session data
+        QByteArray invitationData;      // optional, <=1 MiB; if absent, GET returns session data
         bool hasInvitationData = false;
         qint64 createdAt = 0;
         qint64 updatedAt = 0;  // bumped when the invitation is modified (e.g., marked used)
