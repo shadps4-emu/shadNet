@@ -15,6 +15,7 @@
 #include <QStringList>
 #include <QUrlQuery>
 
+#include "client_session.h" // SharedState
 #include "database.h"
 #include "webapi_auth.h"
 #include "webapi_routes_common.h"
@@ -23,33 +24,24 @@ namespace WebApiRoutes {
 namespace {
 
 // GET /v1/profiles?onlineId=<a[,b,...]>
-QJsonObject BuildProfiles(Database& db, const QStringList& onlineIds, const QStringList& fields,
-                          bool isDefault) {
-    const bool wantOnlineId = isDefault || fields.contains(QStringLiteral("onlineId"));
-    const bool wantNpId = isDefault || fields.contains(QStringLiteral("npId"));
-    const bool wantAvatar = isDefault || fields.contains(QStringLiteral("avatarUrl"));
+// Defined below; declared here so the batch builder can delegate to it.
+QJsonObject BuildProfile(Database& db, SharedState& shared, qint64 userId, const QString& onlineId,
+                         const QStringList& fields, bool isDefault);
 
+// Batch profiles: accountIds are numeric account IDs. Each entry reuses the single-user
+// builder so every field behaves identically. (presence is not a batch field per the SDK.)
+QJsonObject BuildProfiles(Database& db, SharedState& shared, const QStringList& accountIds,
+                          const QStringList& fields, bool isDefault) {
     QJsonArray arr;
-    for (const QString& requested : onlineIds) {
-        const auto uid = db.GetUserId(requested);
-        if (!uid) {
-            continue; // unknown handle -- skip rather than fail the whole request
-        }
-        const QString onlineId = db.GetUsername(*uid).value_or(requested);
-        QJsonObject entry;
-        if (wantOnlineId) {
-            entry.insert(QStringLiteral("onlineId"), onlineId);
-        }
-        if (wantNpId) {
-            entry.insert(QStringLiteral("npId"), EncodeNpId(onlineId));
-        }
-        if (wantAvatar) {
-            const auto avatar = db.GetAvatarUrl(*uid);
-            if (avatar && !avatar->isEmpty()) {
-                entry.insert(QStringLiteral("avatarUrl"), *avatar);
-            }
-        }
-        arr.append(entry);
+    for (const QString& idStr : accountIds) {
+        bool ok = false;
+        const qlonglong accId = idStr.toLongLong(&ok);
+        if (!ok)
+            continue; // skip malformed ids
+        const auto name = db.GetUsername(accId);
+        if (!name)
+            continue; // unknown account -- skip rather than fail the whole request
+        arr.append(BuildProfile(db, shared, accId, *name, fields, isDefault));
     }
     QJsonObject body;
     body.insert(QStringLiteral("profiles"), arr);
@@ -58,7 +50,7 @@ QJsonObject BuildProfiles(Database& db, const QStringList& onlineIds, const QStr
 }
 
 // GET /v1/users/{userId}/profile -- a single user's Profile object
-QJsonObject BuildProfile(Database& db, qint64 userId, const QString& onlineId,
+QJsonObject BuildProfile(Database& db, SharedState& shared, qint64 userId, const QString& onlineId,
                          const QStringList& fields, bool isDefault) {
     const bool wantUser = isDefault || fields.contains(QStringLiteral("user"));
     const bool wantRegion = isDefault || fields.contains(QStringLiteral("region"));
@@ -70,6 +62,7 @@ QJsonObject BuildProfile(Database& db, qint64 userId, const QString& onlineId,
     const bool wantDetail = fields.contains(QStringLiteral("personalDetail")) ||
                             fields.contains(QStringLiteral("personalDetail.displayName"));
     const bool wantVerified = fields.contains(QStringLiteral("isOfficiallyVerified"));
+    const bool wantPresence = fields.contains(QStringLiteral("presence"));
 
     QJsonObject p;
     if (wantUser) {
@@ -99,54 +92,115 @@ QJsonObject BuildProfile(Database& db, qint64 userId, const QString& onlineId,
     if (wantDetail) {
         QJsonObject pd;
         pd.insert(QStringLiteral("displayName"), onlineId);
-        p.insert(QStringLiteral("personalDetail"), "it's me wanna fight?"); // unsupported
+        p.insert(QStringLiteral("personalDetail"), pd);
     }
     if (wantVerified) {
         p.insert(QStringLiteral("isOfficiallyVerified"), false);
+    }
+    if (wantPresence) {
+        // Profile embeds presence as {primaryInfo: <entry>} -- note: unlike friendList and
+        // GET presence, the profile presence object has no top-level onlineStatus member.
+        bool online = false;
+        QString platform, gameStatus, npTitleId, titleName;
+        {
+            QReadLocker lk(&shared.clientsLock);
+            auto it = shared.clients.constFind(userId);
+            if (it != shared.clients.constEnd() && !it->appearOffline) {
+                online = true;
+                platform = it->platform;
+                gameStatus = it->gameStatus;
+                npTitleId = it->npTitleId;
+                titleName = it->titleName;
+            }
+        }
+        QJsonObject presence;
+        presence.insert(QStringLiteral("primaryInfo"),
+                        MakePresenceEntry(online, platform, gameStatus, QString(), npTitleId,
+                                          titleName, /*includeDetail=*/true,
+                                          /*forcePlatform=*/false));
+        p.insert(QStringLiteral("presence"), presence);
     }
     return p;
 }
 
 } // namespace
 
-void RegisterProfileRoutes(QHttpServer& http, Database& db) {
+void RegisterProfileRoutes(QHttpServer& http, Database& db, SharedState& shared) {
     // GET /v1/profiles?onlineId=<a[,b,...]>&fields=...
-    http.route("/v1/profiles", [&db](const QHttpServerRequest& req) -> QHttpServerResponse {
-        static const QSet<QString> kKnown = {
-            QStringLiteral("onlineId"),
-            QStringLiteral("fields"),
-        };
-        LogUnsupportedQueryParams(req, kKnown);
+    http.route(
+        "/v1/profiles", [&db, &shared](const QHttpServerRequest& req) -> QHttpServerResponse {
+            static const QSet<QString> kKnown = {
+                QStringLiteral("accountIds"),
+                QStringLiteral("onlineId"),
+                QStringLiteral("fields"),
+                QStringLiteral("avatarSize"),
+                QStringLiteral("avatarSizes"),
+                QStringLiteral("avatarUrlScheme"),
+                QStringLiteral("profilePictureSizes"),
+                QStringLiteral("aboutMeType"),
+                QStringLiteral("languagesUsedLanguageSet"),
+                QStringLiteral("npLanguages"),
+            };
+            LogUnsupportedQueryParams(req, kKnown);
 
-        auto auth = WebApiAuth::Authenticate(req, db);
-        if (!auth.userId.has_value()) {
-            return std::move(auth.errorResponse);
-        }
+            auto auth = WebApiAuth::Authenticate(req, db);
+            if (!auth.userId.has_value()) {
+                return std::move(auth.errorResponse);
+            }
 
-        const QUrlQuery query(req.url());
-        if (!query.hasQueryItem(QStringLiteral("onlineId"))) {
-            return JsonError(QHttpServerResponse::StatusCode::BadRequest, UP_QUERY_PARAM_REQUIRED,
-                             QStringLiteral("'onlineId' parameter required in query string"));
-        }
-        const QStringList onlineIds = query.queryItemValue(QStringLiteral("onlineId"))
-                                          .split(QLatin1Char(','), Qt::SkipEmptyParts);
+            const QUrlQuery query(req.url());
+            // Accept either accountIds (numeric) or onlineId (handles, resolved to account IDs).
+            // shadPS4's NpWebApi layer looks profiles up by onlineId.
+            QStringList accountIds;
+            if (query.hasQueryItem(QStringLiteral("accountIds"))) {
+                accountIds = query.queryItemValue(QStringLiteral("accountIds"))
+                                 .split(QLatin1Char(','), Qt::SkipEmptyParts);
+                if (accountIds.isEmpty() || accountIds.size() > 50) {
+                    return JsonError(QHttpServerResponse::StatusCode::BadRequest,
+                                     UP_INVALID_QUERY_PARAM,
+                                     QStringLiteral("Invalid parameter in query string (parameter: "
+                                                    "'accountIds')"));
+                }
+            } else if (query.hasQueryItem(QStringLiteral("onlineId"))) {
+                const QStringList onlineIds = query.queryItemValue(QStringLiteral("onlineId"))
+                                                  .split(QLatin1Char(','), Qt::SkipEmptyParts);
+                if (onlineIds.isEmpty() || onlineIds.size() > 50) {
+                    return JsonError(QHttpServerResponse::StatusCode::BadRequest,
+                                     UP_INVALID_QUERY_PARAM,
+                                     QStringLiteral("Invalid parameter in query string (parameter: "
+                                                    "'onlineId')"));
+                }
+                // Resolve each handle to an account ID,unknown handles are omitted from the
+                // result (matching batch-lookup semantics).
+                for (const QString& oid : onlineIds) {
+                    const auto uid = db.GetUserId(oid);
+                    if (uid)
+                        accountIds.append(QString::number(*uid));
+                }
+            } else {
+                return JsonError(QHttpServerResponse::StatusCode::BadRequest,
+                                 UP_QUERY_PARAM_REQUIRED,
+                                 QStringLiteral("'accountIds' or 'onlineId' parameter required in "
+                                                "query string"));
+            }
 
-        QString fieldsStr = query.queryItemValue(QStringLiteral("fields"));
-        if (fieldsStr.isEmpty()) {
-            fieldsStr = QStringLiteral("@default");
-        }
-        const QStringList fields = fieldsStr.split(QLatin1Char(','), Qt::SkipEmptyParts);
-        const bool isDefault = fields.contains(QStringLiteral("@default"));
+            QString fieldsStr = query.queryItemValue(QStringLiteral("fields"));
+            if (fieldsStr.isEmpty()) {
+                fieldsStr = QStringLiteral("@default");
+            }
+            const QStringList fields = fieldsStr.split(QLatin1Char(','), Qt::SkipEmptyParts);
+            const bool isDefault = fields.contains(QStringLiteral("@default"));
 
-        const QJsonObject body = BuildProfiles(db, onlineIds, fields, isDefault);
-        qInfo() << "WebAPI: profiles lookup" << onlineIds << "-> returned"
-                << body.value(QStringLiteral("size")).toInt();
-        return JsonOk(body);
-    });
+            const QJsonObject body = BuildProfiles(db, shared, accountIds, fields, isDefault);
+            qInfo() << "WebAPI: profiles lookup" << accountIds.size() << "account(s) -> returned"
+                    << body.value(QStringLiteral("size")).toInt();
+            return JsonOk(body);
+        });
 
     // GET /v1/users/<arg>/profile -- single user's profile.
     http.route("/v1/users/<arg>/profile",
-               [&db](const QString& userKey, const QHttpServerRequest& req) -> QHttpServerResponse {
+               [&db, &shared](const QString& userKey,
+                              const QHttpServerRequest& req) -> QHttpServerResponse {
                    static const QSet<QString> kKnown = {
                        QStringLiteral("fields"),
                        QStringLiteral("avatarSize"),
@@ -184,9 +238,34 @@ void RegisterProfileRoutes(QHttpServer& http, Database& db) {
                    const QStringList fields = fieldsStr.split(QLatin1Char(','), Qt::SkipEmptyParts);
                    const bool isDefault = fields.contains(QStringLiteral("@default"));
 
-                   const QJsonObject body = BuildProfile(db, userId, onlineId, fields, isDefault);
+                   const QJsonObject body =
+                       BuildProfile(db, shared, userId, onlineId, fields, isDefault);
                    qInfo() << "WebAPI: profile for" << onlineId << "fields" << fields;
                    return JsonOk(body);
+               });
+
+    // GET /v1/users/<accountId|me>/profile/personalDetail/isAvailable -- whether the user
+    // permits in-game real-name display. Self-only. isAvailable is present only when a real
+    // name is registered; shadNet has no real-name registration, so we always return {} (the
+    // "real name not registered" case).
+    http.route("/v1/users/<arg>/profile/personalDetail/isAvailable",
+               [&db](const QString& userKey, const QHttpServerRequest& req) -> QHttpServerResponse {
+                   auto auth = WebApiAuth::Authenticate(req, db);
+                   if (!auth.userId.has_value()) {
+                       return std::move(auth.errorResponse);
+                   }
+                   const bool self =
+                       userKey.compare(QStringLiteral("me"), Qt::CaseInsensitive) == 0 ||
+                       userKey.compare(auth.npid, Qt::CaseInsensitive) == 0 ||
+                       userKey == QString::number(*auth.userId);
+                   if (!self) {
+                       return JsonError(QHttpServerResponse::StatusCode::Forbidden,
+                                        UP_ACCESS_DENIED_OWNERSHIP,
+                                        QStringLiteral("Access denied by resource ownership"));
+                   }
+                   qInfo() << "WebAPI: personalDetail/isAvailable for" << auth.npid
+                           << "-> {} (no real name registered)";
+                   return JsonOk(QJsonObject{});
                });
 }
 
