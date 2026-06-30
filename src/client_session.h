@@ -153,6 +153,7 @@ struct SharedState {
         QByteArray invitationData;   // optional, <=1 MiB; if absent, GET returns session data
         bool hasInvitationData = false;
         qint64 createdAt = 0;
+        qint64 updatedAt = 0;  // bumped when the invitation is modified (e.g., marked used)
         qint64 validUntil = 0; // 0 = no expiry policy yet
         bool used = false;
     };

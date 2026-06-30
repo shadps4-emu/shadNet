@@ -239,6 +239,11 @@ bool HasActiveInvitation(const SharedState& shared, const QString& sessionId, in
     return false;
 }
 
+// ms-epoch -> ISO8601 UTC (e.g. "2012-01-01T23:59:59Z") for invitation date fields.
+QString IsoUtc(qint64 ms) {
+    return QDateTime::fromMSecsSinceEpoch(ms, QTimeZone::UTC).toString(Qt::ISODate);
+}
+
 // Collect targetId's sessions visible to callerId (public, or private when the caller is a
 // participant or invitee), then select either the indices in indexFilter or, with
 // no filter, the single highest-priority + most-recently-joined session. Shared by the single- and
@@ -1253,6 +1258,7 @@ QHttpServerResponse HandleSessionInvite(Database& db, SharedState& shared, const
             inv.invitationData = dataPart;
             inv.hasInvitationData = haveData;
             inv.createdAt = now;
+            inv.updatedAt = now;
             inv.used = false;
             shared.invitations.insert(inv.invitationId, inv);
         }
@@ -1296,9 +1302,7 @@ QHttpServerResponse HandleInvitationGet(Database& db, SharedState& shared, const
         const auto& inv = iit.value();
 
         if (isDefault) {
-            body.insert(QStringLiteral("receivedDate"),
-                        QDateTime::fromMSecsSinceEpoch(inv.createdAt, QTimeZone::UTC)
-                            .toString(Qt::ISODate));
+            body.insert(QStringLiteral("receivedDate"), IsoUtc(inv.createdAt));
             body.insert(QStringLiteral("expired"),
                         inv.validUntil != 0 &&
                             QDateTime::currentMSecsSinceEpoch() > inv.validUntil);
@@ -1421,6 +1425,106 @@ QHttpServerResponse HandleInvitationData(Database& db, SharedState& shared, cons
                                QHttpServerResponse::StatusCode::Ok);
 }
 
+// GET /v1/users/me/invitations -- list invitations received by the caller. invitationEntry
+// fields: @default (invitationId) plus optional sessionId / receivedDate / expired / updateDate /
+// fromUser; invitationId and usedFlag are always present. Envelope: {invitations, start, size,
+// totalResult}. No pagination params are documented, so all of the caller's invitations return.
+QHttpServerResponse HandleInvitationList(Database& db, SharedState& shared, const QString& userKey,
+                                         const QHttpServerRequest& req) {
+    auto auth = WebApiAuth::Authenticate(req, db);
+    if (!auth.userId.has_value()) {
+        return std::move(auth.errorResponse);
+    }
+    Q_UNUSED(userKey);
+
+    const QUrlQuery query(req.url());
+    const QStringList fields =
+        query.queryItemValue(QStringLiteral("fields")).split(QLatin1Char(','), Qt::SkipEmptyParts);
+    const bool wantSessionId = fields.contains(QStringLiteral("sessionId"));
+    const bool wantReceived = fields.contains(QStringLiteral("receivedDate"));
+    const bool wantExpired = fields.contains(QStringLiteral("expired"));
+    const bool wantUpdate = fields.contains(QStringLiteral("updateDate"));
+    const bool wantFromUser = fields.contains(QStringLiteral("fromUser"));
+
+    QJsonArray arr;
+    {
+        QReadLocker lk(&shared.sessionsLock);
+        const qint64 nowMs = QDateTime::currentMSecsSinceEpoch();
+        for (auto it = shared.invitations.cbegin(); it != shared.invitations.cend(); ++it) {
+            const auto& inv = it.value();
+            if (inv.toUserId != *auth.userId)
+                continue;
+            QJsonObject e;
+            e.insert(QStringLiteral("invitationId"), inv.invitationId);
+            e.insert(QStringLiteral("usedFlag"), inv.used);
+            if (wantSessionId)
+                e.insert(QStringLiteral("sessionId"), inv.sessionId);
+            if (wantReceived)
+                e.insert(QStringLiteral("receivedDate"), IsoUtc(inv.createdAt));
+            if (wantExpired)
+                e.insert(QStringLiteral("expired"), inv.validUntil != 0 && nowMs > inv.validUntil);
+            if (wantUpdate)
+                e.insert(QStringLiteral("updateDate"), IsoUtc(inv.updatedAt));
+            if (wantFromUser) {
+                QJsonObject fromUser;
+                fromUser.insert(QStringLiteral("onlineId"), inv.fromNpid);
+                fromUser.insert(QStringLiteral("accountId"), QString::number(inv.fromUserId));
+                e.insert(QStringLiteral("fromUser"), fromUser);
+            }
+            arr.append(e);
+        }
+    }
+    QJsonObject body;
+    body.insert(QStringLiteral("invitations"), arr);
+    body.insert(QStringLiteral("start"), 0);
+    body.insert(QStringLiteral("size"), arr.size());
+    body.insert(QStringLiteral("totalResult"), arr.size());
+    return JsonOk(body);
+}
+
+// PUT /v1/users/me/invitations/<invitationId> -- mark a received invitation as "data already
+// used" ({"usedFlag":true}). 204 on success; an already-used or expired invitation -> 2115584;
+// not-found / wrong recipient -> 2113549. Marking used also revokes the invitee's private-session
+// disclosure (HasActiveInvitation skips used invitations).
+QHttpServerResponse HandleInvitationUse(Database& db, SharedState& shared, const QString& userKey,
+                                        const QString& invitationId,
+                                        const QHttpServerRequest& req) {
+    auto auth = WebApiAuth::Authenticate(req, db);
+    if (!auth.userId.has_value()) {
+        return std::move(auth.errorResponse);
+    }
+    Q_UNUSED(userKey);
+
+    QJsonParseError perr{};
+    const QJsonDocument doc = QJsonDocument::fromJson(req.body(), &perr);
+    if (perr.error != QJsonParseError::NoError || !doc.isObject()) {
+        return JsonError(QHttpServerResponse::StatusCode::BadRequest, WEBAPI_INVALID_BODY,
+                         QStringLiteral("Malformed JSON body"));
+    }
+    const QJsonValue used = doc.object().value(QStringLiteral("usedFlag"));
+    if (!used.isBool() || !used.toBool()) {
+        return JsonError(QHttpServerResponse::StatusCode::BadRequest, WEBAPI_INVALID_BODY_PARAM,
+                         QStringLiteral("usedFlag must be true"));
+    }
+
+    QWriteLocker lk(&shared.sessionsLock);
+    auto iit = shared.invitations.find(invitationId);
+    if (iit == shared.invitations.end() || iit->toUserId != *auth.userId) {
+        return JsonError(QHttpServerResponse::StatusCode::NotFound, WEBAPI_RESOURCE_NOT_FOUND,
+                         QStringLiteral("The invitation does not exist"));
+    }
+    const qint64 nowMs = QDateTime::currentMSecsSinceEpoch();
+    const bool expired = iit->validUntil != 0 && nowMs > iit->validUntil;
+    if (expired || iit->used) {
+        return JsonError(QHttpServerResponse::StatusCode::NotFound, INVITATION_EXPIRED,
+                         QStringLiteral("Invitation is expired or data has been used"));
+    }
+    iit->used = true;
+    iit->updatedAt = nowMs;
+    qInfo() << "WebAPI: invitation marked used" << invitationId << "by" << auth.npid;
+    return QHttpServerResponse{QHttpServerResponse::StatusCode::NoContent};
+}
+
 } // namespace
 
 void RegisterSessionRoutes(QHttpServer& http, Database& db, SharedState& shared) {
@@ -1444,11 +1548,25 @@ void RegisterSessionRoutes(QHttpServer& http, Database& db, SharedState& shared)
                    return HandleSessionInvite(db, shared, sessionId, req);
                });
 
+    // GET /v1/users/<arg>/invitations -- list invitations received by the caller.
+    http.route("/v1/users/<arg>/invitations", QHttpServerRequest::Method::Get,
+               [&db, &shared](const QString& userKey,
+                              const QHttpServerRequest& req) -> QHttpServerResponse {
+                   return HandleInvitationList(db, shared, userKey, req);
+               });
+
     // GET /v1/users/<arg>/invitations/<arg> -- info on a received invitation.
     http.route("/v1/users/<arg>/invitations/<arg>", QHttpServerRequest::Method::Get,
                [&db, &shared](const QString& userKey, const QString& invitationId,
                               const QHttpServerRequest& req) -> QHttpServerResponse {
                    return HandleInvitationGet(db, shared, userKey, invitationId, req);
+               });
+
+    // PUT /v1/users/<arg>/invitations/<arg> -- mark a received invitation as used.
+    http.route("/v1/users/<arg>/invitations/<arg>", QHttpServerRequest::Method::Put,
+               [&db, &shared](const QString& userKey, const QString& invitationId,
+                              const QHttpServerRequest& req) -> QHttpServerResponse {
+                   return HandleInvitationUse(db, shared, userKey, invitationId, req);
                });
 
     // GET /v1/users/<arg>/invitations/<arg>/invitationData -- the invitation's binary data.
