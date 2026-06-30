@@ -29,7 +29,15 @@ constexpr quint32 SESSION_ONLY_CREATOR = 2114562;
 constexpr quint32 SESSION_ONLY_MEMBER = 2114563;
 constexpr quint32 SESSION_USER_NOT_ONLINE = 2114564;
 constexpr quint32 SESSION_ALREADY_JOINED = 2114565;
-constexpr quint32 SESSION_BAD_REQUEST = 2114576;
+
+// Common Web API request errors
+constexpr quint32 WEBAPI_TOO_LARGE_BODY = 2113539;       // request body too long
+constexpr quint32 WEBAPI_RESOURCE_NOT_FOUND = 2113549;   // target resource does not exist
+constexpr quint32 WEBAPI_QUERY_PARAM_REQUIRED = 2113797; // required query parameter missing
+constexpr quint32 WEBAPI_INVALID_BODY = 2113920;         // request body value invalid
+constexpr quint32 WEBAPI_INVALID_BODY_PARAM = 2113922;   // body member value invalid
+constexpr quint32 WEBAPI_INVALID_NUM_ELEMS = 2113923;    // array element count invalid
+constexpr quint32 WEBAPI_BODY_PARAM_REQUIRED = 2113926;  // required body member missing
 
 // 0 == permitted. owner-bind: only the creator may mutate/delete; owner-migration: any member.
 quint32 SessionPermissionError(const SharedState::Session& s, int64_t userId) {
@@ -343,13 +351,13 @@ QHttpServerResponse HandleMultiUserSessions(Database& db, SharedState& shared,
     }
     const QUrlQuery query(req.url());
     if (!query.hasQueryItem(QStringLiteral("accountIds"))) {
-        return JsonError(QHttpServerResponse::StatusCode::BadRequest, SESSION_BAD_REQUEST,
+        return JsonError(QHttpServerResponse::StatusCode::BadRequest, WEBAPI_QUERY_PARAM_REQUIRED,
                          QStringLiteral("'accountIds' parameter required in query string"));
     }
     const QStringList ids = query.queryItemValue(QStringLiteral("accountIds"))
                                 .split(QLatin1Char(','), Qt::SkipEmptyParts);
     if (ids.isEmpty() || ids.size() > 50) {
-        return JsonError(QHttpServerResponse::StatusCode::BadRequest, SESSION_BAD_REQUEST,
+        return JsonError(QHttpServerResponse::StatusCode::BadRequest, WEBAPI_INVALID_NUM_ELEMS,
                          QStringLiteral("'accountIds' must list 1-50 account IDs"));
     }
 
@@ -435,7 +443,7 @@ QHttpServerResponse HandleSessionCreate(Database& db, SharedState& shared,
 
     const QByteArray boundary = ExtractBoundary(req.value("Content-Type"));
     if (boundary.isEmpty()) {
-        return JsonError(QHttpServerResponse::StatusCode::BadRequest, SESSION_BAD_REQUEST,
+        return JsonError(QHttpServerResponse::StatusCode::BadRequest, WEBAPI_INVALID_BODY,
                          QStringLiteral("Expected multipart/mixed body with a boundary"));
     }
     const QList<MultipartPart> parts = ParseMultipartMixed(req.body(), boundary);
@@ -460,19 +468,19 @@ QHttpServerResponse HandleSessionCreate(Database& db, SharedState& shared,
     }
     // session-request and session-image are required; at least one data part is required.
     if (!haveJson || !haveImage || (!haveData && !haveChangeable)) {
-        return JsonError(QHttpServerResponse::StatusCode::BadRequest, SESSION_BAD_REQUEST,
+        return JsonError(QHttpServerResponse::StatusCode::BadRequest, WEBAPI_BODY_PARAM_REQUIRED,
                          QStringLiteral("Missing required multipart part"));
     }
     if (imagePart.size() > kImageMax || dataPart.size() > kDataMax ||
         changeablePart.size() > kChangeableMax) {
-        return JsonError(QHttpServerResponse::StatusCode::BadRequest, SESSION_BAD_REQUEST,
+        return JsonError(QHttpServerResponse::StatusCode::BadRequest, WEBAPI_TOO_LARGE_BODY,
                          QStringLiteral("Multipart part exceeds the size limit"));
     }
 
     QJsonParseError perr{};
     const QJsonDocument doc = QJsonDocument::fromJson(jsonPart, &perr);
     if (perr.error != QJsonParseError::NoError || !doc.isObject()) {
-        return JsonError(QHttpServerResponse::StatusCode::BadRequest, SESSION_BAD_REQUEST,
+        return JsonError(QHttpServerResponse::StatusCode::BadRequest, WEBAPI_INVALID_BODY,
                          QStringLiteral("Malformed session-request JSON"));
     }
     const QJsonObject obj = doc.object();
@@ -488,7 +496,7 @@ QHttpServerResponse HandleSessionCreate(Database& db, SharedState& shared,
     if ((sessionType != QStringLiteral("owner-bind") &&
          sessionType != QStringLiteral("owner-migration")) ||
         sessionMaxUser <= 0 || platforms.isEmpty()) {
-        return JsonError(QHttpServerResponse::StatusCode::BadRequest, SESSION_BAD_REQUEST,
+        return JsonError(QHttpServerResponse::StatusCode::BadRequest, WEBAPI_INVALID_BODY_PARAM,
                          QStringLiteral("Invalid or missing session-request field"));
     }
 
@@ -506,7 +514,7 @@ QHttpServerResponse HandleSessionCreate(Database& db, SharedState& shared,
     // The creator's platform must be among availablePlatforms.
     if (!platforms.contains(userPlatform)) {
         return JsonError(
-            QHttpServerResponse::StatusCode::BadRequest, SESSION_BAD_REQUEST,
+            QHttpServerResponse::StatusCode::BadRequest, WEBAPI_INVALID_BODY_PARAM,
             QStringLiteral("availablePlatforms must include the current user's platform"));
     }
 
@@ -574,7 +582,7 @@ QHttpServerResponse HandleSessionUpdate(Database& db, SharedState& shared, const
     QJsonParseError perr{};
     const QJsonDocument doc = QJsonDocument::fromJson(req.body(), &perr);
     if (perr.error != QJsonParseError::NoError || !doc.isObject()) {
-        return JsonError(QHttpServerResponse::StatusCode::BadRequest, SESSION_BAD_REQUEST,
+        return JsonError(QHttpServerResponse::StatusCode::BadRequest, WEBAPI_INVALID_BODY,
                          QStringLiteral("Malformed session-request JSON"));
     }
     const QJsonObject obj = doc.object();
@@ -582,7 +590,7 @@ QHttpServerResponse HandleSessionUpdate(Database& db, SharedState& shared, const
     QWriteLocker lk(&shared.sessionsLock);
     auto it = shared.sessions.find(sessionId);
     if (it == shared.sessions.end()) {
-        return JsonError(QHttpServerResponse::StatusCode::NotFound, SESSION_BAD_REQUEST,
+        return JsonError(QHttpServerResponse::StatusCode::NotFound, WEBAPI_RESOURCE_NOT_FOUND,
                          QStringLiteral("Session not found"));
     }
     auto& s = it.value();
@@ -690,7 +698,7 @@ QHttpServerResponse HandleSessionGet(Database& db, SharedState& shared, const QS
         }
     }
     if (!found) {
-        return JsonError(QHttpServerResponse::StatusCode::NotFound, SESSION_BAD_REQUEST,
+        return JsonError(QHttpServerResponse::StatusCode::NotFound, WEBAPI_RESOURCE_NOT_FOUND,
                          QStringLiteral("Session not found"));
     }
     if (!permitted) {
@@ -755,7 +763,7 @@ QHttpServerResponse HandleSessionDelete(Database& db, SharedState& shared, const
     QWriteLocker lk(&shared.sessionsLock);
     auto it = shared.sessions.find(sessionId);
     if (it == shared.sessions.end()) {
-        return JsonError(QHttpServerResponse::StatusCode::NotFound, SESSION_BAD_REQUEST,
+        return JsonError(QHttpServerResponse::StatusCode::NotFound, WEBAPI_RESOURCE_NOT_FOUND,
                          QStringLiteral("Session not found"));
     }
     if (const quint32 err = SessionPermissionError(it.value(), *auth.userId))
@@ -926,7 +934,7 @@ QHttpServerResponse HandleSessionJoin(Database& db, SharedState& shared, const Q
             priority = v;
     }
     if (index < 0 || index > 63) {
-        return JsonError(QHttpServerResponse::StatusCode::BadRequest, SESSION_BAD_REQUEST,
+        return JsonError(QHttpServerResponse::StatusCode::BadRequest, WEBAPI_INVALID_BODY_PARAM,
                          QStringLiteral("'index' must be in the range 0-63"));
     }
 
@@ -945,7 +953,7 @@ QHttpServerResponse HandleSessionJoin(Database& db, SharedState& shared, const Q
     QWriteLocker lk(&shared.sessionsLock);
     auto sit = shared.sessions.find(sessionId);
     if (sit == shared.sessions.end()) {
-        return JsonError(QHttpServerResponse::StatusCode::NotFound, SESSION_BAD_REQUEST,
+        return JsonError(QHttpServerResponse::StatusCode::NotFound, WEBAPI_RESOURCE_NOT_FOUND,
                          QStringLiteral("Session not found"));
     }
     {
@@ -967,7 +975,8 @@ QHttpServerResponse HandleSessionJoin(Database& db, SharedState& shared, const Q
             }
         }
         // A locked session is closed to new members (max reached, join window ended, etc.);
-        // an already-joined member updating priority above is unaffected.
+        // an already-joined member updating priority above is unaffected. The POST Member spec
+        // lists no dedicated 'locked' code, so this reuses SESSION_NOT_PERMITTED (2114560).
         if (s.sessionLockFlag) {
             return JsonError(QHttpServerResponse::StatusCode::Forbidden, SESSION_NOT_PERMITTED,
                              QStringLiteral("The session is locked"));
@@ -1041,7 +1050,7 @@ QHttpServerResponse HandleSessionGetData(Database& db, SharedState& shared,
         }
     }
     if (!found) {
-        return JsonError(QHttpServerResponse::StatusCode::NotFound, SESSION_BAD_REQUEST,
+        return JsonError(QHttpServerResponse::StatusCode::NotFound, WEBAPI_RESOURCE_NOT_FOUND,
                          QStringLiteral("Session not found"));
     }
     // Platform not allowed on this session -> not permitted.
@@ -1133,7 +1142,7 @@ QHttpServerResponse HandleSessionInvite(Database& db, SharedState& shared, const
 
     const QByteArray boundary = ExtractBoundary(req.value("Content-Type"));
     if (boundary.isEmpty()) {
-        return JsonError(QHttpServerResponse::StatusCode::BadRequest, SESSION_BAD_REQUEST,
+        return JsonError(QHttpServerResponse::StatusCode::BadRequest, WEBAPI_INVALID_BODY,
                          QStringLiteral("Expected multipart/mixed body with a boundary"));
     }
     const QList<MultipartPart> parts = ParseMultipartMixed(req.body(), boundary);
@@ -1151,18 +1160,18 @@ QHttpServerResponse HandleSessionInvite(Database& db, SharedState& shared, const
         }
     }
     if (!haveJson) {
-        return JsonError(QHttpServerResponse::StatusCode::BadRequest, SESSION_BAD_REQUEST,
+        return JsonError(QHttpServerResponse::StatusCode::BadRequest, WEBAPI_BODY_PARAM_REQUIRED,
                          QStringLiteral("Missing required invitation-request part"));
     }
     if (dataPart.size() > kInvitationDataMax) {
-        return JsonError(QHttpServerResponse::StatusCode::BadRequest, SESSION_BAD_REQUEST,
+        return JsonError(QHttpServerResponse::StatusCode::BadRequest, WEBAPI_TOO_LARGE_BODY,
                          QStringLiteral("invitation-data exceeds the 1 MiB limit"));
     }
 
     QJsonParseError perr{};
     const QJsonDocument doc = QJsonDocument::fromJson(jsonPart, &perr);
     if (perr.error != QJsonParseError::NoError || !doc.isObject()) {
-        return JsonError(QHttpServerResponse::StatusCode::BadRequest, SESSION_BAD_REQUEST,
+        return JsonError(QHttpServerResponse::StatusCode::BadRequest, WEBAPI_INVALID_BODY,
                          QStringLiteral("Malformed invitation-request JSON"));
     }
     const QJsonObject obj = doc.object();
@@ -1185,7 +1194,7 @@ QHttpServerResponse HandleSessionInvite(Database& db, SharedState& shared, const
     }
     if (recipients.isEmpty()) {
         return JsonError(
-            QHttpServerResponse::StatusCode::BadRequest, SESSION_BAD_REQUEST,
+            QHttpServerResponse::StatusCode::BadRequest, WEBAPI_INVALID_NUM_ELEMS,
             QStringLiteral("invitation-request 'to' must list at least one account ID"));
     }
 
@@ -1193,7 +1202,7 @@ QHttpServerResponse HandleSessionInvite(Database& db, SharedState& shared, const
     {
         QWriteLocker lk(&shared.sessionsLock);
         if (!shared.sessions.contains(sessionId)) {
-            return JsonError(QHttpServerResponse::StatusCode::NotFound, SESSION_BAD_REQUEST,
+            return JsonError(QHttpServerResponse::StatusCode::NotFound, WEBAPI_RESOURCE_NOT_FOUND,
                              QStringLiteral("The session does not exist"));
         }
         for (const auto& r : recipients) {
