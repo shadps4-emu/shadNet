@@ -205,7 +205,7 @@ bool ResolveTarget(Database& db, const QString& userKey, const WebApiAuth::AuthR
 }
 
 // GET /v1/users/<arg>/sessions -- the target user's sessions (as sessionEntity rows). Private
-// sessions are visible only to participants (invitations are not modeled), so inaccessible
+// sessions are visible only to participants or invitees, so inaccessible
 // private sessions are filtered out rather than returned
 // One of a user's visible sessions, with every field the session-list endpoints can emit.
 struct SessionRow {
@@ -222,8 +222,25 @@ struct SessionRow {
     qint64 joinedAt = 0;
 };
 
+// True if userId holds a still-valid (unexpired, unused) invitation to sessionId. Invitations are
+// guarded by sessionsLock, so callers must already hold it. Used to widen private-session access
+// from participants-only to "participants or invitees" -- the SDK discloses a private session to
+// users who have been sent an invitation linked to it.
+bool HasActiveInvitation(const SharedState& shared, const QString& sessionId, int64_t userId) {
+    const qint64 nowMs = QDateTime::currentMSecsSinceEpoch();
+    for (auto it = shared.invitations.cbegin(); it != shared.invitations.cend(); ++it) {
+        const auto& inv = it.value();
+        if (inv.toUserId != userId || inv.sessionId != sessionId || inv.used)
+            continue;
+        if (inv.validUntil != 0 && nowMs > inv.validUntil)
+            continue;
+        return true;
+    }
+    return false;
+}
+
 // Collect targetId's sessions visible to callerId (public, or private when the caller is a
-// participant), then select either the indices in indexFilter or, with
+// participant or invitee), then select either the indices in indexFilter or, with
 // no filter, the single highest-priority + most-recently-joined session. Shared by the single- and
 // multi-user session-list endpoints so privacy/selection stay identical.
 QList<SessionRow> CollectUserSessions(SharedState& shared, int64_t targetId, int64_t callerId,
@@ -243,7 +260,8 @@ QList<SessionRow> CollectUserSessions(SharedState& shared, int64_t targetId, int
             }
             if (!tm)
                 continue;
-            if (s.sessionPrivacy == QStringLiteral("private") && !callerIsMember)
+            if (s.sessionPrivacy == QStringLiteral("private") && !callerIsMember &&
+                !HasActiveInvitation(shared, s.sessionId, callerId))
                 continue;
             SessionRow r;
             r.sessionId = s.sessionId;
@@ -641,7 +659,7 @@ QHttpServerResponse HandleSessionUpdate(Database& db, SharedState& shared, const
 }
 
 // GET /v1/sessions/<arg> -- session information. Private sessions are accessible only to a
-// participant (invitations not modeled) -> otherwise 2114560. @default returns the core
+// participant or invitee -> otherwise 2114560. @default returns the core
 // fields (+ sessionType, per the doc example); members/sessionLockFlag/sendNotificationFlag
 // are additive. npLanguage selects a localized sessionName/sessionStatus within @default.
 QHttpServerResponse HandleSessionGet(Database& db, SharedState& shared, const QString& sessionId,
@@ -684,7 +702,8 @@ QHttpServerResponse HandleSessionGet(Database& db, SharedState& shared, const QS
                     callerIsMember = true;
                     break;
                 }
-            permitted = (s.sessionPrivacy != QStringLiteral("private")) || callerIsMember;
+            permitted = (s.sessionPrivacy != QStringLiteral("private")) || callerIsMember ||
+                        HasActiveInvitation(shared, s.sessionId, *auth.userId);
             snap.privacy = s.sessionPrivacy;
             snap.type = s.sessionType;
             snap.name = s.sessionName;
@@ -979,7 +998,8 @@ QHttpServerResponse HandleSessionJoin(Database& db, SharedState& shared, const Q
             }
         }
         // A locked session is closed to new members (max reached, join window ended, etc.);
-        // an already-joined member updating priority above is unaffected.
+        // an already-joined member updating priority above is unaffected. The POST Member spec
+        // lists no dedicated 'locked' code, so this reuses SESSION_NOT_PERMITTED (2114560).
         if (s.sessionLockFlag) {
             return JsonError(QHttpServerResponse::StatusCode::Forbidden, SESSION_NOT_PERMITTED,
                              QStringLiteral("The session is locked"));
@@ -1013,8 +1033,8 @@ QHttpServerResponse HandleSessionJoin(Database& db, SharedState& shared, const Q
 
 // GET /v1/sessions/<arg>/sessionData -- the session's binary data blob (set at create), returned
 // as application/octet-stream (up to 1 MiB). Access: the caller's platform must be among the
-// session's availablePlatforms, and a private session is readable only by a participant
-// (invitations not modeled); otherwise 2114560. Changeable session data is a separate endpoint.
+// session's availablePlatforms, and a private session is readable by a participant or
+// invitee; otherwise 2114560. Changeable session data is a separate endpoint.
 QHttpServerResponse HandleSessionGetData(Database& db, SharedState& shared,
                                          const QString& sessionId, const QHttpServerRequest& req) {
     auto auth = WebApiAuth::Authenticate(req, db);
@@ -1035,6 +1055,7 @@ QHttpServerResponse HandleSessionGetData(Database& db, SharedState& shared,
     QString privacy;
     bool found = false;
     bool callerIsMember = false;
+    bool callerInvited = false;
     {
         QReadLocker lk(&shared.sessionsLock);
         const auto it = shared.sessions.constFind(sessionId);
@@ -1050,6 +1071,9 @@ QHttpServerResponse HandleSessionGetData(Database& db, SharedState& shared,
                     break;
                 }
             }
+            // Invitees can read a private session's data too (checked under the same lock).
+            if (sn.sessionPrivacy == QStringLiteral("private") && !callerIsMember)
+                callerInvited = HasActiveInvitation(shared, sessionId, *auth.userId);
         }
     }
     if (!found) {
@@ -1061,8 +1085,8 @@ QHttpServerResponse HandleSessionGetData(Database& db, SharedState& shared,
         return JsonError(QHttpServerResponse::StatusCode::Forbidden, SESSION_NOT_PERMITTED,
                          QStringLiteral("Not permitted to access the session"));
     }
-    // Private session is readable only by participants (invitations not modeled).
-    if (privacy == QStringLiteral("private") && !callerIsMember) {
+    // A private session's data is readable by participants or invitees.
+    if (privacy == QStringLiteral("private") && !callerIsMember && !callerInvited) {
         return JsonError(QHttpServerResponse::StatusCode::Forbidden, SESSION_NOT_PERMITTED,
                          QStringLiteral("Not permitted to access the session"));
     }
