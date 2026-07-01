@@ -224,8 +224,7 @@ struct SessionRow {
 
 // True if userId holds a still-valid (unexpired, unused) invitation to sessionId. Invitations are
 // guarded by sessionsLock, so callers must already hold it. Used to widen private-session access
-// from participants-only to "participants or invitees" -- the SDK discloses a private session to
-// users who have been sent an invitation linked to it.
+// from participants-only to "participants or invitees"
 bool HasActiveInvitation(const SharedState& shared, const QString& sessionId, int64_t userId) {
     const qint64 nowMs = QDateTime::currentMSecsSinceEpoch();
     for (auto it = shared.invitations.cbegin(); it != shared.invitations.cend(); ++it) {
@@ -242,6 +241,39 @@ bool HasActiveInvitation(const SharedState& shared, const QString& sessionId, in
 // ms-epoch -> ISO8601 UTC (e.g. "2012-01-01T23:59:59Z") for invitation date fields.
 QString IsoUtc(qint64 ms) {
     return QDateTime::fromMSecsSinceEpoch(ms, QTimeZone::UTC).toString(Qt::ISODate);
+}
+
+// Fan a sessionInvitation push event (NotificationType::WebApiPushEvent) out to each ONLINE
+// recipient. Acquires clientsLock only, so callers MUST NOT hold sessionsLock -- gather the
+// recipient userIds under sessionsLock, release it, then call this. Fields beyond the onlineIds
+// (from.accountId, from.platform, to.accountId, and data.sessionId for session events) travel in
+// extdData; the emulator's push decoder maps them back into the event's from/to/data objects.
+void SendSessionInvitationEvent(SharedState& shared, const QString& dataType, int64_t fromUserId,
+                                const QString& fromNpid, const QList<int64_t>& toUserIds,
+                                const QString& sessionId) {
+    if (toUserIds.isEmpty())
+        return;
+    QReadLocker lk(&shared.clientsLock);
+    const auto fit = shared.clients.constFind(fromUserId);
+    const QString fromPlatform = (fit != shared.clients.constEnd()) ? fit->platform : QString();
+    const QString fromAccountId = QString::number(fromUserId);
+    for (const int64_t toId : toUserIds) {
+        const auto it = shared.clients.constFind(toId);
+        if (it == shared.clients.constEnd() || !it->send)
+            continue; // recipient offline
+        QList<QPair<QString, QString>> extd;
+        extd.append({QStringLiteral("fromAccountId"), fromAccountId});
+        if (!fromPlatform.isEmpty())
+            extd.append({QStringLiteral("fromPlatform"), fromPlatform});
+        extd.append({QStringLiteral("toAccountId"), QString::number(toId)});
+        if (!sessionId.isEmpty())
+            extd.append({QStringLiteral("sessionId"), sessionId});
+        const QByteArray pkt = ClientSession::BuildNotification(
+            NotificationType::WebApiPushEvent,
+            ClientSession::BuildWebApiPushPayload(QStringLiteral("sessionInvitation"), 0, dataType,
+                                                  QByteArray(), fromNpid, it->npid, extd));
+        it->send(pkt);
+    }
 }
 
 // Collect targetId's sessions visible to callerId (public, or private when the caller is a
@@ -589,6 +621,13 @@ QHttpServerResponse HandleSessionCreate(Database& db, SharedState& shared,
         shared.sessions.insert(sessionId, s);
     }
 
+    // Session Created event to the creator (the sole initial member) when notifications are on.
+    if (s.sendNotificationFlag) {
+        const QList<int64_t> self{*auth.userId};
+        SendSessionInvitationEvent(shared, QStringLiteral("np:service:session:game:join:to:member"),
+                                   *auth.userId, auth.npid, self, sessionId);
+    }
+
     qInfo() << "WebAPI: session created" << sessionId << "by" << auth.npid << "type" << sessionType
             << "index" << index;
     QJsonObject body;
@@ -624,6 +663,7 @@ QHttpServerResponse HandleSessionUpdate(Database& db, SharedState& shared, const
 
     if (const quint32 err = SessionPermissionError(s, *auth.userId))
         return SessionPermissionResponse(err);
+    const QString oldPrivacy = s.sessionPrivacy;
 
     // sessionName / localizedSessionNames: replaced together when either is present.
     if (obj.contains(QStringLiteral("sessionName")) ||
@@ -659,7 +699,18 @@ QHttpServerResponse HandleSessionUpdate(Database& db, SharedState& shared, const
             s.availablePlatforms = p;
     }
 
+    // Session Information Updated event to members when the privacy setting changed (gated).
+    const bool notify = s.sendNotificationFlag && (s.sessionPrivacy != oldPrivacy);
+    QList<int64_t> recipients;
+    if (notify)
+        for (const auto& m : s.members)
+            recipients.append(m.userId);
     qInfo() << "WebAPI: session updated" << sessionId << "by" << auth.npid;
+    lk.unlock();
+    if (notify)
+        SendSessionInvitationEvent(shared,
+                                   QStringLiteral("np:service:session:game:update:to:member"),
+                                   *auth.userId, auth.npid, recipients, sessionId);
     return QHttpServerResponse{QHttpServerResponse::StatusCode::NoContent};
 }
 
@@ -1020,6 +1071,8 @@ QHttpServerResponse HandleSessionJoin(Database& db, SharedState& shared, const Q
     // Joining at this index frees the index elsewhere first (may delete/migrate that other
     // session). THIS session is untouched since the caller isn't a member of it; re-fetch after.
     LeaveSessionAtIndex(shared, *auth.userId, index);
+    bool notify = false;
+    QList<int64_t> others;
     {
         auto& s = shared.sessions[sessionId];
         SharedState::SessionMember m;
@@ -1030,9 +1083,19 @@ QHttpServerResponse HandleSessionJoin(Database& db, SharedState& shared, const Q
         m.priority = priority;
         m.joinedAt = QDateTime::currentMSecsSinceEpoch();
         s.members.append(m);
+        notify = s.sendNotificationFlag;
+        if (notify)
+            for (const auto& mem : s.members)
+                if (mem.userId != *auth.userId)
+                    others.append(mem.userId);
     }
     qInfo() << "WebAPI: session join" << sessionId << "by" << auth.npid << "index" << index
             << "priority" << priority;
+    // Session Joined event to the existing members (gated on sendNotificationFlag).
+    lk.unlock();
+    if (notify)
+        SendSessionInvitationEvent(shared, QStringLiteral("np:service:session:game:join:to:member"),
+                                   *auth.userId, auth.npid, others, sessionId);
     return QHttpServerResponse{QHttpServerResponse::StatusCode::NoContent};
 }
 
@@ -1153,6 +1216,18 @@ QHttpServerResponse HandleSessionLeave(Database& db, SharedState& shared, const 
         return JsonError(QHttpServerResponse::StatusCode::Forbidden, SESSION_NOT_PERMITTED,
                          QStringLiteral("Not permitted to access the session"));
     }
+    // Gather pre-removal recipients (all members, incl. the leaver) + the leaver's npid so a
+    // Session Left event can be sent after removal and after releasing the lock.
+    const bool notify = sn.sendNotificationFlag;
+    QList<int64_t> recipients;
+    QString leftNpid;
+    if (notify) {
+        for (const auto& m : sn.members) {
+            recipients.append(m.userId);
+            if (m.userId == targetId)
+                leftNpid = m.npid;
+        }
+    }
     bool removed = false;
     const bool shouldDelete = RemoveMemberApplyOwner(sn, targetId, &removed);
     if (!removed) {
@@ -1161,6 +1236,12 @@ QHttpServerResponse HandleSessionLeave(Database& db, SharedState& shared, const 
     if (shouldDelete)
         shared.sessions.remove(sessionId);
     qInfo() << "WebAPI: session leave" << sessionId << "member" << targetId << "by" << auth.npid;
+    // Session Left event to all members incl. the leaver (gated on sendNotificationFlag).
+    lk.unlock();
+    if (notify)
+        SendSessionInvitationEvent(shared,
+                                   QStringLiteral("np:service:session:game:remove:to:member"),
+                                   targetId, leftNpid, recipients, sessionId);
     return QHttpServerResponse{QHttpServerResponse::StatusCode::NoContent};
 }
 
@@ -1265,6 +1346,12 @@ QHttpServerResponse HandleSessionInvite(Database& db, SharedState& shared, const
     }
     qInfo() << "WebAPI: session invite" << sessionId << "from" << auth.npid << "to"
             << recipients.size() << "recipient(s)" << (haveData ? "(with data)" : "");
+    // Invitation Received event to each online recipient (not gated on sendNotificationFlag).
+    QList<int64_t> recipientIds;
+    for (const auto& r : recipients)
+        recipientIds.append(r.first);
+    SendSessionInvitationEvent(shared, QStringLiteral("np:service:invitation"), *auth.userId,
+                               auth.npid, recipientIds, QString());
     return QHttpServerResponse{QHttpServerResponse::StatusCode::NoContent};
 }
 
@@ -1625,16 +1712,50 @@ void RegisterSessionRoutes(QHttpServer& http, Database& db, SharedState& shared)
 }
 
 // Remove a user from every session they are in, applying owner-migration / owner-bind
-// teardown. Called on disconnect so an offline user automatically leaves their sessions.
+// teardown. Called on disconnect so an offline user automatically leaves their sessions
 void PurgeUserFromSessions(SharedState& shared, int64_t userId) {
-    QWriteLocker lk(&shared.sessionsLock);
+    // A Session Left event goes to the remaining members of each notifying session the user is
+    // removed from. Gathered under sessionsLock, sent afterwards under clientsLock (never nested).
+    struct LeftEvent {
+        QString sessionId;
+        QList<int64_t> recipients;
+    };
+    QList<LeftEvent> events;
+    QString leaverNpid;
     QStringList toRemove;
-    for (auto it = shared.sessions.begin(); it != shared.sessions.end(); ++it) {
-        if (RemoveMemberApplyOwner(it.value(), userId, nullptr))
-            toRemove.append(it.key());
+    {
+        QWriteLocker lk(&shared.sessionsLock);
+        for (auto it = shared.sessions.begin(); it != shared.sessions.end(); ++it) {
+            auto& sn = it.value();
+            const bool notify = sn.sendNotificationFlag;
+            if (leaverNpid.isEmpty()) {
+                for (const auto& m : sn.members)
+                    if (m.userId == userId) {
+                        leaverNpid = m.npid;
+                        break;
+                    }
+            }
+            bool removed = false;
+            const bool shouldDelete = RemoveMemberApplyOwner(sn, userId, &removed);
+            if (removed && notify) {
+                LeftEvent e;
+                e.sessionId = it.key();
+                for (const auto& m : sn.members) // members remaining after removal
+                    e.recipients.append(m.userId);
+                if (!e.recipients.isEmpty())
+                    events.append(e);
+            }
+            if (shouldDelete)
+                toRemove.append(it.key());
+        }
+        for (const QString& sid : toRemove)
+            shared.sessions.remove(sid);
     }
-    for (const QString& sid : toRemove)
-        shared.sessions.remove(sid);
+    // Notify remaining members (the disconnecting user is offline and is skipped by the send).
+    for (const auto& e : events)
+        SendSessionInvitationEvent(shared,
+                                   QStringLiteral("np:service:session:game:remove:to:member"),
+                                   userId, leaverNpid, e.recipients, e.sessionId);
     if (!toRemove.isEmpty())
         qInfo() << "Sessions: purged user" << userId << "from" << toRemove.size()
                 << "session(s) on disconnect";
