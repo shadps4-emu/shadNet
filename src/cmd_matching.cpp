@@ -138,6 +138,8 @@ static shadnet::MatchingRoomDataInternal BuildRoomDataInternal(const Room& room)
         auto* a = pb.add_bin_attrs_internal();
         a->set_attr_id(slot.attrId);
         a->set_data(slot.data.constData(), slot.data.size());
+        a->set_update_date(slot.updateDate);
+        a->set_update_member_id(slot.updateMemberId);
     }
     return pb;
 }
@@ -155,10 +157,13 @@ static shadnet::MatchingRoomMemberData BuildRoomMemberData(const RoomMember& mem
     pb.set_addr(member.addr.toStdString());
     pb.set_port(member.port);
     pb.set_group_id(member.groupId);
+    pb.set_account_id(static_cast<uint64_t>(member.userId));
+    pb.set_platform(member.platform);
     if (member.memberBinAttr.set) {
         auto* a = pb.add_bin_attrs_internal();
         a->set_attr_id(member.memberBinAttr.attrId);
         a->set_data(member.memberBinAttr.data.constData(), member.memberBinAttr.data.size());
+        a->set_update_date(member.memberBinAttr.updateDate);
     }
     return pb;
 }
@@ -360,15 +365,45 @@ ErrorType ClientSession::CmdCreateRoom(StreamExtractor& data, QByteArray& reply)
     room.signalingType = static_cast<uint8_t>(req.sig_type());
     room.signalingFlag = static_cast<uint8_t>(req.sig_flag());
     room.signalingHubMemberId = static_cast<uint16_t>(req.sig_main_member());
+    for (const auto& id : req.allowed_online_ids())
+        room.allowedUsers.append(QString::fromStdString(id));
+    for (const auto& id : req.blocked_online_ids())
+        room.blockedUsers.append(QString::fromStdString(id));
+    for (const auto id : req.allowed_account_ids())
+        room.allowedAccountIds.append(static_cast<uint64_t>(id));
+    for (const auto id : req.blocked_account_ids())
+        room.blockedAccountIds.append(static_cast<uint64_t>(id));
 
-    if (req.room_password_present())
+    if (!req.room_password().empty()) {
+        room.roomPassword =
+            QByteArray(req.room_password().data(), static_cast<int>(req.room_password().size()));
+    } else if (req.room_password_present()) {
         room.roomPassword = QByteArray(Matching2::ORBIS_NP_MATCHING2_SESSION_PASSWORD_SIZE, '\0');
+    }
+    if (req.has_passwd_slot_mask())
+        room.passwdSlotMask = req.passwd_slot_mask();
 
-    for (uint32_t g = 0; g < req.group_config_count(); ++g) {
+    const uint32_t groupCount = req.group_configs_size() > 0
+                                    ? static_cast<uint32_t>(req.group_configs_size())
+                                    : req.group_config_count();
+    const QByteArray joinGroupLabel =
+        QByteArray(req.join_group_label().data(), static_cast<int>(req.join_group_label().size()));
+    for (uint32_t g = 0; g < groupCount; ++g) {
         RoomGroup grp;
         grp.groupId = static_cast<uint8_t>(g + 1);
-        grp.withPassword = req.room_password_present();
-        grp.fixedLabel = req.join_group_label_present();
+        if (g < static_cast<uint32_t>(req.group_configs_size())) {
+            const auto& cfg = req.group_configs(static_cast<int>(g));
+            grp.slotNum = cfg.slot_count();
+            grp.withPassword = cfg.has_passwd();
+            grp.fixedLabel = cfg.has_label();
+            if (cfg.has_label())
+                grp.label = QByteArray(cfg.label().data(), static_cast<int>(cfg.label().size()));
+        } else {
+            grp.withPassword = req.room_password_present();
+            grp.fixedLabel = req.join_group_label_present();
+            if (!joinGroupLabel.isEmpty())
+                grp.label = joinGroupLabel;
+        }
         room.groups.append(grp);
     }
 
@@ -414,6 +449,19 @@ ErrorType ClientSession::CmdCreateRoom(StreamExtractor& data, QByteArray& reply)
     owner.joinDate = MatchingTimestampUsec();
     owner.teamId = static_cast<uint8_t>(req.team_id());
     owner.flagAttr = Matching2::ORBIS_NP_MATCHING2_ROOMMEMBER_FLAG_ATTR_OWNER;
+    if (!room.groups.isEmpty()) {
+        auto groupIt = room.groups.begin();
+        if (!joinGroupLabel.isEmpty()) {
+            for (auto it = room.groups.begin(); it != room.groups.end(); ++it) {
+                if (it->label && *it->label == joinGroupLabel) {
+                    groupIt = it;
+                    break;
+                }
+            }
+        }
+        owner.groupId = groupIt->groupId;
+        groupIt->numMembers++;
+    }
     if (req.member_bin_attrs_size() > 0) {
         const auto& a = req.member_bin_attrs(0);
         owner.memberBinAttr.set = true;
@@ -425,6 +473,25 @@ ErrorType ClientSession::CmdCreateRoom(StreamExtractor& data, QByteArray& reply)
     RoomMember* member = room.addMember(owner);
     uint16_t memberId = member->memberId;
     room.ownerMemberId = memberId;
+
+    for (int i = 0; i < req.internal_bin_attrs_size(); ++i) {
+        const auto& a = req.internal_bin_attrs(i);
+        const uint16_t attrId = static_cast<uint16_t>(a.attr_id());
+        int idx = -1;
+        if (attrId == Matching2::ORBIS_NP_MATCHING2_ROOM_BIN_ATTR_INTERNAL_1_ID)
+            idx = 0;
+        else if (attrId == Matching2::ORBIS_NP_MATCHING2_ROOM_BIN_ATTR_INTERNAL_2_ID)
+            idx = 1;
+        if (idx < 0)
+            continue;
+
+        auto& slot = room.internalBinAttr[idx];
+        slot.set = true;
+        slot.attrId = attrId;
+        slot.data = QByteArray(a.data().data(), static_cast<int>(a.data().size()));
+        slot.updateDate = member->joinDate;
+        slot.updateMemberId = memberId;
+    }
 
     room.publicSlots = maxSlot;
     room.openPublicSlots = static_cast<uint16_t>(maxSlot - 1);
@@ -487,12 +554,31 @@ ErrorType ClientSession::CmdJoinRoom(StreamExtractor& data, QByteArray& reply) {
             return ErrorType::RoomFull;
         if (room.findByNpid(m_info.npid))
             return ErrorType::RoomAlreadyJoined;
+        const uint64_t accountId = static_cast<uint64_t>(m_info.userId);
+        if ((!room.allowedUsers.isEmpty() && !room.allowedUsers.contains(m_info.npid)) ||
+            (!room.allowedAccountIds.isEmpty() && !room.allowedAccountIds.contains(accountId)) ||
+            room.blockedUsers.contains(m_info.npid) || room.blockedAccountIds.contains(accountId)) {
+            return ErrorType::Blocked;
+        }
 
         RoomMember joiner;
         joiner.userId = m_info.userId;
         joiner.npid = m_info.npid;
         joiner.avatarUrl = m_info.avatarUrl;
         GetSelfSignalingAddr(joiner.addr, joiner.port);
+        for (const auto& id : req.blocked_online_ids())
+            joiner.blockedUsers.append(QString::fromStdString(id));
+        for (const auto id : req.blocked_account_ids())
+            joiner.blockedAccountIds.append(static_cast<uint64_t>(id));
+        for (const auto& member : room.members) {
+            const uint64_t memberAccountId = static_cast<uint64_t>(member.userId);
+            if (joiner.blockedUsers.contains(member.npid) ||
+                joiner.blockedAccountIds.contains(memberAccountId) ||
+                member.blockedUsers.contains(m_info.npid) ||
+                member.blockedAccountIds.contains(accountId)) {
+                return ErrorType::Blocked;
+            }
+        }
         joiner.joinDate = MatchingTimestampUsec();
         joiner.teamId = static_cast<uint8_t>(req.team_id());
         if (req.member_bin_attrs_size() > 0) {
@@ -551,40 +637,6 @@ ErrorType ClientSession::CmdJoinRoom(StreamExtractor& data, QByteArray& reply) {
                             m_info.npid);
         qDebug() << "  -> MemberJoined room=" << roomId << "mid=" << myMemberId
                  << "to existing members";
-    }
-
-    // Send current room bin attrs to joining client (0x1106 to self)
-    {
-        QVector<InternalBinAttrSlot> binSnapshot;
-        uint32_t roomFlags = 0;
-        {
-            QReadLocker lk(&m_shared->matching.roomsLock);
-            auto roomIt = m_shared->matching.rooms.find({m_matching.matchingKey, roomId});
-            if (roomIt != m_shared->matching.rooms.end()) {
-                for (const auto& slot : roomIt->internalBinAttr)
-                    if (slot.set)
-                        binSnapshot.append(slot);
-                roomFlags = roomIt->flagAttr;
-            }
-        }
-        if (!binSnapshot.isEmpty()) {
-            shadnet::NotifyRoomEvent pb;
-            pb.set_ctx_id(m_matching.ctxId);
-            pb.set_room_id(roomId);
-            pb.set_event(Matching2::ORBIS_NP_MATCHING2_ROOM_EVENT_UPDATED_ROOM_DATA_INTERNAL);
-            pb.set_event_cause(Matching2::ORBIS_NP_MATCHING2_EVENT_CAUSE_SERVER_OPERATION);
-            pb.set_flags(roomFlags);
-            for (const auto& slot : binSnapshot) {
-                auto* ba = pb.add_bin_attrs();
-                ba->set_attr_id(slot.attrId);
-                ba->set_data(slot.data.constData(), slot.data.size());
-            }
-            QByteArray payload;
-            appendProto(payload, pb);
-            SendSelfNotification(NotificationType::RoomEvent, payload);
-            qDebug() << "  -> UpdatedRoomDataInternal room=" << roomId << "to joiner" << m_info.npid
-                     << "attrs=" << binSnapshot.size();
-        }
     }
 
     return ErrorType::NoError;
@@ -951,6 +1003,7 @@ ErrorType ClientSession::CmdSetRoomDataInternal(StreamExtractor& data, QByteArra
     uint64_t passwdSlotMask = req.passwd_slot_mask();
 
     uint32_t newFlags = 0;
+    QVector<InternalBinAttrSlot> updatedSlots;
     {
         QWriteLocker lk(&m_shared->matching.roomsLock);
         auto roomIt = m_shared->matching.rooms.find({m_matching.matchingKey, roomId});
@@ -985,6 +1038,7 @@ ErrorType ClientSession::CmdSetRoomDataInternal(StreamExtractor& data, QByteArra
             slot.data = QByteArray(a.data().data(), static_cast<int>(a.data().size()));
             slot.updateDate = now;
             slot.updateMemberId = setterId;
+            updatedSlots.append(slot);
         }
 
         qInfo() << "SetRoomDataInternal: room=" << roomId << "flags=" << Qt::hex << newFlags
@@ -999,18 +1053,23 @@ ErrorType ClientSession::CmdSetRoomDataInternal(StreamExtractor& data, QByteArra
         pb.set_event(Matching2::ORBIS_NP_MATCHING2_ROOM_EVENT_UPDATED_ROOM_DATA_INTERNAL);
         pb.set_event_cause(Matching2::ORBIS_NP_MATCHING2_EVENT_CAUSE_SERVER_OPERATION);
         pb.set_flags(newFlags);
-        for (int i = 0; i < req.bin_attrs_size(); ++i) {
-            const auto& a = req.bin_attrs(i);
+        if (hasPasswdMask) {
+            pb.set_has_passwd_mask(true);
+            pb.set_passwd_slot_mask(passwdSlotMask);
+        }
+        for (const auto& slot : updatedSlots) {
             auto* ba = pb.add_bin_attrs();
-            ba->set_attr_id(a.attr_id());
-            ba->set_data(a.data());
+            ba->set_attr_id(slot.attrId);
+            ba->set_data(slot.data.constData(), slot.data.size());
+            ba->set_update_date(slot.updateDate);
+            ba->set_update_member_id(slot.updateMemberId);
         }
         QByteArray notifPayload;
         appendProto(notifPayload, pb);
         NotifyRoomMembers(NotificationType::RoomEvent, notifPayload, m_matching.matchingKey, roomId,
                           m_info.npid);
         qDebug() << "  -> UpdatedRoomDataInternal room=" << roomId << "broadcast (excl. sender)"
-                 << "attrs=" << req.bin_attrs_size();
+                 << "attrs=" << updatedSlots.size();
     }
 
     shadnet::SetRoomDataInternalReply rep;
