@@ -106,6 +106,13 @@ struct MatchingRoomGroup {
     uint32_t numMembers = 0;
 };
 
+struct MatchingRoomGroupConfig {
+    uint32_t slotCount = 0;
+    bool hasLabel = false;
+    std::vector<uint8_t> label;
+    bool hasPassword = false;
+};
+
 struct MatchingRoomMemberData {
     std::string npid;
     uint32_t memberId = 0;
@@ -304,6 +311,17 @@ struct CreateRoomParams {
     uint32_t allowedUserCount = 0;
     uint32_t blockedUserCount = 0;
     uint32_t internalBinAttrCount = 0;
+    uint32_t userIdKind = 0;
+    std::vector<std::string> allowedOnlineIds;
+    std::vector<std::string> blockedOnlineIds;
+    std::vector<uint64_t> allowedAccountIds;
+    std::vector<uint64_t> blockedAccountIds;
+    std::vector<uint8_t> roomPassword;
+    bool hasPasswdSlotMask = false;
+    uint64_t passwdSlotMask = 0;
+    std::vector<MatchingRoomGroupConfig> groupConfigs;
+    std::vector<uint8_t> joinGroupLabel;
+    std::vector<MatchingBinAttr> internalBinAttrs;
     std::vector<MatchingIntAttr> externalSearchIntAttrs;
     std::vector<MatchingBinAttr> externalSearchBinAttrs;
     std::vector<MatchingBinAttr> externalBinAttrs;
@@ -321,6 +339,9 @@ struct JoinRoomParams {
     uint32_t teamId = 0;
     uint32_t joinFlags = 0;
     uint32_t blockedUserCount = 0;
+    uint32_t userIdKind = 0;
+    std::vector<std::string> blockedOnlineIds;
+    std::vector<uint64_t> blockedAccountIds;
     std::vector<MatchingBinAttr> memberBinAttrs;
     bool roomPasswordPresent = false;
     bool joinGroupLabelPresent = false;

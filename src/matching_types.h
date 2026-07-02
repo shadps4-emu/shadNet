@@ -57,6 +57,9 @@ struct RoomMember {
     QString avatarUrl;
     QString addr;
     uint16_t port = 0;
+    uint32_t platform = 3;
+    QVector<QString> blockedUsers;
+    QVector<uint64_t> blockedAccountIds;
     uint64_t joinDate = 0;
     uint32_t flagAttr = 0;
     uint8_t teamId = 0;
@@ -97,6 +100,8 @@ struct Room {
     std::optional<QByteArray> roomPassword;
     QVector<QString> allowedUsers;
     QVector<QString> blockedUsers;
+    QVector<uint64_t> allowedAccountIds;
+    QVector<uint64_t> blockedAccountIds;
 
     uint16_t ownerMemberId = 0;
     QVector<uint16_t> ownerSuccession;

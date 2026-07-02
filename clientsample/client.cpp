@@ -242,6 +242,35 @@ void ShadNetClient::createRoom(const CreateRoomParams& p) {
     req.set_allowed_user_count(p.allowedUserCount);
     req.set_blocked_user_count(p.blockedUserCount);
     req.set_internal_bin_attr_count(p.internalBinAttrCount);
+    req.set_user_id_kind(static_cast<shadnet::MatchingUserIdKind>(p.userIdKind));
+    for (const auto& id : p.allowedOnlineIds)
+        req.add_allowed_online_ids(id);
+    for (const auto& id : p.blockedOnlineIds)
+        req.add_blocked_online_ids(id);
+    for (const auto id : p.allowedAccountIds)
+        req.add_allowed_account_ids(id);
+    for (const auto id : p.blockedAccountIds)
+        req.add_blocked_account_ids(id);
+    if (!p.roomPassword.empty())
+        req.set_room_password(p.roomPassword.data(), p.roomPassword.size());
+    req.set_has_passwd_slot_mask(p.hasPasswdSlotMask);
+    if (p.hasPasswdSlotMask)
+        req.set_passwd_slot_mask(p.passwdSlotMask);
+    for (const auto& g : p.groupConfigs) {
+        auto* out = req.add_group_configs();
+        out->set_slot_count(g.slotCount);
+        out->set_has_label(g.hasLabel);
+        if (!g.label.empty())
+            out->set_label(g.label.data(), g.label.size());
+        out->set_has_passwd(g.hasPassword);
+    }
+    if (!p.joinGroupLabel.empty())
+        req.set_join_group_label(p.joinGroupLabel.data(), p.joinGroupLabel.size());
+    for (const auto& a : p.internalBinAttrs) {
+        auto* ba = req.add_internal_bin_attrs();
+        ba->set_attr_id(a.attrId);
+        ba->set_data(a.data.data(), a.data.size());
+    }
     for (const auto& a : p.externalSearchIntAttrs) {
         auto* ia = req.add_external_search_int_attrs();
         ia->set_attr_id(a.attrId);
@@ -277,6 +306,11 @@ void ShadNetClient::joinRoom(const JoinRoomParams& p) {
     req.set_team_id(p.teamId);
     req.set_join_flags(p.joinFlags);
     req.set_blocked_user_count(p.blockedUserCount);
+    req.set_user_id_kind(static_cast<shadnet::MatchingUserIdKind>(p.userIdKind));
+    for (const auto& id : p.blockedOnlineIds)
+        req.add_blocked_online_ids(id);
+    for (const auto id : p.blockedAccountIds)
+        req.add_blocked_account_ids(id);
     for (const auto& a : p.memberBinAttrs) {
         auto* ba = req.add_member_bin_attrs();
         ba->set_attr_id(a.attrId);
