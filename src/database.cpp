@@ -80,6 +80,7 @@ bool Database::Open(const QString& path) {
     }
     Exec("PRAGMA journal_mode=WAL");
     Exec("PRAGMA foreign_keys=ON");
+    Exec("PRAGMA busy_timeout=5000");
     return Migrate();
 }
 

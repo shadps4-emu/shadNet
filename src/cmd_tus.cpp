@@ -11,7 +11,8 @@
 #include "shadnet.pb.h"
 #include "tus_db.h"
 
-// Wrap this session's DB connection for TUS operations.
+static constexpr uint32_t TusMaxSelectedFriends = 100;
+
 static TusDb tusDb(Database* db) {
     return TusDb(db->Conn());
 }
@@ -643,12 +644,16 @@ ErrorType ClientSession::CmdTusGetFriendsDataStatus(StreamExtractor& data, QByte
     // 1 = descending date, 2 = ascending date.
     const bool ascending = req.sorttype() == 2;
     std::sort(rows.begin(), rows.end(), [ascending](const FriendStatus& a, const FriendStatus& b) {
-        return ascending ? a.row.lastChanged < b.row.lastChanged
-                         : a.row.lastChanged > b.row.lastChanged;
+        if (a.row.lastChanged != b.row.lastChanged) {
+            return ascending ? a.row.lastChanged < b.row.lastChanged
+                             : a.row.lastChanged > b.row.lastChanged;
+        }
+        return a.row.ownerUserId < b.row.ownerUserId;
     });
 
-    const uint32_t cap = req.max();
-    if (cap > 0 && rows.size() > cap) {
+    const uint32_t cap =
+        req.max() > 0 ? std::min(req.max(), TusMaxSelectedFriends) : TusMaxSelectedFriends;
+    if (rows.size() > cap) {
         rows.resize(cap);
     }
 
@@ -700,19 +705,29 @@ ErrorType ClientSession::CmdTusGetFriendsVariable(StreamExtractor& data, QByteAr
     std::sort(rows.begin(), rows.end(), [st](const FriendVar& a, const FriendVar& b) {
         switch (st) {
         case 2:
-            return a.row.lastChanged < b.row.lastChanged;
+            if (a.row.lastChanged != b.row.lastChanged)
+                return a.row.lastChanged < b.row.lastChanged;
+            break;
         case 3:
-            return a.row.variable > b.row.variable;
+            if (a.row.variable != b.row.variable)
+                return a.row.variable > b.row.variable;
+            break;
         case 4:
-            return a.row.variable < b.row.variable;
+            if (a.row.variable != b.row.variable)
+                return a.row.variable < b.row.variable;
+            break;
         case 1:
         default:
-            return a.row.lastChanged > b.row.lastChanged;
+            if (a.row.lastChanged != b.row.lastChanged)
+                return a.row.lastChanged > b.row.lastChanged;
+            break;
         }
+        return a.row.ownerUserId < b.row.ownerUserId;
     });
 
-    const uint32_t cap = req.max();
-    if (cap > 0 && rows.size() > cap) {
+    const uint32_t cap =
+        req.max() > 0 ? std::min(req.max(), TusMaxSelectedFriends) : TusMaxSelectedFriends;
+    if (rows.size() > cap) {
         rows.resize(cap);
     }
 

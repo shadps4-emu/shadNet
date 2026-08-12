@@ -39,10 +39,15 @@ bool TusDb::SetVUserVariable(const QString& comId, const QString& virtualUser, i
     return q.exec();
 }
 
+static bool beginWriteTxn(QSqlDatabase& db) {
+    QSqlQuery q(db);
+    return q.exec(QStringLiteral("BEGIN IMMEDIATE"));
+}
+
 std::optional<TusVariableRow> TusDb::AddAndGetVariable(const QString& comId, int64_t owner,
                                                        int32_t slot, int64_t delta,
                                                        int64_t authorId, uint64_t now) {
-    m_db.transaction();
+    beginWriteTxn(m_db);
 
     QSqlQuery sel(m_db);
     sel.prepare("SELECT variable FROM tus_variable WHERE communication_id=? AND owner_user_id=? "
@@ -97,7 +102,7 @@ std::optional<TusVariableRow> TusDb::AddAndGetVariableEx(const QString& comId, i
         vuser ? QStringLiteral("tus_vuser_variable") : QStringLiteral("tus_variable");
     const QString keyCol = vuser ? QStringLiteral("virtual_user") : QStringLiteral("owner_user_id");
 
-    m_db.transaction();
+    beginWriteTxn(m_db);
 
     QSqlQuery sel(m_db);
     sel.prepare(QStringLiteral("SELECT variable,last_changed,last_changed_author_id FROM %1 "
@@ -179,7 +184,7 @@ std::optional<TusVariableRow> TusDb::TryAndSetVariableEx(const QString& comId, i
         vuser ? QStringLiteral("tus_vuser_variable") : QStringLiteral("tus_variable");
     const QString keyCol = vuser ? QStringLiteral("virtual_user") : QStringLiteral("owner_user_id");
 
-    m_db.transaction();
+    beginWriteTxn(m_db);
 
     QSqlQuery sel(m_db);
     sel.prepare(QStringLiteral("SELECT variable,last_changed,last_changed_author_id FROM %1 "
