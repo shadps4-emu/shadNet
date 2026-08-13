@@ -85,6 +85,10 @@ set(SOURCES
     # Read-only stats HTTP/JSON listener
     src/stats_server.h
     src/stats_server.cpp
+    # TUS
+    src/cmd_tus.cpp
+    src/tus_db.cpp
+    src/tus_db.h
 )
 
 add_executable(shadnet ${SOURCES})

@@ -80,6 +80,7 @@ bool Database::Open(const QString& path) {
     }
     Exec("PRAGMA journal_mode=WAL");
     Exec("PRAGMA foreign_keys=ON");
+    Exec("PRAGMA busy_timeout=5000");
     return Migrate();
 }
 
@@ -166,6 +167,50 @@ bool Database::Migrate() {
         "  data_id          INTEGER,"
         "  timestamp        INTEGER NOT NULL,"
         "  PRIMARY KEY(communication_id, board_id, user_id, character_id))",
+
+        // TUS variable rows: one per (comId, owner, slot).
+        "CREATE TABLE IF NOT EXISTS tus_variable("
+        "  communication_id       TEXT    NOT NULL,"
+        "  owner_user_id          INTEGER NOT NULL,"
+        "  slot_id                INTEGER NOT NULL,"
+        "  variable               INTEGER NOT NULL DEFAULT 0,"
+        "  last_changed           INTEGER NOT NULL,"
+        "  last_changed_author_id INTEGER NOT NULL,"
+        "  PRIMARY KEY(communication_id, owner_user_id, slot_id))",
+
+        // TUS data slots: payload + small info blob, one per (comId, owner, slot).
+        "CREATE TABLE IF NOT EXISTS tus_data("
+        "  communication_id       TEXT    NOT NULL,"
+        "  owner_user_id          INTEGER NOT NULL,"
+        "  slot_id                INTEGER NOT NULL,"
+        "  data                   BLOB,"
+        "  info                   BLOB,"
+        "  data_size              INTEGER NOT NULL DEFAULT 0,"
+        "  last_changed           INTEGER NOT NULL,"
+        "  last_changed_author_id INTEGER NOT NULL,"
+        "  PRIMARY KEY(communication_id, owner_user_id, slot_id))",
+
+        // TUS variables owned by a virtual user
+        "CREATE TABLE IF NOT EXISTS tus_vuser_variable("
+        "  communication_id       TEXT    NOT NULL,"
+        "  virtual_user           TEXT    NOT NULL,"
+        "  slot_id                INTEGER NOT NULL,"
+        "  variable               INTEGER NOT NULL DEFAULT 0,"
+        "  last_changed           INTEGER NOT NULL,"
+        "  last_changed_author_id INTEGER NOT NULL,"
+        "  PRIMARY KEY(communication_id, virtual_user, slot_id))",
+
+        // TUS data owned by a virtual user
+        "CREATE TABLE IF NOT EXISTS tus_vuser_data("
+        "  communication_id       TEXT    NOT NULL,"
+        "  virtual_user           TEXT    NOT NULL,"
+        "  slot_id                INTEGER NOT NULL,"
+        "  data                   BLOB,"
+        "  info                   BLOB,"
+        "  data_size              INTEGER NOT NULL DEFAULT 0,"
+        "  last_changed           INTEGER NOT NULL,"
+        "  last_changed_author_id INTEGER NOT NULL,"
+        "  PRIMARY KEY(communication_id, virtual_user, slot_id))",
     };
 
     for (const QString& s : stmts1)

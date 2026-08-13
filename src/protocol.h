@@ -62,6 +62,20 @@ enum class CommandType : uint16_t {
     GetUserInfoList = 113,
     GetRoomMemberDataExternalList = 114,
     SendRoomMessage = 115,
+    // TUS
+    TusSetData = 201,
+    TusGetData = 202,
+    TusSetMultiSlotVariable = 203,
+    TusGetMultiSlotVariable = 204,
+    TusAddAndGetVariable = 205,
+    TusGetMultiSlotDataStatus = 206,
+    TusGetMultiUserDataStatus = 207,
+    TusGetFriendsDataStatus = 208,
+    TusDeleteMultiSlotData = 209,
+    TusGetMultiUserVariable = 210,
+    TusTryAndSetVariable = 211,
+    TusGetFriendsVariable = 212,
+    TusDeleteMultiSlotVariable = 213,
 };
 
 // Notification type IDs (u16 LE in Notification packet header).

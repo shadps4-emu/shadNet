@@ -229,6 +229,21 @@ public:
     ErrorType CmdKickoutRoomMember(StreamExtractor& data, QByteArray& reply);
     ErrorType CmdGetWorldInfoList(StreamExtractor& data, QByteArray& reply);
 
+    // Title User Storage (TUS)
+    ErrorType CmdTusSetData(StreamExtractor& data);
+    ErrorType CmdTusGetData(StreamExtractor& data, QByteArray& reply);
+    ErrorType CmdTusSetMultiSlotVariable(StreamExtractor& data);
+    ErrorType CmdTusGetMultiSlotVariable(StreamExtractor& data, QByteArray& reply);
+    ErrorType CmdTusAddAndGetVariable(StreamExtractor& data, QByteArray& reply);
+    ErrorType CmdTusGetMultiSlotDataStatus(StreamExtractor& data, QByteArray& reply);
+    ErrorType CmdTusGetMultiUserDataStatus(StreamExtractor& data, QByteArray& reply);
+    ErrorType CmdTusGetFriendsDataStatus(StreamExtractor& data, QByteArray& reply);
+    ErrorType CmdTusGetFriendsVariable(StreamExtractor& data, QByteArray& reply);
+    ErrorType CmdTusDeleteMultiSlotVariable(StreamExtractor& data);
+    ErrorType CmdTusDeleteMultiSlotData(StreamExtractor& data);
+    ErrorType CmdTusGetMultiUserVariable(StreamExtractor& data, QByteArray& reply);
+    ErrorType CmdTusTryAndSetVariable(StreamExtractor& data, QByteArray& reply);
+
 signals:
     void Disconnected();
 

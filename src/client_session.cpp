@@ -242,6 +242,33 @@ ErrorType ClientSession::DispatchCommand(CommandType cmd, StreamExtractor& se, Q
         return CmdGetScoreGameDataByAccId(se, reply);
     case CommandType::GetToken:
         return CmdGetToken(reply);
+        // Title User Storage (TUS)
+    case CommandType::TusSetData:
+        return CmdTusSetData(se);
+    case CommandType::TusGetData:
+        return CmdTusGetData(se, reply);
+    case CommandType::TusSetMultiSlotVariable:
+        return CmdTusSetMultiSlotVariable(se);
+    case CommandType::TusGetMultiSlotVariable:
+        return CmdTusGetMultiSlotVariable(se, reply);
+    case CommandType::TusAddAndGetVariable:
+        return CmdTusAddAndGetVariable(se, reply);
+    case CommandType::TusGetMultiSlotDataStatus:
+        return CmdTusGetMultiSlotDataStatus(se, reply);
+    case CommandType::TusGetMultiUserDataStatus:
+        return CmdTusGetMultiUserDataStatus(se, reply);
+    case CommandType::TusGetFriendsDataStatus:
+        return CmdTusGetFriendsDataStatus(se, reply);
+    case CommandType::TusDeleteMultiSlotData:
+        return CmdTusDeleteMultiSlotData(se);
+    case CommandType::TusGetMultiUserVariable:
+        return CmdTusGetMultiUserVariable(se, reply);
+    case CommandType::TusTryAndSetVariable:
+        return CmdTusTryAndSetVariable(se, reply);
+    case CommandType::TusGetFriendsVariable:
+        return CmdTusGetFriendsVariable(se, reply);
+    case CommandType::TusDeleteMultiSlotVariable:
+        return CmdTusDeleteMultiSlotVariable(se);
     default:
         qWarning() << "Unknown command" << static_cast<uint16_t>(cmd);
         return ErrorType::Invalid;
