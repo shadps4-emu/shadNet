@@ -11,6 +11,7 @@
 #include <QJsonObject>
 #include <webapi_routes_users.h>
 #include "webapi_auth.h"
+#include "webapi_routes_identity.h"
 #include "webapi_routes_presence.h"
 #include "webapi_routes_profile.h"
 #include "webapi_routes_session.h"
@@ -65,6 +66,7 @@ void WebApiServer::RegisterRoutes() {
     WebApiRoutes::RegisterProfileRoutes(*m_http, *m_db, *m_shared);
     WebApiRoutes::RegisterPresenceRoutes(*m_http, *m_db, *m_shared);
     WebApiRoutes::RegisterSessionRoutes(*m_http, *m_db, *m_shared);
+    WebApiRoutes::RegisterIdentityRoutes(*m_http, *m_db);
 
     m_http->setMissingHandler(
         this, [](const QHttpServerRequest& req, QHttpServerResponder& responder) {
