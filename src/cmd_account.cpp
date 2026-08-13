@@ -169,6 +169,10 @@ ErrorType ClientSession::CmdLogin(StreamExtractor& data, QByteArray& reply) {
         }
         m_shared->clients[user.userId] = std::move(entry);
         m_shared->npidToUserId[npid] = user.userId;
+        // Outlives the session entry above so the WebAPI can still name the title.
+        const QString loginTitleId = QString::fromStdString(req.title_id());
+        if (!loginTitleId.isEmpty())
+            m_shared->lastLoginTitleId[user.userId] = loginTitleId;
     }
 
     // Count this authenticated session in live usage stats

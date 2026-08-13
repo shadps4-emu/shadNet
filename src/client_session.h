@@ -55,6 +55,8 @@ struct SharedState {
     };
     QHash<int64_t, ClientEntry> clients;
     QHash<QString, int64_t> npidToUserId; // reverse lookup, protected by clientsLock
+    // Title context reported at login (cmd_account).
+    QHash<int64_t, QString> lastLoginTitleId;
 
     // Matchmaking shared state
     MatchingSharedState matching;

@@ -601,6 +601,48 @@ void RegisterUserRoutes(QHttpServer& http, Database& db, SharedState& shared) {
                    qInfo() << "WebAPI: blocks for" << auth.npid << "-> total" << blocked.size();
                    return JsonOk(body);
                });
+
+    // GET /v1/users/me/verifiedAccountsByTitle?fields=&limit=&avatarSizes=&profilePictureSizes=
+    http.route("/v1/users/<arg>/verifiedAccountsByTitle",
+               [&db, &shared](const QString& userKey,
+                              const QHttpServerRequest& req) -> QHttpServerResponse {
+                   static const QSet<QString> kKnown = {
+                       QStringLiteral("fields"),
+                       QStringLiteral("limit"),
+                       QStringLiteral("avatarSizes"),
+                       QStringLiteral("profilePictureSizes"),
+                   };
+                   LogUnsupportedQueryParams(req, kKnown);
+
+                   auto auth = WebApiAuth::Authenticate(req, db);
+                   if (!auth.userId.has_value()) {
+                       return std::move(auth.errorResponse);
+                   }
+                   if (!IsSelf(userKey, auth)) {
+                       return JsonError(QHttpServerResponse::StatusCode::Forbidden,
+                                        UP_ACCESS_DENIED_OWNERSHIP,
+                                        QStringLiteral("Access denied by resource ownership"));
+                   }
+                   QString npTitleId;
+                   {
+                       QReadLocker lk(&shared.clientsLock);
+                       auto it = shared.clients.constFind(*auth.userId);
+                       if (it != shared.clients.constEnd()) {
+                           npTitleId = it->npTitleId;
+                       }
+                       if (npTitleId.isEmpty()) {
+                           npTitleId = shared.lastLoginTitleId.value(*auth.userId);
+                       }
+                   }
+                   // dummy return for now TODO
+                   QJsonObject body;
+                   body.insert(QStringLiteral("titleId"), npTitleId);
+                   body.insert(QStringLiteral("totalResults"), 0);
+                   body.insert(QStringLiteral("verifiedUsers"), QJsonArray());
+                   qInfo() << "WebAPI: verifiedAccountsByTitle for" << auth.npid << "title"
+                           << npTitleId << "-> 0 verified accounts";
+                   return JsonOk(body);
+               });
 }
 
 } // namespace WebApiRoutes
