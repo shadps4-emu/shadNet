@@ -12,6 +12,8 @@
 #include "tus_db.h"
 
 static constexpr uint32_t TusMaxSelectedFriends = 100;
+static constexpr int TusMaxSlotsPerRequest = 64;
+static constexpr int TusMaxUsersPerRequest = 101;
 
 static TusDb tusDb(Database* db) {
     return TusDb(db->Conn());
@@ -216,6 +218,10 @@ ErrorType ClientSession::CmdTusSetMultiSlotVariable(StreamExtractor& data) {
     if (!decodeProto(req, data) || data.error()) {
         return ErrorType::Malformed;
     }
+    if (req.slotids_size() > TusMaxSlotsPerRequest) {
+        qWarning() << "CmdTusSetMultiSlotVariable: slots exceeds cap" << req.slotids_size();
+        return ErrorType::Invalid;
+    }
     if (req.slotids_size() != req.values_size()) {
         return ErrorType::Malformed;
     }
@@ -224,11 +230,18 @@ ErrorType ClientSession::CmdTusSetMultiSlotVariable(StreamExtractor& data) {
     // Targeting precedence: virtualUser (tus_vuser_variable) > ownerAccountId > ownerNpId/self.
     if (!req.virtualuser().empty()) {
         const QString vuser = QString::fromStdString(req.virtualuser());
+        auto txn = tdb.BeginWrite();
+        if (!txn.Ok()) {
+            return ErrorType::DbFail;
+        }
         for (int i = 0; i < req.slotids_size(); ++i) {
             if (!tdb.SetVUserVariable(tusComId(comId), vuser, req.slotids(i), req.values(i),
                                       m_info.userId, now)) {
                 return ErrorType::DbFail;
             }
+        }
+        if (!txn.Commit()) {
+            return ErrorType::DbFail;
         }
         return ErrorType::NoError;
     }
@@ -246,11 +259,18 @@ ErrorType ClientSession::CmdTusSetMultiSlotVariable(StreamExtractor& data) {
         }
         owner = *resolved;
     }
+    auto txn = tdb.BeginWrite();
+    if (!txn.Ok()) {
+        return ErrorType::DbFail;
+    }
     for (int i = 0; i < req.slotids_size(); ++i) {
         if (!tdb.SetVariable(tusComId(comId), owner, req.slotids(i), req.values(i), m_info.userId,
                              now)) {
             return ErrorType::DbFail;
         }
+    }
+    if (!txn.Commit()) {
+        return ErrorType::DbFail;
     }
     return ErrorType::NoError;
 }
@@ -262,6 +282,10 @@ ErrorType ClientSession::CmdTusGetMultiSlotVariable(StreamExtractor& data, QByte
     shadnet::TusGetMultiSlotVariableRequest req;
     if (!decodeProto(req, data) || data.error()) {
         return ErrorType::Malformed;
+    }
+    if (req.slotids_size() > TusMaxSlotsPerRequest) {
+        qWarning() << "CmdTusGetMultiSlotVariable: slots exceeds cap" << req.slotids_size();
+        return ErrorType::Invalid;
     }
     auto tdb = tusDb(m_db.get());
 
@@ -380,6 +404,12 @@ ErrorType ClientSession::CmdTusGetMultiUserVariable(StreamExtractor& data, QByte
     if (!decodeProto(req, data) || data.error()) {
         return ErrorType::Malformed;
     }
+    if (req.virtualusers_size() > TusMaxUsersPerRequest ||
+        req.ownernpids_size() > TusMaxUsersPerRequest ||
+        req.owneraccountids_size() > TusMaxUsersPerRequest) {
+        qWarning() << "CmdTusGetMultiUserVariable: users exceeds cap";
+        return ErrorType::Invalid;
+    }
     auto tdb = tusDb(m_db.get());
     const QString cid = tusComId(comId);
     const QVector<int32_t> slot{req.slotid()};
@@ -493,6 +523,10 @@ ErrorType ClientSession::CmdTusGetMultiSlotDataStatus(StreamExtractor& data, QBy
     if (!decodeProto(req, data) || data.error()) {
         return ErrorType::Malformed;
     }
+    if (req.slotids_size() > TusMaxSlotsPerRequest) {
+        qWarning() << "CmdTusGetMultiSlotDataStatus: slots exceeds cap" << req.slotids_size();
+        return ErrorType::Invalid;
+    }
     auto tdb = tusDb(m_db.get());
     // Targeting precedence: virtualUser (tus_vuser_data) > ownerAccountId > ownerNpId/self.
     if (!req.virtualuser().empty()) {
@@ -548,6 +582,12 @@ ErrorType ClientSession::CmdTusGetMultiUserDataStatus(StreamExtractor& data, QBy
     shadnet::TusGetMultiUserDataStatusRequest req;
     if (!decodeProto(req, data) || data.error()) {
         return ErrorType::Malformed;
+    }
+    if (req.virtualusers_size() > TusMaxUsersPerRequest ||
+        req.ownernpids_size() > TusMaxUsersPerRequest ||
+        req.owneraccountids_size() > TusMaxUsersPerRequest) {
+        qWarning() << "CmdTusGetMultiUserDataStatus: users exceeds cap";
+        return ErrorType::Invalid;
     }
     auto tdb = tusDb(m_db.get());
     const QString cid = tusComId(comId);
@@ -651,6 +691,18 @@ ErrorType ClientSession::CmdTusGetFriendsDataStatus(StreamExtractor& data, QByte
         return a.row.ownerUserId < b.row.ownerUserId;
     });
 
+    // hits: total friends with a value registered in this slot, BEFORE the
+    // start offset and cap are applied (OrbisNpTusGetFriendsVariableOptParam::hits).
+    const uint32_t hits = static_cast<uint32_t>(rows.size());
+
+    // startOffset lets a title page past the first 100 ranked friends.
+    const uint32_t start = req.startoffset();
+    if (start >= rows.size()) {
+        rows.clear();
+    } else if (start > 0) {
+        rows.erase(rows.begin(), rows.begin() + start);
+    }
+
     const uint32_t cap =
         req.max() > 0 ? std::min(req.max(), TusMaxSelectedFriends) : TusMaxSelectedFriends;
     if (rows.size() > cap) {
@@ -658,6 +710,7 @@ ErrorType ClientSession::CmdTusGetFriendsDataStatus(StreamExtractor& data, QByte
     }
 
     shadnet::TusDataStatusResponse resp;
+    resp.set_total(hits);
     for (const auto& fs : rows) {
         fillDataStatus(tdb, resp.add_statuses(), fs.row, fs.npid);
     }
@@ -725,6 +778,18 @@ ErrorType ClientSession::CmdTusGetFriendsVariable(StreamExtractor& data, QByteAr
         return a.row.ownerUserId < b.row.ownerUserId;
     });
 
+    // hits: total friends with a value registered in this slot, BEFORE the
+    // start offset and cap are applied (OrbisNpTusGetFriendsVariableOptParam::hits).
+    const uint32_t hits = static_cast<uint32_t>(rows.size());
+
+    // startOffset lets a title page past the first 100 ranked friends.
+    const uint32_t start = req.startoffset();
+    if (start >= rows.size()) {
+        rows.clear();
+    } else if (start > 0) {
+        rows.erase(rows.begin(), rows.begin() + start);
+    }
+
     const uint32_t cap =
         req.max() > 0 ? std::min(req.max(), TusMaxSelectedFriends) : TusMaxSelectedFriends;
     if (rows.size() > cap) {
@@ -732,6 +797,7 @@ ErrorType ClientSession::CmdTusGetFriendsVariable(StreamExtractor& data, QByteAr
     }
 
     shadnet::TusVariableResponse resp;
+    resp.set_total(hits);
     for (const auto& fv : rows) {
         fillVariable(tdb, resp.add_variables(), fv.row, fv.npid);
     }
@@ -746,6 +812,10 @@ ErrorType ClientSession::CmdTusDeleteMultiSlotData(StreamExtractor& data) {
     shadnet::TusDeleteMultiSlotDataRequest req;
     if (!decodeProto(req, data) || data.error()) {
         return ErrorType::Malformed;
+    }
+    if (req.slotids_size() > TusMaxSlotsPerRequest) {
+        qWarning() << "CmdTusDeleteMultiSlotData: slots exceeds cap" << req.slotids_size();
+        return ErrorType::Invalid;
     }
     auto tdb = tusDb(m_db.get());
     QVector<int32_t> _slots;
@@ -786,6 +856,10 @@ ErrorType ClientSession::CmdTusDeleteMultiSlotVariable(StreamExtractor& data) {
     shadnet::TusDeleteMultiSlotVariableRequest req;
     if (!decodeProto(req, data) || data.error()) {
         return ErrorType::Malformed;
+    }
+    if (req.slotids_size() > TusMaxSlotsPerRequest) {
+        qWarning() << "CmdTusDeleteMultiSlotVariable: slots exceeds cap" << req.slotids_size();
+        return ErrorType::Invalid;
     }
     auto tdb = tusDb(m_db.get());
     QVector<int32_t> _slots;

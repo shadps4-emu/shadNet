@@ -37,6 +37,27 @@ class TusDb {
 public:
     explicit TusDb(const QSqlDatabase& db) : m_db(db) {}
 
+    // Scoped all-or-nothing write for multi-slot operations.
+    class WriteTxn {
+    public:
+        explicit WriteTxn(QSqlDatabase db);
+        ~WriteTxn();
+        WriteTxn(const WriteTxn&) = delete;
+        WriteTxn& operator=(const WriteTxn&) = delete;
+        bool Ok() const {
+            return m_active;
+        }
+        bool Commit();
+
+    private:
+        QSqlDatabase m_db;
+        bool m_active = false;
+        bool m_done = false;
+    };
+    WriteTxn BeginWrite() {
+        return WriteTxn(m_db);
+    }
+
     // Writes (always target the caller; the dispatcher enforces owner == self).
     bool SetData(const QString& comId, int64_t owner, int32_t slot, const QByteArray& data,
                  const QByteArray& info, int64_t authorId, uint64_t now);

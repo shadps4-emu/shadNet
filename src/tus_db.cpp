@@ -39,9 +39,29 @@ bool TusDb::SetVUserVariable(const QString& comId, const QString& virtualUser, i
     return q.exec();
 }
 
+// Read-modify-write transactions (AddAndGet / TryAndSet) must take the write
+// lock up front.
 static bool beginWriteTxn(QSqlDatabase& db) {
     QSqlQuery q(db);
     return q.exec(QStringLiteral("BEGIN IMMEDIATE"));
+}
+
+TusDb::WriteTxn::WriteTxn(QSqlDatabase db) : m_db(db) {
+    m_active = beginWriteTxn(m_db);
+}
+
+bool TusDb::WriteTxn::Commit() {
+    if (!m_active || m_done) {
+        return false;
+    }
+    m_done = true;
+    return m_db.commit();
+}
+
+TusDb::WriteTxn::~WriteTxn() {
+    if (m_active && !m_done) {
+        m_db.rollback();
+    }
 }
 
 std::optional<TusVariableRow> TusDb::AddAndGetVariable(const QString& comId, int64_t owner,
@@ -480,7 +500,10 @@ QVector<TusDataRow> TusDb::GetVUserDataStatuses(const QString& comId, const QStr
 bool TusDb::DeleteSlots(const QString& comId, int64_t owner, const QVector<int32_t>& slotIds) {
     // DeleteMultiSlotData deletes TUS *data* only. the variable in the same slot is
     // untouched
-    bool ok = true;
+    WriteTxn txn(m_db);
+    if (!txn.Ok()) {
+        return false;
+    }
     for (int32_t slot : slotIds) {
         QSqlQuery qd(m_db);
         qd.prepare("DELETE FROM tus_data WHERE communication_id=? AND owner_user_id=? AND "
@@ -488,15 +511,20 @@ bool TusDb::DeleteSlots(const QString& comId, int64_t owner, const QVector<int32
         qd.addBindValue(comId);
         qd.addBindValue(static_cast<qint64>(owner));
         qd.addBindValue(slot);
-        ok = qd.exec() && ok;
+        if (!qd.exec()) {
+            return false;
+        }
     }
-    return ok;
+    return txn.Commit();
 }
 
 bool TusDb::DeleteVUserSlots(const QString& comId, const QString& virtualUser,
                              const QVector<int32_t>& slotIds) {
     // Data-only (vuser). the vuser variable in the same slot is left intact.
-    bool ok = true;
+    WriteTxn txn(m_db);
+    if (!txn.Ok()) {
+        return false;
+    }
     for (int32_t slot : slotIds) {
         QSqlQuery qd(m_db);
         qd.prepare("DELETE FROM tus_vuser_data WHERE communication_id=? AND virtual_user=? AND "
@@ -504,14 +532,19 @@ bool TusDb::DeleteVUserSlots(const QString& comId, const QString& virtualUser,
         qd.addBindValue(comId);
         qd.addBindValue(virtualUser);
         qd.addBindValue(slot);
-        ok = qd.exec() && ok;
+        if (!qd.exec()) {
+            return false;
+        }
     }
-    return ok;
+    return txn.Commit();
 }
 
 bool TusDb::DeleteVariableSlots(const QString& comId, int64_t owner,
                                 const QVector<int32_t>& slotIds) {
-    bool ok = true;
+    WriteTxn txn(m_db);
+    if (!txn.Ok()) {
+        return false;
+    }
     for (int32_t slot : slotIds) {
         QSqlQuery q(m_db);
         q.prepare("DELETE FROM tus_variable WHERE communication_id=? AND owner_user_id=? AND "
@@ -519,14 +552,19 @@ bool TusDb::DeleteVariableSlots(const QString& comId, int64_t owner,
         q.addBindValue(comId);
         q.addBindValue(static_cast<qint64>(owner));
         q.addBindValue(slot);
-        ok = q.exec() && ok;
+        if (!q.exec()) {
+            return false;
+        }
     }
-    return ok;
+    return txn.Commit();
 }
 
 bool TusDb::DeleteVUserVariableSlots(const QString& comId, const QString& virtualUser,
                                      const QVector<int32_t>& slotIds) {
-    bool ok = true;
+    WriteTxn txn(m_db);
+    if (!txn.Ok()) {
+        return false;
+    }
     for (int32_t slot : slotIds) {
         QSqlQuery q(m_db);
         q.prepare("DELETE FROM tus_vuser_variable WHERE communication_id=? AND virtual_user=? AND "
@@ -534,9 +572,11 @@ bool TusDb::DeleteVUserVariableSlots(const QString& comId, const QString& virtua
         q.addBindValue(comId);
         q.addBindValue(virtualUser);
         q.addBindValue(slot);
-        ok = q.exec() && ok;
+        if (!q.exec()) {
+            return false;
+        }
     }
-    return ok;
+    return txn.Commit();
 }
 
 std::optional<int64_t> TusDb::UserIdForNpid(const QString& npid) {
