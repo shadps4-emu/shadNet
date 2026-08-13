@@ -66,6 +66,58 @@ void SortByOnlineId(QList<QPair<int64_t, QString>>& users, bool desc) {
                      });
 }
 
+QJsonObject BuildVerifiedUser(Database& db, qint64 accountId, const QString& onlineId,
+                              const QStringList& avatarSizes, const QStringList& pictureSizes) {
+    const auto avatar = db.GetAvatarUrl(accountId);
+    const QString avatarUrl = (avatar && !avatar->isEmpty()) ? *avatar : QString();
+
+    QJsonObject entry;
+    entry.insert(QStringLiteral("accountId"), QString::number(accountId));
+    entry.insert(QStringLiteral("onlineId"), onlineId);
+    entry.insert(QStringLiteral("isOfficiallyVerified"), true);
+
+    if (!avatarUrl.isEmpty()) {
+        QJsonArray avatars;
+        for (const QString& size : avatarSizes) {
+            QJsonObject a;
+            a.insert(QStringLiteral("size"), size);
+            a.insert(QStringLiteral("avatarUrl"), avatarUrl);
+            avatars.append(a);
+        }
+        entry.insert(QStringLiteral("avatarUrls"), avatars);
+    }
+
+    QJsonObject pd;
+    pd.insert(QStringLiteral("displayName"), onlineId);
+    if (!avatarUrl.isEmpty()) {
+        QJsonArray pictures;
+        for (const QString& size : pictureSizes) {
+            QJsonObject pic;
+            pic.insert(QStringLiteral("size"), size);
+            pic.insert(QStringLiteral("profilePictureUrl"), avatarUrl);
+            pictures.append(pic);
+        }
+        pd.insert(QStringLiteral("profilePictureUrls"), pictures);
+    }
+    entry.insert(QStringLiteral("personalDetail"), pd);
+    return entry;
+}
+
+// Comma-separated size list, filtered to the sizes the spec defines.
+QStringList ParseSizes(const QUrlQuery& query, const QString& param, const QSet<QString>& allowed,
+                       const QString& fallback) {
+    QStringList out;
+    const QStringList raw = query.queryItemValue(param).split(QLatin1Char(','), Qt::SkipEmptyParts);
+    for (const QString& size : raw) {
+        const QString s = size.trimmed();
+        if (allowed.contains(s) && !out.contains(s))
+            out.append(s);
+    }
+    if (out.isEmpty())
+        out.append(fallback);
+    return out;
+}
+
 // Body shape of the account-ID list endpoints (/friends, /blocks)
 QJsonObject BuildAccountIdList(const QList<QPair<int64_t, QString>>& users, const QString& key,
                                int offset, int limit) {
@@ -603,46 +655,68 @@ void RegisterUserRoutes(QHttpServer& http, Database& db, SharedState& shared) {
                });
 
     // GET /v1/users/me/verifiedAccountsByTitle?fields=&limit=&avatarSizes=&profilePictureSizes=
-    http.route("/v1/users/<arg>/verifiedAccountsByTitle",
-               [&db, &shared](const QString& userKey,
-                              const QHttpServerRequest& req) -> QHttpServerResponse {
-                   static const QSet<QString> kKnown = {
-                       QStringLiteral("fields"),
-                       QStringLiteral("limit"),
-                       QStringLiteral("avatarSizes"),
-                       QStringLiteral("profilePictureSizes"),
-                   };
-                   LogUnsupportedQueryParams(req, kKnown);
+    http.route(
+        "/v1/users/<arg>/verifiedAccountsByTitle",
+        [&db, &shared](const QString& userKey,
+                       const QHttpServerRequest& req) -> QHttpServerResponse {
+            static const QSet<QString> kKnown = {
+                QStringLiteral("fields"),
+                QStringLiteral("limit"),
+                QStringLiteral("avatarSizes"),
+                QStringLiteral("profilePictureSizes"),
+            };
+            LogUnsupportedQueryParams(req, kKnown);
 
-                   auto auth = WebApiAuth::Authenticate(req, db);
-                   if (!auth.userId.has_value()) {
-                       return std::move(auth.errorResponse);
-                   }
-                   if (!IsSelf(userKey, auth)) {
-                       return JsonError(QHttpServerResponse::StatusCode::Forbidden,
-                                        UP_ACCESS_DENIED_OWNERSHIP,
-                                        QStringLiteral("Access denied by resource ownership"));
-                   }
-                   QString npTitleId;
-                   {
-                       QReadLocker lk(&shared.clientsLock);
-                       auto it = shared.clients.constFind(*auth.userId);
-                       if (it != shared.clients.constEnd()) {
-                           npTitleId = it->npTitleId;
-                       }
-                       if (npTitleId.isEmpty()) {
-                           npTitleId = shared.lastLoginTitleId.value(*auth.userId);
-                       }
-                   }
-                   // dummy return for now TODO
-                   QJsonObject body;
-                   body.insert(QStringLiteral("titleId"), npTitleId);
-                   body.insert(QStringLiteral("totalResults"), 0);
-                   body.insert(QStringLiteral("verifiedUsers"), QJsonArray());
-                   qInfo() << "WebAPI: verifiedAccountsByTitle for" << auth.npid << "title"
-                           << npTitleId << "-> 0 verified accounts";
-                   return JsonOk(body);
-               });
+            auto auth = WebApiAuth::Authenticate(req, db);
+            if (!auth.userId.has_value()) {
+                return std::move(auth.errorResponse);
+            }
+            if (!IsSelf(userKey, auth)) {
+                return JsonError(QHttpServerResponse::StatusCode::Forbidden,
+                                 UP_ACCESS_DENIED_OWNERSHIP,
+                                 QStringLiteral("Access denied by resource ownership"));
+            }
+            const QUrlQuery query(req.url());
+            static const QSet<QString> kAvatarSizes = {QStringLiteral("s"), QStringLiteral("m"),
+                                                       QStringLiteral("l")};
+            static const QSet<QString> kPictureSizes = {QStringLiteral("s"), QStringLiteral("m"),
+                                                        QStringLiteral("l"), QStringLiteral("xl")};
+            const QStringList avatarSizes =
+                ParseSizes(query, QStringLiteral("avatarSizes"), kAvatarSizes, QStringLiteral("l"));
+            const QStringList pictureSizes = ParseSizes(
+                query, QStringLiteral("profilePictureSizes"), kPictureSizes, QStringLiteral("xl"));
+            bool limitOk = false;
+            int limit = query.queryItemValue(QStringLiteral("limit")).toInt(&limitOk);
+            if (!limitOk || limit < 0)
+                limit = 100;
+            QString npTitleId;
+            {
+                QReadLocker lk(&shared.clientsLock);
+                auto it = shared.clients.constFind(*auth.userId);
+                if (it != shared.clients.constEnd()) {
+                    npTitleId = it->npTitleId;
+                }
+                if (npTitleId.isEmpty()) {
+                    npTitleId = shared.lastLoginTitleId.value(*auth.userId);
+                }
+            }
+
+            // add only the login user as verified user, should be all verified users TODO check how
+            // it should work
+            QJsonArray verifiedUsers;
+            if (limit > 0) {
+                verifiedUsers.append(
+                    BuildVerifiedUser(db, *auth.userId, auth.npid, avatarSizes, pictureSizes));
+            }
+
+            QJsonObject body;
+            body.insert(QStringLiteral("titleId"), npTitleId);
+            body.insert(QStringLiteral("totalResults"), verifiedUsers.size());
+            body.insert(QStringLiteral("verifiedUsers"), verifiedUsers);
+            qInfo() << "WebAPI: verifiedAccountsByTitle for" << auth.npid << "title" << npTitleId
+                    << "->" << verifiedUsers.size() << "verified accounts";
+            return JsonOk(body);
+        });
 }
 
 } // namespace WebApiRoutes
