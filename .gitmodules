@@ -1,3 +1,6 @@
 [submodule "externals/protobuf"]
 	path = externals/protobuf
 	url = https://github.com/shadexternals/protobuf.git
+[submodule "externals/abseil-cpp"]
+	path = externals/abseil-cpp
+	url = https://github.com/abseil/abseil-cpp.git
