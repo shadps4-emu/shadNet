@@ -77,6 +77,7 @@ enum class CommandType : uint16_t {
     TusTryAndSetVariable = 211,
     TusGetFriendsVariable = 212,
     TusDeleteMultiSlotVariable = 213,
+    TssGetData = 214,
     // Trophies
     UnlockTrophy = 301,
     SyncTrophies = 302,
@@ -136,4 +137,5 @@ enum class ErrorType : uint8_t {
     ScoreHasData = 31,
     CondFail = 32,
     Unsupported = 33,
+    TooLarge = 34, // TSS file on the server exceeds the slot's documented maximum
 };

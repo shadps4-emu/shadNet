@@ -93,6 +93,7 @@ set(SOURCES
     src/version.cpp
     # TUS
     src/cmd_tus.cpp
+    src/cmd_tss.cpp
     src/cmd_trophy.cpp
     src/trophy_config.h
     src/trophy_config.cpp

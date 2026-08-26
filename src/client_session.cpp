@@ -300,6 +300,8 @@ ErrorType ClientSession::DispatchCommand(CommandType cmd, StreamExtractor& se, Q
         return CmdSyncTrophies(se, reply);
     case CommandType::TusDeleteMultiSlotVariable:
         return CmdTusDeleteMultiSlotVariable(se);
+    case CommandType::TssGetData:
+        return CmdTssGetData(se, reply);
     default:
         qWarning() << "Unknown command" << static_cast<uint16_t>(cmd);
         return ErrorType::Invalid;

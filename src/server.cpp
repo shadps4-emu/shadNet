@@ -20,6 +20,7 @@
 #include "database.h"
 #include "score_db.h"
 #include "server.h"
+#include "tss_files.h"
 
 ShadNetServer::ShadNetServer(QObject* parent)
     : QObject(parent), m_unsecuredServer(new QTcpServer(this)) {
@@ -105,6 +106,9 @@ bool ShadNetServer::InitScoreSystem() {
 
     if (!m_scoreFiles->Init())
         return false;
+    if (!TssFiles::Init()) {
+        return false;
+    }
 
     // Use a dedicated connection for server-startup DB work.
     const QString connName = QStringLiteral("shadnet_server_init");

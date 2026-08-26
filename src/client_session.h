@@ -247,6 +247,7 @@ public:
 
     // Title User Storage (TUS)
     ErrorType CmdTusSetData(StreamExtractor& data);
+    ErrorType CmdTssGetData(StreamExtractor& data, QByteArray& reply);
     ErrorType CmdTusGetData(StreamExtractor& data, QByteArray& reply);
     ErrorType CmdTusSetMultiSlotVariable(StreamExtractor& data);
     ErrorType CmdTusGetMultiSlotVariable(StreamExtractor& data, QByteArray& reply);
