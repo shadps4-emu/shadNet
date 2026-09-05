@@ -14,8 +14,6 @@
 #include <QUrlQuery>
 #include <QUuid>
 
-namespace {
-
 constexpr int ERR_BAD_REQUEST = 400;
 constexpr int ERR_UNAUTHORIZED = 401;
 constexpr int ERR_FORBIDDEN = 403;
@@ -64,6 +62,8 @@ std::optional<QJsonObject> ParseJsonBody(const QHttpServerRequest& req, QString&
     return doc.object();
 }
 
+// Compares in constant time, so the key cannot be recovered a byte at a time by
+// measuring how long a rejection takes.
 bool SecretsEqual(const QByteArray& a, const QByteArray& b) {
     if (a.size() != b.size())
         return false;
@@ -71,6 +71,18 @@ bool SecretsEqual(const QByteArray& a, const QByteArray& b) {
     for (int i = 0; i < a.size(); ++i)
         diff |= static_cast<unsigned char>(a[i] ^ b[i]);
     return diff == 0;
+}
+
+// Reads the bearer token from the Authorization header.
+QString BearerToken(const QHttpServerRequest& req) {
+    const QByteArray rawAuth = req.value("Authorization");
+    if (rawAuth.isEmpty())
+        return {};
+    const QString authStr = QString::fromUtf8(rawAuth).trimmed();
+    static const QString prefix = QStringLiteral("Bearer ");
+    if (!authStr.startsWith(prefix, Qt::CaseInsensitive))
+        return {};
+    return authStr.mid(prefix.size()).trimmed();
 }
 
 QString PeerOf(const QHttpServerRequest& req) {
@@ -104,8 +116,6 @@ int PointsForGrade(const QString& grade) {
         return 15;
     return 0;
 }
-
-} // namespace
 
 bool MemberApiServer::CheckApiKey(const QHttpServerRequest& req) const {
     const QString configured = m_config ? m_config->GetMemberApiKey() : QString();
@@ -221,14 +231,7 @@ void MemberApiServer::PruneExpiredSessions() {
 
 std::optional<MemberApiServer::MemberSession> MemberApiServer::Authenticate(
     const QHttpServerRequest& req) {
-    QString token;
-    for (const auto& header : req.headers()) {
-        if (header.first.toLower() != "authorization")
-            continue;
-        const QString value = QString::fromUtf8(header.second);
-        if (value.startsWith(QLatin1String("Bearer "), Qt::CaseInsensitive))
-            token = value.mid(7).trimmed();
-    }
+    const QString token = BearerToken(req);
     if (token.isEmpty())
         return std::nullopt;
 
@@ -282,7 +285,7 @@ void MemberApiServer::ClearFailures(const QString& peer) {
 // Routes
 
 void MemberApiServer::RegisterRoutes() {
-    // GET /member/v1/status — what a sign-in page needs before it draws itself.
+    // GET /member/v1/status
     m_http->route("/member/v1/status", QHttpServerRequest::Method::Get,
                   [this](const QHttpServerRequest& req) -> QHttpServerResponse {
                       if (!CheckApiKey(req))
@@ -450,13 +453,9 @@ void MemberApiServer::RegisterRoutes() {
                       if (!CheckApiKey(req))
                           return ApiKeyError(req);
 
-                      for (const auto& header : req.headers()) {
-                          if (header.first.toLower() != "authorization")
-                              continue;
-                          const QString value = QString::fromUtf8(header.second);
-                          if (value.startsWith(QLatin1String("Bearer "), Qt::CaseInsensitive))
-                              RevokeToken(value.mid(7).trimmed());
-                      }
+                      const QString token = BearerToken(req);
+                      if (!token.isEmpty())
+                          RevokeToken(token);
                       QJsonObject body;
                       body.insert(QStringLiteral("signedOut"), true);
                       return JsonOk(body);
