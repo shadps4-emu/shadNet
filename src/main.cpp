@@ -7,6 +7,7 @@
 #include <QLoggingCategory>
 #include "admin_api.h"
 #include "config.h"
+#include "member_api.h"
 #include "server.h"
 #include "version.h"
 #include "webapi_server.h"
@@ -44,6 +45,14 @@ int main(int argc, char* argv[]) {
     WebApiServer webapi;
     if (!webapi.Start(&config, "db/shadnet.db", &server.Shared())) {
         qWarning() << "WebApiServer failed to start; continuing without WebAPI";
+    }
+
+    MemberApiServer memberApi;
+    if (config.IsMemberApiEnabled()) {
+        if (!memberApi.Start(&config, "db/shadnet.db", &server.Shared()))
+            qWarning() << "MemberApiServer failed to start; continuing without the member API";
+    } else {
+        qInfo() << "Member API disabled (MemberApiEnabled=false)";
     }
 
     // Start the admin API the shadNet admin tool talks to.

@@ -97,6 +97,8 @@ set(SOURCES
     src/cmd_trophy.cpp
     src/trophy_config.h
     src/trophy_config.cpp
+    src/member_api.h
+    src/member_api.cpp
     src/tus_db.cpp
     src/tus_db.h
 )

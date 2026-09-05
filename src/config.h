@@ -96,10 +96,35 @@ public:
         QReadLocker lk(&m_lock);
         return m_adminsList.contains(npid);
     }
+    bool IsRegistrationKeyRequired() const {
+        QReadLocker lk(&m_lock);
+        return !m_registrationSecretKey.isEmpty();
+    }
 
-    // Returns true if registration is allowed for the given secret_key.
-    // When RegistrationSecretKey is empty, all registrations are allowed.
-    // When set, only requests carrying the matching key are accepted.
+    bool IsMemberApiEnabled() const {
+        QReadLocker lk(&m_lock);
+        return m_memberApiEnabled;
+    }
+    QString GetMemberApiHost() const {
+        QReadLocker lk(&m_lock);
+        return m_memberApiHost;
+    }
+    QString GetMemberApiPort() const {
+        QReadLocker lk(&m_lock);
+        return m_memberApiPort;
+    }
+
+    QString GetMemberApiKey() const {
+        QReadLocker lk(&m_lock);
+        return m_memberApiKey;
+    }
+    bool IsMemberApiKeyRequired() const {
+        QReadLocker lk(&m_lock);
+        return !m_memberApiKey.isEmpty();
+    }
+
+    QString EnsureMemberApiKey();
+
     bool IsRegistrationAllowed(const QString& key) const {
         QReadLocker lk(&m_lock);
         return m_registrationSecretKey.isEmpty() ||
@@ -149,6 +174,9 @@ private:
     QString m_adminApiKey;
     QStringList m_adminsList;
     QSet<QString> m_bannedDomains;
-    // When non-empty, registrations must supply this key or they are rejected.
     QString m_registrationSecretKey;
+    bool m_memberApiEnabled = true;
+    QString m_memberApiHost = "0.0.0.0";
+    QString m_memberApiPort = "31360";
+    QString m_memberApiKey;
 };

@@ -22,6 +22,32 @@ void ConfigManager::LoadBannedDomains() {
     qInfo() << "Loaded" << m_bannedDomains.size() << "banned domains";
 }
 
+QString ConfigManager::EnsureMemberApiKey() {
+    QWriteLocker lk(&m_lock);
+    if (!m_memberApiKey.isEmpty())
+        return QString();
+
+    static const QString chars = QStringLiteral("ABCDEFGHIJKLMNOPQRSTUVWXYZ"
+                                                "abcdefghijklmnopqrstuvwxyz"
+                                                "0123456789");
+    QString key;
+    key.reserve(48);
+    QRandomGenerator* gen = QRandomGenerator::system();
+    for (int i = 0; i < 48; ++i)
+        key.append(chars.at(gen->bounded(chars.size())));
+
+    QSettings s(m_path, QSettings::IniFormat);
+    s.setValue(QStringLiteral("MemberApiKey"), key);
+    s.sync();
+    if (s.status() != QSettings::NoError) {
+        qCritical() << "Could not write a generated MemberApiKey to" << m_path;
+        return QString();
+    }
+
+    m_memberApiKey = key;
+    return key;
+}
+
 QString ConfigManager::EnsureAdminApiKey() {
     QWriteLocker lk(&m_lock);
     if (!m_adminApiKey.isEmpty())
@@ -79,6 +105,10 @@ void ConfigManager::Parse(const QString& path) {
     m_statsEnabled = boolean("StatsEnabled", true);
     m_matching2Enabled = boolean("Matching2Enabled", false);
     m_trophiesEnabled = boolean("TrophiesEnabled", true);
+    m_memberApiEnabled = boolean("MemberApiEnabled", false);
+    m_memberApiHost = str("MemberApiHost", "127.0.0.1");
+    m_memberApiPort = str("MemberApiPort", "31360");
+    m_memberApiKey = str("MemberApiKey", "");
     m_statsPort = str("StatsPort", "31320");
     m_statsPath = str("StatsPath", "stats");
     m_statsCacheLife = str("StatsCacheLife", "30").toInt();
