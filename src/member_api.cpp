@@ -11,6 +11,7 @@
 #include <QJsonDocument>
 #include <QJsonObject>
 #include <QRandomGenerator>
+#include <QUrl>
 #include <QUrlQuery>
 #include <QUuid>
 
@@ -100,6 +101,23 @@ bool LooksLikeEmail(const QString& email) {
     const int at = email.indexOf(QLatin1Char('@'));
     return at > 0 && at < email.size() - 1 && !email.contains(QLatin1Char(' ')) &&
            email.size() <= 254;
+}
+
+// What an avatar URL is allowed to be.
+constexpr int MaxAvatarUrlLength = 500;
+
+bool ValidAvatarUrl(const QString& url) {
+    if (url.isEmpty() || url.size() > MaxAvatarUrlLength)
+        return false;
+    for (const QChar c : url) {
+        if (c.unicode() < 0x20 || c.unicode() == 0x7f)
+            return false;
+    }
+    const QUrl parsed(url, QUrl::StrictMode);
+    if (!parsed.isValid() || parsed.host().isEmpty())
+        return false;
+    const QString scheme = parsed.scheme().toLower();
+    return scheme == QLatin1String("http") || scheme == QLatin1String("https");
 }
 
 int PointsForGrade(const QString& grade) {
@@ -345,6 +363,7 @@ void MemberApiServer::RegisterRoutes() {
                                  QStringLiteral("Choose a password of at least %1 characters.")
                                      .arg(MinPasswordLength));
             }
+
             if (!m_config->IsRegistrationAllowed(key)) {
                 RegisterFailure(peer);
                 return JsonError(QHttpServerResponse::StatusCode::Forbidden, ERR_FORBIDDEN,
@@ -353,6 +372,7 @@ void MemberApiServer::RegisterRoutes() {
                                      : QStringLiteral("This server is not accepting new "
                                                       "accounts."));
             }
+
             const QString defaultAvatar =
                 QStringLiteral("https://shadps4.net/shadnet/avatars/default_01.png");
             const auto err = m_db->CreateAccount(npid, password, defaultAvatar, email);
@@ -595,6 +615,43 @@ void MemberApiServer::RegisterRoutes() {
             return JsonOk(body);
         });
 
+    // POST /member/v1/me/avatar — { url }
+    m_http->route(
+        "/member/v1/me/avatar", QHttpServerRequest::Method::Post,
+        [this](const QHttpServerRequest& req) -> QHttpServerResponse {
+            if (!CheckApiKey(req))
+                return ApiKeyError(req);
+
+            const auto session = Authenticate(req);
+            if (!session)
+                return JsonError(QHttpServerResponse::StatusCode::Unauthorized, ERR_UNAUTHORIZED,
+                                 QStringLiteral("Sign in first."));
+
+            QString parseError;
+            const auto bodyOpt = ParseJsonBody(req, parseError);
+            if (!bodyOpt)
+                return JsonError(QHttpServerResponse::StatusCode::BadRequest, ERR_BAD_REQUEST,
+                                 parseError);
+
+            const QString url = bodyOpt->value(QStringLiteral("url")).toString().trimmed();
+            if (!ValidAvatarUrl(url)) {
+                return JsonError(QHttpServerResponse::StatusCode::BadRequest, ERR_BAD_REQUEST,
+                                 QStringLiteral("An avatar URL must be an http or https address "
+                                                "of at most %1 characters.")
+                                     .arg(MaxAvatarUrlLength));
+            }
+
+            if (!m_db->SetAvatarUrl(session->userId, url)) {
+                qCritical() << "MemberApi: avatar update failed for" << session->npid;
+                return JsonError(QHttpServerResponse::StatusCode::InternalServerError, ERR_INTERNAL,
+                                 QStringLiteral("The picture could not be saved."));
+            }
+
+            QJsonObject body;
+            body.insert(QStringLiteral("avatarUrl"), url);
+            return JsonOk(body);
+        });
+
     // POST /member/v1/me/password — { current, password }
     m_http->route(
         "/member/v1/me/password", QHttpServerRequest::Method::Post,
@@ -632,6 +689,7 @@ void MemberApiServer::RegisterRoutes() {
                 return JsonError(QHttpServerResponse::StatusCode::InternalServerError, ERR_INTERNAL,
                                  QStringLiteral("The password could not be changed."));
             }
+
             RevokeSessionsFor(session->userId);
 
             qInfo().nospace().noquote()

@@ -148,6 +148,8 @@ public:
     // a password reset that left existing sessions working would not be much of a
     // reset. Also clears any pending reset_token.
     bool SetPassword(int64_t userId, const QString& newPassword);
+    // Points an account at a different picture.
+    bool SetAvatarUrl(int64_t userId, const QString& avatarUrl);
     int TotalUsers();
 
     // Deletes everything this account produced: leaderboard scores, TUS variable

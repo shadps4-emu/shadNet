@@ -831,6 +831,27 @@ QList<AuditRow> Database::ListAudit(int limit, int offset) {
     return rows;
 }
 
+bool Database::SetAvatarUrl(int64_t userId, const QString& avatarUrl) {
+    // avatar_url is NOT NULL, and an account with no picture is not a state the
+    // rest of the server expects; callers wanting the default should pass it.
+    if (avatarUrl.isEmpty()) {
+        m_lastError = QStringLiteral("Avatar URL must not be empty");
+        return false;
+    }
+
+    QSqlQuery q(m_db);
+    q.prepare("UPDATE account SET avatar_url=? WHERE user_id=?");
+    q.addBindValue(avatarUrl);
+    q.addBindValue(static_cast<qlonglong>(userId));
+    if (!Exec(q))
+        return false;
+    if (q.numRowsAffected() <= 0) {
+        m_lastError = QStringLiteral("No such account");
+        return false;
+    }
+    return true;
+}
+
 bool Database::SetPassword(int64_t userId, const QString& newPassword) {
     if (newPassword.isEmpty()) {
         m_lastError = QStringLiteral("Password must not be empty");
