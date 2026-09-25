@@ -336,7 +336,8 @@ void SendSessionInvitationEvent(SharedState& shared, const QString& dataType, in
         const QByteArray pkt = ClientSession::BuildNotification(
             NotificationType::WebApiPushEvent,
             ClientSession::BuildWebApiPushPayload(QStringLiteral("sessionInvitation"), 0, dataType,
-                                                  body, fromNpid, it->npid, extd));
+                                                  body, fromNpid, it->npid, extd, fromUserId,
+                                                  toId));
         it->send(pkt);
     }
 }

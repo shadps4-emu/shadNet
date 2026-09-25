@@ -99,7 +99,8 @@ enum class NotificationType : uint16_t {
     // Generic NP WebApi push event, forwarded verbatim to the emulator's
     // libSceNpWebApi push-event callbacks. Payload (length-prefixed, see
     // ClientSession::BuildWebApiPushPayload): npServiceName, npServiceLabel(u32 LE),
-    // dataType, data, fromNpid, toNpid.
+    // dataType, data, fromNpid, toNpid, extdData (u32 count + key/value blobs),
+    // fromAccountId (u64 LE), toAccountId (u64 LE). 0 account id = unknown/none.
     WebApiPushEvent = 17,
 };
 

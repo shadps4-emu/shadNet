@@ -3,6 +3,7 @@
 #include "webapi_routes_presence.h"
 
 #include <cstring>
+#include <tuple>
 
 #include <QByteArray>
 #include <QDebug>
@@ -149,7 +150,8 @@ QHttpServerResponse HandlePresenceWrite(Database& db, SharedState& shared, const
     }
 
     // Collect online friends to notify (recipient npid + send), comId-gated when known.
-    QList<QPair<QString, std::function<void(QByteArray)>>> recipients;
+    // (recipient npid, send, recipient userId)
+    QList<std::tuple<QString, std::function<void(QByteArray)>, int64_t>> recipients;
     {
         QReadLocker lk(&shared.clientsLock);
         auto it = shared.clients.constFind(*auth.userId);
@@ -160,7 +162,7 @@ QHttpServerResponse HandlePresenceWrite(Database& db, SharedState& shared, const
                     continue;
                 auto fit = shared.clients.constFind(fid);
                 if (fit != shared.clients.constEnd() && fit->send)
-                    recipients.append({fit->npid, fit->send});
+                    recipients.append({fit->npid, fit->send, fid});
             }
         }
     }
@@ -192,13 +194,14 @@ QHttpServerResponse HandlePresenceWrite(Database& db, SharedState& shared, const
 
     static const QString kInGamePresence = QStringLiteral("inGamePresence");
     for (const auto& ev : events) {
-        for (const auto& rcpt : recipients) {
+        for (const auto& [rcptNpid, rcptSend, rcptId] : recipients) {
             // from = updater, to = recipient
             const QByteArray pkt = ClientSession::BuildNotification(
                 NotificationType::WebApiPushEvent,
                 ClientSession::BuildWebApiPushPayload(kInGamePresence, 0, ev.first, ev.second,
-                                                      auth.npid, rcpt.first));
-            rcpt.second(pkt);
+                                                      auth.npid, rcptNpid, {}, *auth.userId,
+                                                      rcptId));
+            rcptSend(pkt);
         }
     }
 
@@ -265,7 +268,8 @@ static QHttpServerResponse HandlePresenceDelete(Database& db, SharedState& share
             }
         }
     }
-    QList<QPair<QString, std::function<void(QByteArray)>>> recipients;
+    // (recipient npid, send, recipient userId)
+    QList<std::tuple<QString, std::function<void(QByteArray)>, int64_t>> recipients;
     {
         QReadLocker lk(&shared.clientsLock);
         auto it = shared.clients.constFind(*auth.userId);
@@ -276,18 +280,18 @@ static QHttpServerResponse HandlePresenceDelete(Database& db, SharedState& share
                     continue;
                 auto fit = shared.clients.constFind(fid);
                 if (fit != shared.clients.constEnd() && fit->send)
-                    recipients.append({fit->npid, fit->send});
+                    recipients.append({fit->npid, fit->send, fid});
             }
         }
     }
     // Deletion event carries no body (update events upon deletion omit the member).
     static const QString kInGamePresence = QStringLiteral("inGamePresence");
-    for (const auto& rcpt : recipients) {
+    for (const auto& [rcptNpid, rcptSend, rcptId] : recipients) {
         const QByteArray pkt = ClientSession::BuildNotification(
             NotificationType::WebApiPushEvent,
             ClientSession::BuildWebApiPushPayload(kInGamePresence, 0, dataType, QByteArray(),
-                                                  auth.npid, rcpt.first));
-        rcpt.second(pkt);
+                                                  auth.npid, rcptNpid, {}, *auth.userId, rcptId));
+        rcptSend(pkt);
     }
     return QHttpServerResponse{QHttpServerResponse::StatusCode::NoContent};
 }
