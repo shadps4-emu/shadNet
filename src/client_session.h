@@ -284,7 +284,8 @@ public:
     static QByteArray BuildWebApiPushPayload(const QString& npServiceName, quint32 npServiceLabel,
                                              const QString& dataType, const QByteArray& data,
                                              const QString& fromNpid, const QString& toNpid,
-                                             const QList<QPair<QString, QString>>& extdData = {});
+                                             const QList<QPair<QString, QString>>& extdData = {},
+                                             int64_t fromAccountId = 0, int64_t toAccountId = 0);
 
 private:
     // Push a generic NP WebApi push event to one online user

@@ -1,6 +1,7 @@
 // SPDX-FileCopyrightText: Copyright 2019-2026 rpcsn Project
 // SPDX-FileCopyrightText: Copyright 2026 shadNet Project
 // SPDX-License-Identifier: GPL-2.0-or-later
+#include <tuple>
 #include <QDateTime>
 #include <QJsonDocument>
 #include <QJsonObject>
@@ -359,7 +360,8 @@ void ClientSession::CleanupOnDisconnect() {
 
     // Collect send functions for every online friend before releasing the lock,
     // then remove ourselves from the map.
-    QVector<QPair<std::function<void(QByteArray)>, QString>> friendSenders; // (send, npid)
+    // (send, npid, userId)
+    QVector<std::tuple<std::function<void(QByteArray)>, QString, int64_t>> friendSenders;
     bool selfAppearOffline = false;
     {
         QWriteLocker lk(&m_shared->clientsLock);
@@ -369,7 +371,7 @@ void ClientSession::CleanupOnDisconnect() {
             for (auto it = self->friends.begin(); it != self->friends.end(); ++it) {
                 auto friendEntry = m_shared->clients.find(it.key());
                 if (friendEntry != m_shared->clients.end())
-                    friendSenders.append({friendEntry->send, friendEntry->npid});
+                    friendSenders.append({friendEntry->send, friendEntry->npid, it.key()});
             }
             m_shared->clients.erase(self);
             m_shared->npidToUserId.remove(m_info.npid);
@@ -392,13 +394,13 @@ void ClientSession::CleanupOnDisconnect() {
     QByteArray pkt = BuildNotification(NotificationType::FriendStatus, payload);
     // WebApi onlineStatus presence update (went offline)
     if (!selfAppearOffline) {
-        for (const auto& [send, friendNpid] : friendSenders) {
+        for (const auto& [send, friendNpid, friendId] : friendSenders) {
             send(pkt);
             send(BuildNotification(
                 NotificationType::WebApiPushEvent,
-                BuildWebApiPushPayload(QString(), 0,
-                                       QStringLiteral("np:service:presence:onlineStatus"),
-                                       QByteArray(), m_info.npid, friendNpid)));
+                BuildWebApiPushPayload(
+                    QString(), 0, QStringLiteral("np:service:presence:onlineStatus"), QByteArray(),
+                    m_info.npid, friendNpid, {}, m_info.userId, friendId)));
         }
     }
 
@@ -440,7 +442,8 @@ QByteArray ClientSession::BuildWebApiPushPayload(const QString& npServiceName,
                                                  quint32 npServiceLabel, const QString& dataType,
                                                  const QByteArray& data, const QString& fromNpid,
                                                  const QString& toNpid,
-                                                 const QList<QPair<QString, QString>>& extdData) {
+                                                 const QList<QPair<QString, QString>>& extdData,
+                                                 int64_t fromAccountId, int64_t toAccountId) {
     QByteArray payload;
     appendBlob(payload, npServiceName.toUtf8());
     appendU32LE(payload, npServiceLabel);
@@ -453,6 +456,8 @@ QByteArray ClientSession::BuildWebApiPushPayload(const QString& npServiceName,
         appendBlob(payload, kv.first.toUtf8());
         appendBlob(payload, kv.second.toUtf8());
     }
+    appendU64LE(payload, static_cast<quint64>(fromAccountId));
+    appendU64LE(payload, static_cast<quint64>(toAccountId));
     return payload;
 }
 
@@ -595,10 +600,11 @@ void ClientSession::PushWebApiEvent(const QString& npServiceName, quint32 npServ
                                     const QString& fromNpid, const QString& toNpid,
                                     int64_t targetUserId,
                                     const QList<QPair<QString, QString>>& extdData) {
-    SendNotification(NotificationType::WebApiPushEvent,
-                     BuildWebApiPushPayload(npServiceName, npServiceLabel, dataType, data, fromNpid,
-                                            toNpid, extdData),
-                     targetUserId);
+    SendNotification(
+        NotificationType::WebApiPushEvent,
+        BuildWebApiPushPayload(npServiceName, npServiceLabel, dataType, data, fromNpid, toNpid,
+                               extdData, fromNpid == m_info.npid ? m_info.userId : 0, targetUserId),
+        targetUserId);
 }
 
 void ClientSession::SendPacket(const QByteArray& pkt) {

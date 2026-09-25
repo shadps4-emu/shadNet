@@ -1,6 +1,7 @@
 // SPDX-FileCopyrightText: Copyright 2019-2026 rpcsn Project
 // SPDX-FileCopyrightText: Copyright 2026 shadNet Project
 // SPDX-License-Identifier: GPL-2.0-or-later
+#include <tuple>
 #include <QDateTime>
 #include <QDebug>
 #include "client_session.h"
@@ -142,7 +143,7 @@ ErrorType ClientSession::CmdLogin(StreamExtractor& data, QByteArray& reply) {
     appendProto(reply, pb);
 
     // Register session and notify online friends
-    QVector<std::pair<std::function<void(QByteArray)>, QString>> onlineFriendSenders;
+    QVector<std::tuple<std::function<void(QByteArray)>, QString, int64_t>> onlineFriendSenders;
     {
         QWriteLocker lk(&m_shared->clientsLock);
         SharedState::ClientEntry entry;
@@ -167,7 +168,7 @@ ErrorType ClientSession::CmdLogin(StreamExtractor& data, QByteArray& reply) {
             auto it = m_shared->clients.find(friendId);
             if (it != m_shared->clients.end()) {
                 it->friends.insert(user.userId, npid);
-                onlineFriendSenders.append({it->send, friendNpid});
+                onlineFriendSenders.append({it->send, friendNpid, friendId});
             }
         }
         m_shared->clients[user.userId] = std::move(entry);
@@ -198,13 +199,13 @@ ErrorType ClientSession::CmdLogin(StreamExtractor& data, QByteArray& reply) {
         // WebApi onlineStatus presence update: service name None (basic push) + exact
         // dataType match the system "npweblis" listener's filter. from = us, to = each
         // recipient
-        for (const auto& [send, friendNpid] : onlineFriendSenders) {
+        for (const auto& [send, friendNpid, friendId] : onlineFriendSenders) {
             send(pkt);
             send(ClientSession::BuildNotification(
                 NotificationType::WebApiPushEvent,
                 ClientSession::BuildWebApiPushPayload(
                     QString(), 0, QStringLiteral("np:service:presence:onlineStatus"), QByteArray(),
-                    npid, friendNpid)));
+                    npid, friendNpid, {}, user.userId, friendId)));
         }
     }
 
