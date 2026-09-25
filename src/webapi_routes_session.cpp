@@ -3,6 +3,7 @@
 #include "webapi_routes_session.h"
 
 #include <QDateTime>
+#include <QFile>
 #include <QHttpServer>
 #include <QHttpServerRequest>
 #include <QHttpServerResponse>
@@ -156,9 +157,14 @@ QList<MultipartPart> ParseMultipartMixed(const QByteArray& body, const QByteArra
             break;
         const QByteArray headers = body.mid(pos, hdrEnd - pos);
         const int bodyStart = hdrEnd + sep;
-        const int next = body.indexOf(delim, bodyStart);
-        if (next < 0)
-            break;
+        int next = body.indexOf(delim, bodyStart);
+        bool unterminated = false;
+        if (next < 0) {
+            qWarning() << "WebAPI: multipart part without closing delimiter, keeping"
+                       << (body.size() - bodyStart) << "trailing bytes";
+            next = body.size();
+            unterminated = true;
+        }
         int bodyEnd = next;
         if (bodyEnd >= 2 && body.mid(bodyEnd - 2, 2) == "\r\n")
             bodyEnd -= 2;
@@ -180,6 +186,8 @@ QList<MultipartPart> ParseMultipartMixed(const QByteArray& body, const QByteArra
                 part.contentDescription = val;
         }
         parts.append(part);
+        if (unterminated)
+            break;
         pos = next + delim.size();
     }
     return parts;
@@ -576,9 +584,20 @@ QHttpServerResponse HandleSessionCreate(Database& db, SharedState& shared,
     {
         QStringList descs;
         for (const auto& p : parts)
-            descs << QString::fromUtf8(p.contentDescription);
-        qInfo() << "WebAPI: session create parts=" << descs
+            descs << QStringLiteral("%1(%2, %3 bytes)")
+                         .arg(QString::fromUtf8(p.contentDescription),
+                              QString::fromUtf8(p.contentType))
+                         .arg(p.data.size());
+        qInfo() << "WebAPI: session create body" << req.body().size() << "bytes, parts=" << descs
                 << "ct=" << QString::fromUtf8(contentType);
+// write the raw create body to disk for inspection. // todo: remove this in production
+#if 1
+        QFile f(QStringLiteral("session_create_%1.bin").arg(QDateTime::currentMSecsSinceEpoch()));
+        if (f.open(QIODevice::WriteOnly)) {
+            f.write(req.body());
+            qInfo() << "WebAPI: session create body dumped to" << f.fileName();
+        }
+#endif
     }
 
     QByteArray jsonPart, imagePart, dataPart, changeablePart;
