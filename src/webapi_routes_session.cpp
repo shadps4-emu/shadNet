@@ -590,8 +590,8 @@ QHttpServerResponse HandleSessionCreate(Database& db, SharedState& shared,
                          .arg(p.data.size());
         qInfo() << "WebAPI: session create body" << req.body().size() << "bytes, parts=" << descs
                 << "ct=" << QString::fromUtf8(contentType);
-// write the raw create body to disk for inspection. // todo: remove this in production
-#if 1
+// write the raw create body to disk for inspection.
+#if 0
         QFile f(QStringLiteral("session_create_%1.bin").arg(QDateTime::currentMSecsSinceEpoch()));
         if (f.open(QIODevice::WriteOnly)) {
             f.write(req.body());
