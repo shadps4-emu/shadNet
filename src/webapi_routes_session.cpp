@@ -333,11 +333,11 @@ void SendSessionInvitationEvent(SharedState& shared, const QString& dataType, in
             b.insert(QStringLiteral("fromUser"), fromUser);
             body = QJsonDocument(b).toJson(QJsonDocument::Compact);
         }
-        const QByteArray pkt = ClientSession::BuildNotification(
-            NotificationType::WebApiPushEvent,
-            ClientSession::BuildWebApiPushPayload(QStringLiteral("sessionInvitation"), 0, dataType,
-                                                  body, fromNpid, it->npid, extd, fromUserId,
-                                                  toId));
+        const QByteArray pkt =
+            ClientSession::BuildNotification(NotificationType::WebApiPushEvent,
+                                             ClientSession::BuildWebApiPushPayload(
+                                                 QStringLiteral("sessionInvitation"), 0, dataType,
+                                                 body, fromNpid, it->npid, extd, fromUserId, toId));
         it->send(pkt);
     }
 }
