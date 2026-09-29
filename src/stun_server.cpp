@@ -5,28 +5,19 @@
 #include "stream_extractor.h"
 #include "stun_server.h"
 
-// Must match the client's SIGNALING_VPORT_NBO / VPORT_HEADER_SIZE
-static constexpr uint16_t SIGNALING_VPORT_NBO = 0xFFFF;
-static constexpr int VPORT_HEADER_SIZE = 4;
+// shadPS4 sends signaling as a PS4 P2P datagram from and to vport 0xFFFF:
+//   [0xFF][0x80 | 3][src vport FFFF][dst vport FFFF][payload]
+// Replies use the same header.
+static const QByteArray SIGNALING_HEADER("\xFF\x83\xFF\xFF\xFF\xFF", 6);
 
-static QByteArray FrameSignaling(const QByteArray& payload) {
-    QByteArray framed;
-    framed.reserve(VPORT_HEADER_SIZE + payload.size());
-    framed.append(reinterpret_cast<const char*>(&SIGNALING_VPORT_NBO), 2);
-    framed.append(reinterpret_cast<const char*>(&SIGNALING_VPORT_NBO), 2);
-    framed.append(payload);
-    return framed;
+static QByteArray StripSignalingHeader(const QByteArray& data) {
+    if (!data.startsWith(SIGNALING_HEADER))
+        return {}; // not a signaling packet
+    return data.mid(SIGNALING_HEADER.size());
 }
 
-static QByteArray StripVportHeader(const QByteArray& data) {
-    if (data.size() < VPORT_HEADER_SIZE)
-        return {};
-    uint16_t src_vp, dst_vp;
-    memcpy(&src_vp, data.constData(), 2);
-    memcpy(&dst_vp, data.constData() + 2, 2);
-    if (src_vp != SIGNALING_VPORT_NBO || dst_vp != SIGNALING_VPORT_NBO)
-        return {}; // not a signaling packet
-    return data.mid(VPORT_HEADER_SIZE);
+static QByteArray FrameSignaling(const QByteArray& payload) {
+    return SIGNALING_HEADER + payload;
 }
 
 StunServer::StunServer(SharedState* shared, QObject* parent)
@@ -55,8 +46,7 @@ void StunServer::OnReadyRead() {
         if (raw.isEmpty())
             continue;
 
-        // Strip signaling vport header
-        QByteArray data = StripVportHeader(raw);
+        QByteArray data = StripSignalingHeader(raw);
         if (data.isEmpty())
             continue;
 

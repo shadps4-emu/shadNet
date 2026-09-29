@@ -47,7 +47,9 @@ Set in `shadnet.cfg`. The STUN server binds to the same `Host` address as the TC
 
 ## STUN Server Protocol
 
-The STUN server communicates over raw UDP datagrams. A signaling vport header is stripped first; the remaining payload starts with a 1-byte command identifier. IP addresses are 4 bytes in **network byte order**; ports are 2 bytes in network byte order. NP IDs are 16 bytes, null-padded.
+The STUN server communicates over raw UDP datagrams. A signaling header is stripped first; the remaining payload starts with a 1-byte command identifier.
+
+shadPS4 frames signaling as a PS4 P2P datagram from and to vport `0xFFFF` (6 bytes): `FF 83 FF FF FF FF`. Replies use the same header. Datagrams without it are ignored. IP addresses are 4 bytes in **network byte order**; ports are 2 bytes in network byte order. NP IDs are 16 bytes, null-padded.
 
 Only one command is handled (`0x01`). Unknown commands are ignored.
 
