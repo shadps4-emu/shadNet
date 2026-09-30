@@ -192,6 +192,17 @@ QHttpServerResponse HandlePresenceWrite(Database& db, SharedState& shared, const
         events.append({QStringLiteral("np:service:presence:gameData"), body});
     }
 
+    {
+        QStringList types, names;
+        for (const auto& ev : events)
+            types << ev.first.section(QLatin1Char(':'), -1);
+        for (const auto& r : recipients)
+            names << std::get<0>(r);
+        qInfo().noquote() << "WebAPI:" << leaf << "from" << auth.npid << "events ["
+                          << types.join(QLatin1Char(',')) << "] to ["
+                          << names.join(QLatin1Char(',')) << "] comId"
+                          << (updaterComId.isEmpty() ? QStringLiteral("unknown") : updaterComId);
+    }
     static const QString kInGamePresence = QStringLiteral("inGamePresence");
     for (const auto& ev : events) {
         for (const auto& [rcptNpid, rcptSend, rcptId] : recipients) {

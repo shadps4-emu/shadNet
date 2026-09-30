@@ -1128,6 +1128,23 @@ QHttpServerResponse HandleFriendsSessions(Database& db, SharedState& shared,
     qInfo() << "WebAPI: friends sessions ->" << arr.size();
     return JsonOk(body);
 }
+// Marks userId's unused invitations to sessionId as used once they've joined it. The client
+// doesn't do it on accept, since the title still has to read the invitation data; titles that
+// never PUT usedFlag would otherwise keep their invitations (and private-session access) open.
+// Callers must hold sessionsLock for writing. Returns how many were marked.
+int MarkInvitationsUsedOnJoin(SharedState& shared, const QString& sessionId, int64_t userId) {
+    const qint64 nowMs = QDateTime::currentMSecsSinceEpoch();
+    int marked = 0;
+    for (auto it = shared.invitations.begin(); it != shared.invitations.end(); ++it) {
+        auto& inv = it.value();
+        if (inv.toUserId != userId || inv.sessionId != sessionId || inv.used)
+            continue;
+        inv.used = true;
+        inv.updatedAt = nowMs;
+        ++marked;
+    }
+    return marked;
+}
 
 // POST /v1/sessions/<arg>/members -- join a session. index=[0-63] (default 0), priority (default
 // 49). A user holds at most one session per index, so joining at an index already
@@ -1227,6 +1244,9 @@ QHttpServerResponse HandleSessionJoin(Database& db, SharedState& shared, const Q
         m.priority = priority;
         m.joinedAt = QDateTime::currentMSecsSinceEpoch();
         s.members.append(m);
+        if (const int marked = MarkInvitationsUsedOnJoin(shared, sessionId, *auth.userId))
+            qInfo() << "WebAPI:" << marked << "invitation(s) to" << sessionId
+                    << "marked used by join of" << auth.npid;
         notify = s.sendNotificationFlag;
         if (notify)
             for (const auto& mem : s.members)
