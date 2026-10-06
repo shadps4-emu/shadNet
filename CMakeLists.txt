@@ -39,6 +39,12 @@ add_custom_command(
 )
 
 set(SOURCES
+    src/worlds_service.h
+    src/worlds_service.cpp
+    common/worlds/worldsconfig.h
+    common/worlds/worldsconfig.cpp
+    common/worlds/worldsstore.h
+    common/worlds/worldsstore.cpp
     src/main.cpp
     src/config.cpp
     src/config.h
@@ -106,6 +112,7 @@ set(SOURCES
 add_executable(shadnet ${SOURCES})
 
 target_include_directories(shadnet PRIVATE
+    common/worlds
     src
     "${PROTO_OUT}"                                    
     "${CMAKE_CURRENT_SOURCE_DIR}/externals/protobuf/src"

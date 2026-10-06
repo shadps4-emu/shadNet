@@ -25,7 +25,10 @@
 #include "stream_extractor.h"
 
 // Shared state visible to all sessions (thread-safe with locks)
+class WorldsService;
+
 struct SharedState {
+    WorldsService* worlds = nullptr;
     ConfigManager* config;
     ScoreCache* scoreCache = nullptr;
     ScoreFiles* scoreFiles = nullptr;

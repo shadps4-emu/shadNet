@@ -101,11 +101,12 @@ Defaults bind to `127.0.0.1`: TCP `31313` for the game protocol, `31315` for
 the WebAPI, `31320` for stats, and `31350` for the admin API. UDP signaling
 is disabled by default; set `Matching2Enabled=true` to start UDP `31314`.
 
-### Using the member manager
+### Using shadNet Toolbox
 
-The `membertool` directory contains a small Qt GUI for adding and removing
-accounts. Open it as a separate CMake project and build
-`shadnet-member-manager` with your Qt kit (Core, Sql, and Widgets).
+The `membertool` directory contains **shadNet Toolbox**, a Qt application for
+local server tools, including account management and Worlds configuration.
+Open it as a separate CMake project and build `shadnet-toolbox` with your Qt kit
+(Core, Sql, Widgets, and Network).
 On Windows, copy its Qt runtime files with `windeployqt6.exe` as above.
 
 Stop the server, open the tool, and choose the server's `db/shadnet.db`.
@@ -114,6 +115,66 @@ uses `<username>@shadps4.local` for the email, and writes the account to the
 database. Copy the login details before closing. To remove an account,
 select it in the list and click **Remove selected member**. Restart the
 server when finished.
+
+### Editing and reloading Worlds
+
+In shadNet Toolbox, click **Worlds configuration...** and select the
+server's `worlds.cfg`. This works independently of opening an accounts database.
+You can also open the editor directly:
+
+```bash
+shadnet-toolbox --worlds /path/to/server/worlds.cfg
+```
+
+Use **Add**, **Edit**, and **Remove** in the **Worlds** and **Title groups**
+tables. The tool generates the config syntax, checks numeric ranges and prevents
+duplicate entries. Generated files replace original comments and whitespace.
+Hand editing remains available in a text editor.
+
+- **Save only** writes `worlds.cfg` without changing the active configuration.
+- **Save & reload worlds** writes and activates the draft without restarting.
+- **Reload saved worlds** activates the saved file, leaving unsaved edits in the editor.
+- **Refresh open file** reloads the selected file; discarding a draft requires confirmation.
+
+The local editor uses a named pipe on Windows or a Unix-domain socket on Unix,
+restricted to the server's OS user and keyed to the selected file's canonical
+path. Run the tool under the same OS account as the server. No admin API,
+remote address or network credentials are used. When the server is stopped,
+the editor can save files and create a new config; reload is unavailable until
+the server is started and the editor reads the file again. A running server
+with an unavailable local socket blocks direct writes. Account editing still
+requires stopping the server as described above; Worlds editing does not.
+
+The server also exposes these Worlds endpoints through its admin API. Requests
+use a Bearer session and the configured `X-Admin-Api-Key`. Each route addresses
+the server's `worlds.cfg`; requests cannot select arbitrary file paths:
+
+| Method and route | Request / result |
+| --- | --- |
+| `GET /admin/v1/worlds/config` | Snapshot: `content`, `revision`, `activeContent`, `activeRevision`, `canReload`, `exists`. |
+| `PUT /admin/v1/worlds/config` | `{content, revision, reload}` saves, optionally activates, and returns a snapshot. |
+| `POST /admin/v1/worlds/reload` | `{revision}` activates that saved revision and returns a snapshot. |
+
+The API rechecks current admin status for each request and audits mutations.
+Revisions are SHA-256 file hashes, or `missing`. Stale revisions return `409`;
+invalid configuration or occupied-world changes return `422`. Editors preserve
+drafts on failure and require a fresh read after conflicts or uncertain results.
+
+The server validates the complete config at startup and before changes. Invalid
+startup files now fail startup with a line error instead of partially loading.
+Files must be UTF-8 and at most 512 KiB. Saves create `worlds.cfg.bak` and use
+atomic replacement. Cooperating editors serialize writes through a file lock;
+avoid simultaneous text-editor writes because external editors do not honor it.
+
+Reload swaps configuration maps while retaining rooms, indexes, sessions and
+sockets. World-list requests see the updated settings immediately after reload.
+Title-group changes apply to subsequent logins because existing sessions retain
+their original matching group. Worlds containing rooms cannot be removed or
+have their world/server IDs changed during reload. Groups without explicit
+worlds retain the fallback world-list behavior. Installing this server update
+requires one initial restart; later Worlds changes can be reloaded live.
+
+The parser, file storage and editor components live in `common/worlds`.
 
 ### Using the sample client
 

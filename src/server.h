@@ -16,6 +16,8 @@
 #include "stats_server.h"
 #include "stun_server.h"
 
+class WorldsService;
+
 class ShadNetServer : public QObject {
     Q_OBJECT
 public:
@@ -38,11 +40,11 @@ private:
     void SpawnSession(QTcpSocket* socket, bool isSsl);
     bool InitScoreSystem();
     bool LoadScoreboardsCfg(const QString& path);
-    bool LoadWorldsCfg(const QString& path);
 
     ConfigManager* m_config = nullptr;
     QTcpServer* m_unsecuredServer = nullptr; // plain TCP connections
     SharedState m_shared;
+    std::unique_ptr<WorldsService> m_worlds;
     QString m_dbPath;
 
     std::unique_ptr<ScoreCache> m_scoreCache;

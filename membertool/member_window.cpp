@@ -1,6 +1,10 @@
 // SPDX-FileCopyrightText: Copyright 2026 shadNet Project
 // SPDX-License-Identifier: GPL-2.0-or-later
+#include <QDir>
+#include <QFileInfo>
+#include "localworldsbackend.h"
 #include "member_window.h"
+#include "worldsdialog.h"
 
 #include <QApplication>
 #include <QClipboard>
@@ -18,12 +22,29 @@
 #include <QVBoxLayout>
 
 MemberWindow::MemberWindow(const QString& databasePath, QWidget* parent) : QWidget(parent) {
-    setWindowTitle("shadNet Member Manager");
+    setWindowTitle("shadNet Toolbox");
     resize(760, 660);
     auto* layout = new QVBoxLayout(this);
     auto* note = new QLabel("Stop shadnet before changing accounts. Restart it when you're done.");
     note->setWordWrap(true);
     layout->addWidget(note);
+
+    auto* worldsButton = new QPushButton("Worlds configuration...");
+    worldsButton->setObjectName("openWorlds");
+    layout->addWidget(worldsButton);
+    connect(worldsButton, &QPushButton::clicked, this, [this] {
+        QString suggested = QSettings().value("worldsPath").toString();
+        if (suggested.isEmpty() && m_store.IsOpen())
+            suggested = QFileInfo(m_store.Path()).dir().absoluteFilePath("../worlds.cfg");
+        if (suggested.isEmpty())
+            suggested = QDir(QCoreApplication::applicationDirPath()).filePath("worlds.cfg");
+        QFileDialog picker(this, "Open local worlds.cfg", suggested);
+        picker.setFileMode(QFileDialog::AnyFile);
+        picker.setAcceptMode(QFileDialog::AcceptOpen);
+        picker.setNameFilter("Worlds configuration (worlds.cfg);;Configuration files (*.cfg)");
+        if (picker.exec() == QDialog::Accepted && !picker.selectedFiles().isEmpty())
+            OpenWorlds(picker.selectedFiles().first());
+    });
 
     auto* databaseRow = new QHBoxLayout;
     databaseRow->addWidget(new QLabel("Database:"));
@@ -213,4 +234,10 @@ void MemberWindow::RemoveMember() {
     m_copy->setEnabled(false);
     Refresh();
     m_status->setText(warning.isEmpty() ? username + " removed." : warning);
+}
+
+void MemberWindow::OpenWorlds(const QString& path) {
+    QSettings().setValue("worldsPath", QFileInfo(path).absoluteFilePath());
+    LocalWorldsBackend backend(path);
+    WorldsDialog(&backend, this).exec();
 }

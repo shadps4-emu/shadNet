@@ -9,3 +9,5 @@
 .idea/*
 clientsample/build
 cmake-build-debug/
+tests/*
+membertool/tests/*

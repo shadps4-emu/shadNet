@@ -15,6 +15,7 @@ class MemberWindow : public QWidget {
 public:
     explicit MemberWindow(const QString& databasePath = {}, QWidget* parent = nullptr);
     bool OpenDatabase(const QString& path);
+    void OpenWorlds(const QString& path);
 
 private:
     void Refresh();

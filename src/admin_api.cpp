@@ -24,6 +24,7 @@
 #include "score_files.h"
 #include "trophy_config.h"
 #include "version.h"
+#include "worlds_service.h"
 
 namespace {
 
@@ -169,7 +170,7 @@ bool AdminApiServer::Start(ConfigManager* config, const QString& dbPath, SharedS
             << "\n"
                "  ┌──────────────────────────────────────────────────────────────────────┐\n"
                "  │ A new admin API key was generated and saved to shadnet.cfg.          │\n"
-               "  │ Enter it in the admin tool to sign in. It is not shown again.        │\n"
+               "  │ Use this key with admin API requests. It is not shown again.        │\n"
                "  └──────────────────────────────────────────────────────────────────────┘\n"
                "\n    AdminApiKey = "
             << generated << "\n";
@@ -302,9 +303,9 @@ QHttpServerResponse AdminApiServer::ApiKeyError(const QHttpServerRequest& req) c
     qWarning().nospace().noquote() << "AdminApi: rejected request from " << PeerKey(req)
                                    << " — API key " << (absent ? "not supplied" : "did not match");
     return JsonError(QHttpServerResponse::StatusCode::Unauthorized, ERR_BAD_API_KEY,
-                     QStringLiteral("This server requires an admin API key. Set it in the "
-                                    "admin tool, or ask a server operator for the value of "
-                                    "AdminApiKey in shadnet.cfg."));
+                     QStringLiteral("This server requires an admin API key in the X-Admin-Api-Key "
+                                    "header. Ask a server operator for the value of AdminApiKey "
+                                    "in shadnet.cfg."));
 }
 
 QHttpServerResponse AdminApiServer::AuthError(const QHttpServerRequest& req) const {
@@ -425,6 +426,62 @@ QJsonObject AdminApiServer::UserRowToJson(const AdminUserRow& row) const {
 // ── Routes ────────────────────────────────────────────────────────────────────
 
 void AdminApiServer::RegisterRoutes() {
+    auto worldsRequest = [this](const QHttpServerRequest& req,
+                                const QString& operation) -> QHttpServerResponse {
+        const auto session = Authenticate(req);
+        if (!session)
+            return AuthError(req);
+        const auto actor = m_db->GetUserRow(session->userId);
+        if (!actor || !actor->admin || actor->banned)
+            return JsonError(QHttpServerResponse::StatusCode::Forbidden, ERR_NOT_ADMIN,
+                             QStringLiteral("Current admin rights are required."));
+        if (!m_shared || !m_shared->worlds)
+            return JsonError(QHttpServerResponse::StatusCode::ServiceUnavailable, ERR_INTERNAL,
+                             QStringLiteral("Worlds configuration is unavailable."));
+        if (req.body().size() > kMaxWorldsBytes * 6 + 2048)
+            return JsonError(QHttpServerResponse::StatusCode::PayloadTooLarge, ERR_BAD_REQUEST,
+                             QStringLiteral("Worlds request is too large."));
+        QJsonObject body;
+        if (operation != QLatin1String("read")) {
+            QString error;
+            const auto parsed = ParseJsonBody(req, error);
+            if (!parsed)
+                return JsonError(QHttpServerResponse::StatusCode::BadRequest, ERR_BAD_REQUEST,
+                                 error);
+            body = *parsed;
+        }
+        const auto result = m_shared->worlds->Handle(operation, body);
+        if (operation != QLatin1String("read")) {
+            const QString action = QStringLiteral("worlds_") + operation +
+                                   (result.ok ? QString() : QStringLiteral("_failed"));
+            const QString detail =
+                result.ok ? QStringLiteral("saved=%1 active=%2")
+                                .arg(result.snapshot.revision, result.snapshot.activeRevision)
+                          : result.message;
+            if (!m_db->AddAuditEntry(session->userId, session->npid, action, 0,
+                                     QStringLiteral("worlds.cfg"), detail))
+                qWarning() << "Could not persist worlds audit:" << m_db->lastError();
+            qInfo() << "Admin worlds" << operation << "by" << session->npid
+                    << (result.ok ? "succeeded" : "failed") << detail;
+        }
+        if (!result.ok)
+            return JsonError(static_cast<QHttpServerResponse::StatusCode>(result.status),
+                             result.status * 10, result.message);
+        return JsonOk(worldsSnapshotJson(result.snapshot));
+    };
+    m_http->route("/admin/v1/worlds/config", QHttpServerRequest::Method::Get,
+                  [worldsRequest](const QHttpServerRequest& req) {
+                      return worldsRequest(req, QStringLiteral("read"));
+                  });
+    m_http->route("/admin/v1/worlds/config", QHttpServerRequest::Method::Put,
+                  [worldsRequest](const QHttpServerRequest& req) {
+                      return worldsRequest(req, QStringLiteral("save"));
+                  });
+    m_http->route("/admin/v1/worlds/reload", QHttpServerRequest::Method::Post,
+                  [worldsRequest](const QHttpServerRequest& req) {
+                      return worldsRequest(req, QStringLiteral("reload"));
+                  });
+
     m_http->route(
         "/admin/v1/status", QHttpServerRequest::Method::Get, [this](const QHttpServerRequest&) {
             QJsonObject body;

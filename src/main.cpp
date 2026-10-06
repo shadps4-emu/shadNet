@@ -55,7 +55,7 @@ int main(int argc, char* argv[]) {
         qInfo() << "Member API disabled (MemberApiEnabled=false)";
     }
 
-    // Start the admin API the shadNet admin tool talks to.
+    // Start the administrative HTTP API.
     AdminApiServer adminApi;
     if (config.IsAdminApiEnabled()) {
         if (!adminApi.Start(&config, "db/shadnet.db", &server.Shared())) {
