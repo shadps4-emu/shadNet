@@ -1214,14 +1214,9 @@ QHttpServerResponse HandleSessionJoin(Database& db, SharedState& shared, const Q
                 return QHttpServerResponse{QHttpServerResponse::StatusCode::NoContent};
             }
         }
-        // A locked session is closed to new members (max reached, join window ended, etc.);
-        // an already-joined member updating priority above is unaffected. The POST Member spec
-        // lists no dedicated 'locked' code, so this reuses SESSION_NOT_PERMITTED (2114560).
-        if (s.sessionLockFlag) {
-            return JsonError(QHttpServerResponse::StatusCode::Forbidden, SESSION_NOT_PERMITTED,
-                             QStringLiteral("The session is locked"));
-        }
-        // Not a member -> capacity check (min(sessionMaxUser, 256)).
+        if (s.sessionLockFlag)
+            qInfo() << "WebAPI: joining locked session" << sessionId << "by" << auth.npid
+                    << "(lock flag is informational)";
         const int maxUsers =
             (s.sessionMaxUser > 0 && s.sessionMaxUser < 256) ? s.sessionMaxUser : 256;
         if (s.members.size() >= maxUsers) {
