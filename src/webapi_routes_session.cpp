@@ -567,6 +567,24 @@ QHttpServerResponse HandleMultiUserSessions(Database& db, SharedState& shared,
     return JsonOk(body);
 }
 
+QHash<QString, QString> ParseLocalized(const QJsonValue& v, const QString& textKey) {
+    QHash<QString, QString> out;
+    if (v.isArray()) {
+        for (const QJsonValue& e : v.toArray()) {
+            const QJsonObject o = e.toObject();
+            const QString lang = o.value(QStringLiteral("npLanguage")).toString();
+            if (lang.isEmpty())
+                continue;
+            out.insert(lang, o.value(textKey).toString());
+        }
+    } else if (v.isObject()) {
+        const QJsonObject lo = v.toObject();
+        for (auto l = lo.constBegin(); l != lo.constEnd(); ++l)
+            out.insert(l.key(), l.value().toString());
+    }
+    return out;
+}
+
 QHttpServerResponse HandleSessionCreate(Database& db, SharedState& shared,
                                         const QHttpServerRequest& req) {
     auto auth = WebApiAuth::Authenticate(req, db);
@@ -671,7 +689,11 @@ QHttpServerResponse HandleSessionCreate(Database& db, SharedState& shared,
     }
 
     const int index = obj.value(QStringLiteral("index")).toInt(0);
-    const int priority = obj.value(QStringLiteral("priority")).toInt(0);
+    const int priority = obj.value(QStringLiteral("priority")).toInt(49);
+    if (index < 0 || index > 63) {
+        return JsonError(QHttpServerResponse::StatusCode::BadRequest, WEBAPI_INVALID_BODY_PARAM,
+                         QStringLiteral("'index' must be in the range 0-63"));
+    }
     const QString sessionId =
         QStringLiteral("001-") + QUuid::createUuid().toString(QUuid::WithoutBraces);
     const qint64 now = QDateTime::currentMSecsSinceEpoch();
@@ -682,18 +704,10 @@ QHttpServerResponse HandleSessionCreate(Database& db, SharedState& shared,
     s.ownerNpid = auth.npid;
     s.sessionName = obj.value(QStringLiteral("sessionName")).toString();
     s.sessionStatus = obj.value(QStringLiteral("sessionStatus")).toString();
-    for (auto it = obj.constBegin(); it != obj.constEnd(); ++it) {
-        // localizedSessionNames / localizedSessionStatus are {npLanguage: text} objects.
-        if (it.key() == QStringLiteral("localizedSessionNames") && it.value().isObject()) {
-            const QJsonObject lo = it.value().toObject();
-            for (auto l = lo.constBegin(); l != lo.constEnd(); ++l)
-                s.localizedSessionNames.insert(l.key(), l.value().toString());
-        } else if (it.key() == QStringLiteral("localizedSessionStatus") && it.value().isObject()) {
-            const QJsonObject lo = it.value().toObject();
-            for (auto l = lo.constBegin(); l != lo.constEnd(); ++l)
-                s.localizedSessionStatus.insert(l.key(), l.value().toString());
-        }
-    }
+    s.localizedSessionNames = ParseLocalized(obj.value(QStringLiteral("localizedSessionNames")),
+                                             QStringLiteral("sessionName"));
+    s.localizedSessionStatus = ParseLocalized(obj.value(QStringLiteral("localizedSessionStatus")),
+                                              QStringLiteral("sessionStatus"));
     s.sessionType = sessionType;
     s.sessionPrivacy = sessionPrivacy.isEmpty() ? QStringLiteral("public") : sessionPrivacy;
     s.sessionMaxUser = sessionMaxUser;
@@ -758,41 +772,25 @@ QHttpServerResponse HandleSessionUpdate(Database& db, SharedState& shared, const
         return SessionPermissionResponse(err);
     const QString oldPrivacy = s.sessionPrivacy;
 
-    // sessionName / localizedSessionNames: replaced together when either is present.
     if (obj.contains(QStringLiteral("sessionName")) ||
         obj.contains(QStringLiteral("localizedSessionNames"))) {
         s.sessionName = obj.value(QStringLiteral("sessionName")).toString();
-        s.localizedSessionNames.clear();
-        const QJsonObject lo = obj.value(QStringLiteral("localizedSessionNames")).toObject();
-        for (auto l = lo.constBegin(); l != lo.constEnd(); ++l)
-            s.localizedSessionNames.insert(l.key(), l.value().toString());
+        s.localizedSessionNames = ParseLocalized(obj.value(QStringLiteral("localizedSessionNames")),
+                                                 QStringLiteral("sessionName"));
     }
-    // sessionStatus / localizedSessionStatus: same paired-replacement rule.
     if (obj.contains(QStringLiteral("sessionStatus")) ||
         obj.contains(QStringLiteral("localizedSessionStatus"))) {
         s.sessionStatus = obj.value(QStringLiteral("sessionStatus")).toString();
-        s.localizedSessionStatus.clear();
-        const QJsonObject lo = obj.value(QStringLiteral("localizedSessionStatus")).toObject();
-        for (auto l = lo.constBegin(); l != lo.constEnd(); ++l)
-            s.localizedSessionStatus.insert(l.key(), l.value().toString());
+        s.localizedSessionStatus = ParseLocalized(
+            obj.value(QStringLiteral("localizedSessionStatus")), QStringLiteral("sessionStatus"));
     }
-    // Independent fields: updated only when present. sessionType and sendNotificationFlag are
-    // fixed at creation and not updatable here.
     if (obj.contains(QStringLiteral("sessionPrivacy")))
         s.sessionPrivacy = obj.value(QStringLiteral("sessionPrivacy")).toString();
     if (obj.contains(QStringLiteral("sessionMaxUser")))
         s.sessionMaxUser = obj.value(QStringLiteral("sessionMaxUser")).toInt();
     if (obj.contains(QStringLiteral("sessionLockFlag")))
         s.sessionLockFlag = obj.value(QStringLiteral("sessionLockFlag")).toBool();
-    if (obj.contains(QStringLiteral("availablePlatforms"))) {
-        QStringList p;
-        for (const auto& v : obj.value(QStringLiteral("availablePlatforms")).toArray())
-            p.append(v.toString());
-        if (!p.isEmpty())
-            s.availablePlatforms = p;
-    }
 
-    // Session Information Updated event to members when the privacy setting changed (gated).
     const bool notify = s.sendNotificationFlag && (s.sessionPrivacy != oldPrivacy);
     QList<int64_t> recipients;
     if (notify)
@@ -892,8 +890,10 @@ QHttpServerResponse HandleSessionGet(Database& db, SharedState& shared, const QS
         body.insert(QStringLiteral("sessionPrivacy"), snap.privacy);
         body.insert(QStringLiteral("sessionMaxUser"), snap.maxUser);
         body.insert(QStringLiteral("sessionType"), snap.type);
-        body.insert(QStringLiteral("sessionName"), name);
-        body.insert(QStringLiteral("sessionStatus"), status);
+        if (!name.isEmpty())
+            body.insert(QStringLiteral("sessionName"), name);
+        if (!status.isEmpty())
+            body.insert(QStringLiteral("sessionStatus"), status);
         body.insert(QStringLiteral("sessionCreateTimestamp"), snap.createdAt);
         QJsonObject creator;
         creator.insert(QStringLiteral("onlineId"),
@@ -1214,14 +1214,9 @@ QHttpServerResponse HandleSessionJoin(Database& db, SharedState& shared, const Q
                 return QHttpServerResponse{QHttpServerResponse::StatusCode::NoContent};
             }
         }
-        // A locked session is closed to new members (max reached, join window ended, etc.);
-        // an already-joined member updating priority above is unaffected. The POST Member spec
-        // lists no dedicated 'locked' code, so this reuses SESSION_NOT_PERMITTED (2114560).
-        if (s.sessionLockFlag) {
-            return JsonError(QHttpServerResponse::StatusCode::Forbidden, SESSION_NOT_PERMITTED,
-                             QStringLiteral("The session is locked"));
-        }
-        // Not a member -> capacity check (min(sessionMaxUser, 256)).
+        if (s.sessionLockFlag)
+            qInfo() << "WebAPI: joining locked session" << sessionId << "by" << auth.npid
+                    << "(lock flag is informational)";
         const int maxUsers =
             (s.sessionMaxUser > 0 && s.sessionMaxUser < 256) ? s.sessionMaxUser : 256;
         if (s.members.size() >= maxUsers) {
@@ -1264,16 +1259,16 @@ QHttpServerResponse HandleSessionJoin(Database& db, SharedState& shared, const Q
 }
 
 // GET /v1/sessions/<arg>/sessionData -- the session's binary data blob (set at create), returned
-// as application/octet-stream (up to 1 MiB). Access: the caller's platform must be among the
-// session's availablePlatforms, and a private session is readable by a participant or
-// invitee; otherwise 2114560. Changeable session data is a separate endpoint.
+// as application/octet-stream (up to 1 MiB).
+// GET /v1/sessions/<arg>/changeableSessionData uses the same handler with changeable=true and
+// returns the changeable blob (up to 1 KiB) under the same access rules.
 QHttpServerResponse HandleSessionGetData(Database& db, SharedState& shared,
-                                         const QString& sessionId, const QHttpServerRequest& req) {
+                                         const QString& sessionId, const QHttpServerRequest& req,
+                                         bool changeable = false) {
     auto auth = WebApiAuth::Authenticate(req, db);
     if (!auth.userId.has_value()) {
         return std::move(auth.errorResponse);
     }
-    // Caller's platform (for the availablePlatforms check); empty if offline.
     QString callerPlatform;
     {
         QReadLocker lk(&shared.clientsLock);
@@ -1294,7 +1289,7 @@ QHttpServerResponse HandleSessionGetData(Database& db, SharedState& shared,
         if (it != shared.sessions.constEnd()) {
             found = true;
             const auto& sn = it.value();
-            data = sn.sessionData;
+            data = changeable ? sn.changeableSessionData : sn.sessionData;
             platforms = sn.availablePlatforms;
             privacy = sn.sessionPrivacy;
             for (const auto& m : sn.members) {
@@ -1322,9 +1317,40 @@ QHttpServerResponse HandleSessionGetData(Database& db, SharedState& shared,
         return JsonError(QHttpServerResponse::StatusCode::Forbidden, SESSION_NOT_PERMITTED,
                          QStringLiteral("Not permitted to access the session"));
     }
-    qInfo() << "WebAPI: session data for" << sessionId << "->" << data.size() << "bytes";
+    qInfo() << "WebAPI:" << (changeable ? "changeable session data" : "session data") << "for"
+            << sessionId << "->" << data.size() << "bytes";
     return QHttpServerResponse(QByteArrayLiteral("application/octet-stream"), data,
                                QHttpServerResponse::StatusCode::Ok);
+}
+
+// PUT /v1/sessions/<arg>/changeableSessionData -- replace the session's changeable data blob
+QHttpServerResponse HandleSessionSetChangeableData(Database& db, SharedState& shared,
+                                                   const QString& sessionId,
+                                                   const QHttpServerRequest& req) {
+    auto auth = WebApiAuth::Authenticate(req, db);
+    if (!auth.userId.has_value()) {
+        return std::move(auth.errorResponse);
+    }
+    const QByteArray body = req.body();
+    if (body.size() > kChangeableMax) {
+        return JsonError(QHttpServerResponse::StatusCode::BadRequest, WEBAPI_TOO_LARGE_BODY,
+                         QStringLiteral("changeableSessionData exceeds the size limit"));
+    }
+
+    QWriteLocker lk(&shared.sessionsLock);
+    auto it = shared.sessions.find(sessionId);
+    if (it == shared.sessions.end()) {
+        return JsonError(QHttpServerResponse::StatusCode::NotFound, WEBAPI_RESOURCE_NOT_FOUND,
+                         QStringLiteral("Session not found"));
+    }
+    auto& s = it.value();
+    if (const quint32 err = SessionPermissionError(s, *auth.userId))
+        return SessionPermissionResponse(err);
+
+    s.changeableSessionData = body;
+    qInfo() << "WebAPI: changeable session data set for" << sessionId << "by" << auth.npid << "->"
+            << body.size() << "bytes";
+    return QHttpServerResponse{QHttpServerResponse::StatusCode::NoContent};
 }
 
 // DELETE /v1/sessions/<arg>/members/<arg> -- leave a session. The member segment is "me" (or the
@@ -1863,6 +1889,20 @@ void RegisterSessionRoutes(QHttpServer& http, Database& db, SharedState& shared)
                [&db, &shared](const QString& sessionId,
                               const QHttpServerRequest& req) -> QHttpServerResponse {
                    return HandleSessionGetData(db, shared, sessionId, req);
+               });
+
+    // GET /v1/sessions/<arg>/changeableSessionData -- the session's changeable data blob.
+    http.route("/v1/sessions/<arg>/changeableSessionData", QHttpServerRequest::Method::Get,
+               [&db, &shared](const QString& sessionId,
+                              const QHttpServerRequest& req) -> QHttpServerResponse {
+                   return HandleSessionGetData(db, shared, sessionId, req, true);
+               });
+
+    // PUT /v1/sessions/<arg>/changeableSessionData -- replace the changeable data blob.
+    http.route("/v1/sessions/<arg>/changeableSessionData", QHttpServerRequest::Method::Put,
+               [&db, &shared](const QString& sessionId,
+                              const QHttpServerRequest& req) -> QHttpServerResponse {
+                   return HandleSessionSetChangeableData(db, shared, sessionId, req);
                });
 
     // DELETE /v1/sessions/<arg>/members/<arg> -- leave a session.
