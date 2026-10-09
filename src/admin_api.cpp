@@ -20,8 +20,10 @@
 #include <QUrlQuery>
 
 #include "client_session.h" // SharedState
+#include "proto_utils.h"
 #include "score_cache.h"
 #include "score_files.h"
+#include "shadnet.pb.h"
 #include "trophy_config.h"
 #include "version.h"
 #include "worlds_service.h"
@@ -121,6 +123,109 @@ bool SecretsEqual(const QByteArray& a, const QByteArray& b) {
 QString PeerKey(const QHttpServerRequest& req) {
     const QHostAddress addr = req.remoteAddress();
     return addr.isNull() ? QStringLiteral("unknown") : addr.toString();
+}
+
+const QString WebApiFriendDataType = QStringLiteral("np:service:friendlist:friend");
+
+template <typename T>
+QByteArray FriendNotifPayload(const T& msg) {
+    QByteArray buf;
+    appendProto(buf, msg);
+    return buf;
+}
+
+QList<QPair<QString, QString>> FriendExtd(const QString& friendNpid, int64_t friendAccountId,
+                                          const char* event) {
+    const QString ev = QString::fromLatin1(event);
+    QJsonObject trigger;
+    trigger.insert(QStringLiteral("friend"), friendNpid);
+    trigger.insert(QStringLiteral("event"), ev);
+    QJsonObject addl;
+    addl.insert(QStringLiteral("friendAccountId"), QString::number(friendAccountId));
+    addl.insert(QStringLiteral("event"), ev);
+    return {
+        {QStringLiteral("trigger"),
+         QString::fromUtf8(QJsonDocument(trigger).toJson(QJsonDocument::Compact))},
+        {QStringLiteral("additionalTrigger"),
+         QString::fromUtf8(QJsonDocument(addl).toJson(QJsonDocument::Compact))},
+    };
+}
+
+void ApplyFriendChange(SharedState* shared, int64_t aId, const QString& aNpid, int64_t bId,
+                       const QString& bNpid, bool wasMutual, bool isMutual) {
+    if (!shared)
+        return;
+    struct Outgoing {
+        std::function<void(QByteArray)> send;
+        QByteArray packet;
+    };
+    QList<Outgoing> out;
+    {
+        QWriteLocker lk(&shared->clientsLock);
+        auto aIt = shared->clients.find(aId);
+        auto bIt = shared->clients.find(bId);
+        const bool aOnline = aIt != shared->clients.end();
+        const bool bOnline = bIt != shared->clients.end();
+
+        if (isMutual) {
+            if (aOnline)
+                aIt->friends.insert(bId, bNpid);
+            if (bOnline)
+                bIt->friends.insert(aId, aNpid);
+        } else {
+            if (aOnline)
+                aIt->friends.remove(bId);
+            if (bOnline)
+                bIt->friends.remove(aId);
+        }
+
+        const char* event = isMutual ? "add" : "remove";
+        auto queueFor = [&](decltype(aIt) it, bool online, int64_t selfId, const QString& selfNpid,
+                            int64_t otherId, const QString& otherNpid, bool otherOnline) {
+            if (!online || !it->send)
+                return;
+            if (isMutual != wasMutual) {
+                if (isMutual) {
+                    shadnet::NotifyFriendNew n;
+                    n.set_npid(otherNpid.toStdString());
+                    n.set_online(otherOnline);
+                    out.append({it->send, ClientSession::BuildNotification(
+                                              NotificationType::FriendNew, FriendNotifPayload(n))});
+                } else {
+                    shadnet::NotifyFriendLost n;
+                    n.set_npid(otherNpid.toStdString());
+                    out.append(
+                        {it->send, ClientSession::BuildNotification(NotificationType::FriendLost,
+                                                                    FriendNotifPayload(n))});
+                }
+            }
+            out.append(
+                {it->send, ClientSession::BuildNotification(
+                               NotificationType::WebApiPushEvent,
+                               ClientSession::BuildWebApiPushPayload(
+                                   QString(), 0, WebApiFriendDataType, QByteArray(), QString(),
+                                   selfNpid, FriendExtd(otherNpid, otherId, event), 0, selfId))});
+        };
+        queueFor(aIt, aOnline, aId, aNpid, bId, bNpid, bOnline);
+        queueFor(bIt, bOnline, bId, bNpid, aId, aNpid, aOnline);
+    }
+    for (const Outgoing& o : out)
+        o.send(o.packet);
+}
+
+QJsonArray RelationshipArray(const QList<QPair<int64_t, QString>>& rows, SharedState* shared) {
+    QJsonArray arr;
+    std::optional<QReadLocker> lk;
+    if (shared)
+        lk.emplace(&shared->clientsLock);
+    for (const auto& r : rows) {
+        QJsonObject o;
+        o.insert(QStringLiteral("userId"), static_cast<qint64>(r.first));
+        o.insert(QStringLiteral("npid"), r.second);
+        o.insert(QStringLiteral("online"), shared && shared->clients.contains(r.first));
+        arr.append(o);
+    }
+    return arr;
 }
 
 } // namespace
@@ -1532,6 +1637,184 @@ void AdminApiServer::RegisterRoutes() {
             QJsonObject body;
             body.insert(QStringLiteral("deleted"), true);
             body.insert(QStringLiteral("comId"), comId);
+            return JsonOk(body);
+        });
+
+    // GET /admin/v1/users/<id>/friends — friends, pending requests both ways, and blocks.
+    m_http->route(
+        "/admin/v1/users/<arg>/friends", QHttpServerRequest::Method::Get,
+        [this](qint64 userId, const QHttpServerRequest& req) -> QHttpServerResponse {
+            const auto session = Authenticate(req);
+            if (!session)
+                return AuthError(req);
+            const auto target = m_db->GetUserRow(userId);
+            if (!target)
+                return JsonError(QHttpServerResponse::StatusCode::NotFound, ERR_NOT_FOUND,
+                                 QStringLiteral("No account has id %1.").arg(userId));
+
+            const UserRelationships rel = m_db->GetRelationships(userId);
+            QJsonObject body;
+            body.insert(QStringLiteral("userId"), static_cast<qint64>(target->userId));
+            body.insert(QStringLiteral("npid"), target->username);
+            body.insert(QStringLiteral("friends"), RelationshipArray(rel.friends, m_shared));
+            body.insert(QStringLiteral("requestsSent"),
+                        RelationshipArray(rel.friendRequestsSent, m_shared));
+            body.insert(QStringLiteral("requestsReceived"),
+                        RelationshipArray(rel.friendRequestsReceived, m_shared));
+            body.insert(QStringLiteral("blocked"), RelationshipArray(rel.blocked, m_shared));
+            return JsonOk(body);
+        });
+
+    // POST /admin/v1/users/<id>/friends — { npid } makes the two accounts friends on both
+    // sides at once (no request/accept step). A pending request either way is completed.
+    // Refused when either side has blocked the other: blocks are the player's choice.
+    m_http->route(
+        "/admin/v1/users/<arg>/friends", QHttpServerRequest::Method::Post,
+        [this](qint64 userId, const QHttpServerRequest& req) -> QHttpServerResponse {
+            const auto session = Authenticate(req);
+            if (!session)
+                return AuthError(req);
+            const auto actor = m_db->GetUserRow(session->userId);
+            if (!actor || !actor->admin || actor->banned)
+                return JsonError(QHttpServerResponse::StatusCode::Forbidden, ERR_NOT_ADMIN,
+                                 QStringLiteral("Current admin rights are required."));
+
+            QString parseError;
+            const auto bodyOpt = ParseJsonBody(req, parseError);
+            if (!bodyOpt)
+                return JsonError(QHttpServerResponse::StatusCode::BadRequest, ERR_BAD_REQUEST,
+                                 parseError);
+            const QString friendNpidIn =
+                bodyOpt->value(QStringLiteral("npid")).toString().trimmed();
+            if (friendNpidIn.isEmpty())
+                return JsonError(QHttpServerResponse::StatusCode::BadRequest, ERR_BAD_REQUEST,
+                                 QStringLiteral("Body must name the friend's \"npid\"."));
+
+            const auto target = m_db->GetUserRow(userId);
+            if (!target)
+                return JsonError(QHttpServerResponse::StatusCode::NotFound, ERR_NOT_FOUND,
+                                 QStringLiteral("No account has id %1.").arg(userId));
+            const auto friendIdOpt = m_db->GetUserId(friendNpidIn);
+            const auto other = friendIdOpt ? m_db->GetUserRow(*friendIdOpt) : std::nullopt;
+            if (!other)
+                return JsonError(QHttpServerResponse::StatusCode::NotFound, ERR_NOT_FOUND,
+                                 QStringLiteral("No account is called %1.").arg(friendNpidIn));
+            if (other->userId == target->userId)
+                return JsonError(QHttpServerResponse::StatusCode::BadRequest, ERR_BAD_REQUEST,
+                                 QStringLiteral("An account can't be its own friend."));
+
+            constexpr uint8_t F = static_cast<uint8_t>(FriendStatus::Friend);
+            constexpr uint8_t B = static_cast<uint8_t>(FriendStatus::Blocked);
+            const auto [res, rel] = m_db->GetRelStatus(target->userId, other->userId);
+            if (res == Database::RelResult::Error)
+                return JsonError(QHttpServerResponse::StatusCode::InternalServerError, ERR_INTERNAL,
+                                 QStringLiteral("Couldn't read the relationship. Check the "
+                                                "server log."));
+            const uint8_t cur1 = res == Database::RelResult::Ok ? rel.caller : 0;
+            const uint8_t cur2 = res == Database::RelResult::Ok ? rel.other : 0;
+            if (cur1 & B)
+                return JsonError(QHttpServerResponse::StatusCode::Conflict, ERR_CONFLICT,
+                                 QStringLiteral("%1 has blocked %2. They need to unblock first.")
+                                     .arg(target->username, other->username));
+            if (cur2 & B)
+                return JsonError(QHttpServerResponse::StatusCode::Conflict, ERR_CONFLICT,
+                                 QStringLiteral("%1 has blocked %2. They need to unblock first.")
+                                     .arg(other->username, target->username));
+            if ((cur1 & F) && (cur2 & F))
+                return JsonError(QHttpServerResponse::StatusCode::Conflict, ERR_CONFLICT,
+                                 QStringLiteral("%1 and %2 are already friends.")
+                                     .arg(target->username, other->username));
+
+            if (!m_db->SetRelStatus(target->userId, other->userId, cur1 | F, cur2 | F))
+                return JsonError(QHttpServerResponse::StatusCode::InternalServerError, ERR_INTERNAL,
+                                 QStringLiteral("The database rejected the change. Check the "
+                                                "server log."));
+
+            ApplyFriendChange(m_shared, target->userId, target->username, other->userId,
+                              other->username, /*wasMutual=*/false, /*isMutual=*/true);
+
+            m_db->AddAuditEntry(session->userId, session->npid, QStringLiteral("add_friend"),
+                                target->userId, target->username,
+                                QStringLiteral("with %1").arg(other->username));
+            qInfo().nospace().noquote()
+                << "AdminApi: " << session->npid << " made " << target->username << " and "
+                << other->username << " friends";
+
+            QJsonObject body;
+            body.insert(QStringLiteral("ok"), true);
+            body.insert(QStringLiteral("userId"), static_cast<qint64>(target->userId));
+            body.insert(QStringLiteral("npid"), target->username);
+            body.insert(QStringLiteral("friendUserId"), static_cast<qint64>(other->userId));
+            body.insert(QStringLiteral("friendNpid"), other->username);
+            return JsonOk(body);
+        });
+
+    // DELETE /admin/v1/users/<id>/friends/<friendId> — ends the friendship on both sides,
+    // or cancels a pending request in either direction. Blocks are left as they are.
+    m_http->route(
+        "/admin/v1/users/<arg>/friends/<arg>", QHttpServerRequest::Method::Delete,
+        [this](qint64 userId, qint64 friendId,
+               const QHttpServerRequest& req) -> QHttpServerResponse {
+            const auto session = Authenticate(req);
+            if (!session)
+                return AuthError(req);
+            const auto actor = m_db->GetUserRow(session->userId);
+            if (!actor || !actor->admin || actor->banned)
+                return JsonError(QHttpServerResponse::StatusCode::Forbidden, ERR_NOT_ADMIN,
+                                 QStringLiteral("Current admin rights are required."));
+
+            const auto target = m_db->GetUserRow(userId);
+            if (!target)
+                return JsonError(QHttpServerResponse::StatusCode::NotFound, ERR_NOT_FOUND,
+                                 QStringLiteral("No account has id %1.").arg(userId));
+            const auto other = m_db->GetUserRow(friendId);
+            if (!other)
+                return JsonError(QHttpServerResponse::StatusCode::NotFound, ERR_NOT_FOUND,
+                                 QStringLiteral("No account has id %1.").arg(friendId));
+
+            constexpr uint8_t F = static_cast<uint8_t>(FriendStatus::Friend);
+            const auto [res, rel] = m_db->GetRelStatus(target->userId, other->userId);
+            if (res == Database::RelResult::Error)
+                return JsonError(QHttpServerResponse::StatusCode::InternalServerError, ERR_INTERNAL,
+                                 QStringLiteral("Couldn't read the relationship. Check the "
+                                                "server log."));
+            if (res != Database::RelResult::Ok || (!(rel.caller & F) && !(rel.other & F)))
+                return JsonError(QHttpServerResponse::StatusCode::NotFound, ERR_NOT_FOUND,
+                                 QStringLiteral("%1 and %2 aren't friends and have no pending "
+                                                "request.")
+                                     .arg(target->username, other->username));
+
+            const bool wasMutual = (rel.caller & F) && (rel.other & F);
+            const uint8_t new1 = rel.caller & static_cast<uint8_t>(~F);
+            const uint8_t new2 = rel.other & static_cast<uint8_t>(~F);
+            const bool ok = (new1 == 0 && new2 == 0)
+                                ? m_db->DeleteRel(target->userId, other->userId)
+                                : m_db->SetRelStatus(target->userId, other->userId, new1, new2);
+            if (!ok)
+                return JsonError(QHttpServerResponse::StatusCode::InternalServerError, ERR_INTERNAL,
+                                 QStringLiteral("The database rejected the change. Check the "
+                                                "server log."));
+
+            ApplyFriendChange(m_shared, target->userId, target->username, other->userId,
+                              other->username, wasMutual, /*isMutual=*/false);
+
+            m_db->AddAuditEntry(
+                session->userId, session->npid, QStringLiteral("remove_friend"), target->userId,
+                target->username,
+                (wasMutual ? QStringLiteral("with %1") : QStringLiteral("pending request with %1"))
+                    .arg(other->username));
+            qInfo().nospace().noquote()
+                << "AdminApi: " << session->npid << " removed "
+                << (wasMutual ? "the friendship" : "the friend request") << " between "
+                << target->username << " and " << other->username;
+
+            QJsonObject body;
+            body.insert(QStringLiteral("ok"), true);
+            body.insert(QStringLiteral("userId"), static_cast<qint64>(target->userId));
+            body.insert(QStringLiteral("npid"), target->username);
+            body.insert(QStringLiteral("friendUserId"), static_cast<qint64>(other->userId));
+            body.insert(QStringLiteral("friendNpid"), other->username);
+            body.insert(QStringLiteral("wasFriend"), wasMutual);
             return JsonOk(body);
         });
 
