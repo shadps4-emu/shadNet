@@ -44,7 +44,7 @@ ErrorType ClientSession::CmdCreate(StreamExtractor& data, QByteArray& reply) {
     }
 
     if (avatarUrl.isEmpty())
-        avatarUrl = "https://shadps4.net/shadnet/avatars/default_01.png";
+        avatarUrl = "https://shadps4.net/shad_net/assets/avatar/default_01.png";
 
     // npid is used as display name by the server.
     auto err = m_db->CreateAccount(npid, password, avatarUrl, email);

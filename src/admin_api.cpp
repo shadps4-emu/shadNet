@@ -37,6 +37,7 @@ constexpr int ERR_INVALID_TOKEN = 4012;
 constexpr int ERR_NOT_ADMIN = 4030;
 constexpr int ERR_FORBIDDEN_TARGET = 4031;
 constexpr int ERR_NOT_FOUND = 4040;
+constexpr int ERR_CONFLICT = 4090;
 constexpr int ERR_TOO_MANY_ATTEMPTS = 4290;
 constexpr int ERR_INTERNAL = 5000;
 
@@ -666,6 +667,100 @@ void AdminApiServer::RegisterRoutes() {
             body.insert(QStringLiteral("total"), m_db->CountUsers(search, filter, restrictToIds));
             body.insert(QStringLiteral("limit"), limit);
             body.insert(QStringLiteral("offset"), offset);
+            return JsonOk(body);
+        });
+
+    // POST /admin/v1/users — { npid, password?, email?, avatarUrl? }
+    // Creates an account the same way in-game registration does.With no
+    // password supplied the server generates one and returns it once
+    m_http->route(
+        "/admin/v1/users", QHttpServerRequest::Method::Post,
+        [this](const QHttpServerRequest& req) -> QHttpServerResponse {
+            const auto session = Authenticate(req);
+            if (!session)
+                return AuthError(req);
+            const auto actor = m_db->GetUserRow(session->userId);
+            if (!actor || !actor->admin || actor->banned)
+                return JsonError(QHttpServerResponse::StatusCode::Forbidden, ERR_NOT_ADMIN,
+                                 QStringLiteral("Current admin rights are required."));
+
+            QString parseError;
+            const auto bodyOpt = ParseJsonBody(req, parseError);
+            if (!bodyOpt)
+                return JsonError(QHttpServerResponse::StatusCode::BadRequest, ERR_BAD_REQUEST,
+                                 parseError);
+
+            const QString npid = bodyOpt->value(QStringLiteral("npid")).toString().trimmed();
+            const QString supplied = bodyOpt->value(QStringLiteral("password")).toString();
+            const QString email = bodyOpt->value(QStringLiteral("email")).toString().trimmed();
+            QString avatarUrl = bodyOpt->value(QStringLiteral("avatarUrl")).toString().trimmed();
+
+            if (!ClientSession::IsValidNpid(npid))
+                return JsonError(QHttpServerResponse::StatusCode::BadRequest, ERR_BAD_REQUEST,
+                                 QStringLiteral("NP IDs must be 3–16 characters using letters, "
+                                                "numbers, '-' or '_'."));
+            if (!supplied.isEmpty() && supplied.length() < kMinPasswordLength)
+                return JsonError(QHttpServerResponse::StatusCode::BadRequest, ERR_BAD_REQUEST,
+                                 QStringLiteral("Password must be at least %1 characters.")
+                                     .arg(kMinPasswordLength));
+            if (avatarUrl.isEmpty())
+                avatarUrl =
+                    QStringLiteral("https://shadps4.net/shad_net/assets/avatar/default_01.png");
+
+            const bool generated = supplied.isEmpty();
+            const QString password = generated ? GeneratePassword() : supplied;
+
+            if (const auto err = m_db->CreateAccount(npid, password, avatarUrl, email)) {
+                switch (*err) {
+                case DbError::ExistingUsername:
+                    return JsonError(QHttpServerResponse::StatusCode::Conflict, ERR_CONFLICT,
+                                     QStringLiteral("The NP ID %1 is already taken.").arg(npid));
+                case DbError::ExistingEmail:
+                    return JsonError(QHttpServerResponse::StatusCode::Conflict, ERR_CONFLICT,
+                                     QStringLiteral("Another account already uses %1.").arg(email));
+                case DbError::InvalidEmail:
+                    return JsonError(QHttpServerResponse::StatusCode::BadRequest, ERR_BAD_REQUEST,
+                                     QStringLiteral("%1 isn't a valid email address.").arg(email));
+                case DbError::InvalidInput:
+                    return JsonError(QHttpServerResponse::StatusCode::BadRequest, ERR_BAD_REQUEST,
+                                     QStringLiteral("The account details were rejected."));
+                default:
+                    qCritical() << "AdminApi: account creation failed for" << npid << ":"
+                                << m_db->lastError();
+                    return JsonError(QHttpServerResponse::StatusCode::InternalServerError,
+                                     ERR_INTERNAL,
+                                     QStringLiteral("The database rejected the account. "
+                                                    "Check the server log."));
+                }
+            }
+
+            const auto newId = m_db->GetUserId(npid);
+            const auto row = newId ? m_db->GetUserRow(*newId) : std::nullopt;
+            if (!row) {
+                qCritical() << "AdminApi: created" << npid << "but could not read it back";
+                return JsonError(QHttpServerResponse::StatusCode::InternalServerError, ERR_INTERNAL,
+                                 QStringLiteral("The account was created but could not be read "
+                                                "back. Refresh the list."));
+            }
+
+            // The password itself is never written to the log.
+            m_db->AddAuditEntry(session->userId, session->npid, QStringLiteral("create_account"),
+                                row->userId, row->username,
+                                generated ? QStringLiteral("password generated")
+                                          : QStringLiteral("password set by admin"));
+            qInfo().nospace().noquote()
+                << "AdminApi: " << session->npid << " created account " << row->username;
+
+            QJsonObject body;
+            body.insert(QStringLiteral("ok"), true);
+            body.insert(QStringLiteral("user"), UserRowToJson(*row));
+            body.insert(QStringLiteral("generated"), generated);
+            if (generated)
+                body.insert(QStringLiteral("password"), password);
+            if (m_config->IsEmailValidated()) {
+                if (const auto rec = m_db->CheckUser(npid, password, QString(), false))
+                    body.insert(QStringLiteral("token"), rec->token);
+            }
             return JsonOk(body);
         });
 
