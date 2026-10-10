@@ -28,6 +28,46 @@ namespace {
 QJsonObject BuildProfile(Database& db, SharedState& shared, qint64 userId, const QString& onlineId,
                          const QStringList& fields, bool isDefault, qint64 callerUserId);
 
+constexpr quint32 WEBAPI_RESOURCE_NOT_FOUND = 2113549;
+
+std::optional<qint64> ResolveProfileTarget(Database& db, const QString& userKey,
+                                           const WebApiAuth::AuthResult& auth) {
+    if (userKey.compare(QStringLiteral("me"), Qt::CaseInsensitive) == 0)
+        return *auth.userId;
+    bool ok = false;
+    const qlonglong asAccountId = userKey.toLongLong(&ok);
+    if (ok)
+        return db.GetUsername(asAccountId).has_value() ? std::optional<qint64>(asAccountId)
+                                                       : std::nullopt;
+    const auto uid = db.GetUserId(userKey);
+    return uid ? std::optional<qint64>(static_cast<qint64>(*uid)) : std::nullopt;
+}
+
+QString ComputeRelation(Database& db, qint64 callerId, qint64 targetId) {
+    if (callerId == targetId)
+        return QStringLiteral("me");
+    constexpr uint8_t F = static_cast<uint8_t>(FriendStatus::Friend);
+    constexpr uint8_t B = static_cast<uint8_t>(FriendStatus::Blocked);
+    const auto [res, rel] = db.GetRelStatus(callerId, targetId);
+    if (res == Database::RelResult::Ok) {
+        if (rel.caller & B)
+            return QStringLiteral("blocked");
+        if ((rel.caller & F) && (rel.other & F))
+            return QStringLiteral("friend");
+        if (rel.caller & F)
+            return QStringLiteral("requesting friend");
+        if (rel.other & F)
+            return QStringLiteral("requested friend");
+    }
+    QSet<int64_t> callerFriends;
+    for (const auto& f : db.GetRelationships(callerId).friends)
+        callerFriends.insert(f.first);
+    for (const auto& f : db.GetRelationships(targetId).friends)
+        if (callerFriends.contains(f.first))
+            return QStringLiteral("friend of friends");
+    return QStringLiteral("no relationship");
+}
+
 // Batch profiles: accountIds are numeric account IDs. Each entry reuses the single-user
 // builder so every field behaves identically.
 QJsonObject BuildProfiles(Database& db, SharedState& shared, const QStringList& accountIds,
@@ -63,6 +103,9 @@ QJsonObject BuildProfile(Database& db, SharedState& shared, qint64 userId, const
                             fields.contains(QStringLiteral("personalDetail.displayName"));
     const bool wantVerified = fields.contains(QStringLiteral("isOfficiallyVerified"));
     const bool wantPresence = fields.contains(QStringLiteral("presence"));
+    const bool wantRelation = fields.contains(QStringLiteral("relation"));
+    const QString relation =
+        (wantRelation || wantPresence) ? ComputeRelation(db, callerUserId, userId) : QString();
 
     QJsonObject p;
     if (wantUser) {
@@ -89,7 +132,8 @@ QJsonObject BuildProfile(Database& db, SharedState& shared, qint64 userId, const
     if (wantLanguages) {
         p.insert(QStringLiteral("languagesUsed"), QJsonArray()); // unsupported
     }
-    if (wantDetail) {
+    // personalDetail is for registered real names, which shadNet doesn't have.
+    if (wantDetail && callerUserId == userId) {
         QJsonObject pd;
         pd.insert(QStringLiteral("displayName"), onlineId);
         p.insert(QStringLiteral("personalDetail"), pd);
@@ -97,7 +141,11 @@ QJsonObject BuildProfile(Database& db, SharedState& shared, qint64 userId, const
     if (wantVerified) {
         p.insert(QStringLiteral("isOfficiallyVerified"), false);
     }
-    if (wantPresence) {
+    if (wantRelation) {
+        p.insert(QStringLiteral("relation"), relation);
+    }
+    if (wantPresence &&
+        (relation == QStringLiteral("me") || relation == QStringLiteral("friend"))) {
         // Profile embeds presence as {primaryInfo: <entry>} -- note: unlike friendList and
         // GET presence, the profile presence object has no top-level onlineStatus member.
         bool actualOnline = false;
@@ -233,17 +281,14 @@ void RegisterProfileRoutes(QHttpServer& http, Database& db, SharedState& shared)
                    if (!auth.userId.has_value()) {
                        return std::move(auth.errorResponse);
                    }
-                   const bool self =
-                       userKey.compare(QStringLiteral("me"), Qt::CaseInsensitive) == 0 ||
-                       userKey.compare(auth.npid, Qt::CaseInsensitive) == 0 ||
-                       userKey == QString::number(*auth.userId);
-                   if (!self) {
-                       return JsonError(QHttpServerResponse::StatusCode::Forbidden,
-                                        UP_ACCESS_DENIED_OWNERSHIP,
-                                        QStringLiteral("Access denied by resource ownership"));
+                   const auto target = ResolveProfileTarget(db, userKey, auth);
+                   if (!target) {
+                       return JsonError(QHttpServerResponse::StatusCode::NotFound,
+                                        WEBAPI_RESOURCE_NOT_FOUND,
+                                        QStringLiteral("The specified user does not exist"));
                    }
 
-                   const qint64 userId = *auth.userId;
+                   const qint64 userId = *target;
                    const QString onlineId = db.GetUsername(userId).value_or(auth.npid);
 
                    const QUrlQuery query(req.url());
@@ -256,7 +301,8 @@ void RegisterProfileRoutes(QHttpServer& http, Database& db, SharedState& shared)
 
                    const QJsonObject body =
                        BuildProfile(db, shared, userId, onlineId, fields, isDefault, *auth.userId);
-                   qInfo() << "WebAPI: profile for" << onlineId << "fields" << fields;
+                   qInfo() << "WebAPI: profile for" << onlineId << "by" << auth.npid << "fields"
+                           << fields;
                    return JsonOk(body);
                });
 
