@@ -73,21 +73,21 @@ set(SOURCES
     src/stun_server.h
     src/stun_server.cpp
     # WebAPI HTTP/JSON listener
-    src/webapi_server.h
-    src/webapi_server.cpp
-    src/webapi_auth.h
-    src/webapi_auth.cpp
-    src/webapi_routes_users.h
-    src/webapi_routes_users.cpp
-    src/webapi_routes_profile.h
-    src/webapi_routes_profile.cpp
-    src/webapi_routes_presence.h
-    src/webapi_routes_presence.cpp
-    src/webapi_routes_session.h
-    src/webapi_routes_session.cpp
-    src/webapi_routes_identity.h
-    src/webapi_routes_identity.cpp
-    src/webapi_routes_common.h
+    src/webapi/webapi_server.h
+    src/webapi/webapi_server.cpp
+    src/webapi/webapi_auth.h
+    src/webapi/webapi_auth.cpp
+    src/webapi/webapi_routes_users.h
+    src/webapi/webapi_routes_users.cpp
+    src/webapi/webapi_routes_profile.h
+    src/webapi/webapi_routes_profile.cpp
+    src/webapi/webapi_routes_presence.h
+    src/webapi/webapi_routes_presence.cpp
+    src/webapi/webapi_routes_session.h
+    src/webapi/webapi_routes_session.cpp
+    src/webapi/webapi_routes_identity.h
+    src/webapi/webapi_routes_identity.cpp
+    src/webapi/webapi_routes_common.h
     # Read-only stats HTTP/JSON listener
     src/stats_server.h
     src/stats_server.cpp

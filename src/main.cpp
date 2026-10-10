@@ -10,7 +10,7 @@
 #include "member_api.h"
 #include "server.h"
 #include "version.h"
-#include "webapi_server.h"
+#include "webapi/webapi_server.h"
 
 int main(int argc, char* argv[]) {
     QLoggingCategory::setFilterRules(QStringLiteral("*.debug=false\n*.info=true\n*.warning=true"));

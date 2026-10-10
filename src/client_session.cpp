@@ -10,7 +10,7 @@
 #include "protocol.h"
 #include "shadnet.pb.h"
 #include "stream_extractor.h"
-#include "webapi_routes_session.h"
+#include "webapi/webapi_routes_session.h"
 
 bool DeleteAccountAndArtifacts(Database& db, SharedState* shared, int64_t userId,
                                PurgeSummary& summary, int& blobsDeleted, int& cachedScoresDropped) {
