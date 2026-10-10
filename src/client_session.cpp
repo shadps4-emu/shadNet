@@ -133,7 +133,7 @@ void ClientSession::ProcessPacket(uint16_t command, uint64_t packetId, const QBy
 }
 
 // True for authenticated commands whose payload begins with a 12-byte ComId
-// score. Used to attribute live-usage game activity in the dispatcher.
+// (score, TUS, TSS and trophy commands).
 static bool LeadsWithComId(CommandType cmd) {
     switch (cmd) {
     case CommandType::GetBoardInfos:
@@ -145,6 +145,22 @@ static bool LeadsWithComId(CommandType cmd) {
     case CommandType::GetScoreNpid:
     case CommandType::GetScoreAccountId:
     case CommandType::GetScoreGameDataByAccId:
+    case CommandType::TusSetData:
+    case CommandType::TusGetData:
+    case CommandType::TusSetMultiSlotVariable:
+    case CommandType::TusGetMultiSlotVariable:
+    case CommandType::TusAddAndGetVariable:
+    case CommandType::TusGetMultiSlotDataStatus:
+    case CommandType::TusGetMultiUserDataStatus:
+    case CommandType::TusGetFriendsDataStatus:
+    case CommandType::TusDeleteMultiSlotData:
+    case CommandType::TusGetMultiUserVariable:
+    case CommandType::TusTryAndSetVariable:
+    case CommandType::TusGetFriendsVariable:
+    case CommandType::TusDeleteMultiSlotVariable:
+    case CommandType::TssGetData:
+    case CommandType::UnlockTrophy:
+    case CommandType::SyncTrophies:
         return true;
     default:
         return false;
@@ -172,7 +188,7 @@ ErrorType ClientSession::DispatchCommand(CommandType cmd, StreamExtractor& se, Q
             return ErrorType::Unauthorized;
         }
     }
-    // Attribute live-usage game activity: score payloads lead with a 12-byte
+    // Attribute live-usage game activity: these payloads lead with a 12-byte
     // ComId; peek it (non-consuming) so the handler's own parse is undisturbed.
     if (LeadsWithComId(cmd)) {
         const QByteArray cid = se.peekBytes(12);

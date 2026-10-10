@@ -118,10 +118,8 @@ inline QJsonObject MakePresenceEntry(bool online, const QString& platform,
     return e;
 }
 
-// Full presence object: {onlineStatus, <primaryInfo | platformInfoList | incontextInfoList>}
-// selected by presenceType (default primary). detail gates gameStatus/gameData/gameTitleInfo.
-// inSameGame: for incontext, whether this user shares the caller's NP Comm ID. platReq narrows
-// the platform/incontext lists. Shared by friendList and GET presence.
+// Full presence object: {onlineStatus, [platform], <primaryInfo | platformInfoList |
+// incontextInfoList>} selected by presenceType (default primary).
 inline QJsonObject MakePresence(const QString& presenceType, bool online, const QString& platform,
                                 const QString& gameStatus, const QString& gameData,
                                 const QString& npTitleId, const QString& titleName, bool detail,
@@ -129,23 +127,30 @@ inline QJsonObject MakePresence(const QString& presenceType, bool online, const 
     QJsonObject presence;
     presence.insert(QStringLiteral("onlineStatus"),
                     online ? QStringLiteral("online") : QStringLiteral("offline"));
+    if (detail && online) {
+        presence.insert(QStringLiteral("platform"),
+                        platform.isEmpty() ? QStringLiteral("PS4") : platform);
+    }
     const bool platOk = platReq.isEmpty() || platReq == QStringLiteral("PS4");
     if (presenceType == QStringLiteral("platform")) {
         QJsonArray list;
         if (platOk)
             list.append(MakePresenceEntry(online, QStringLiteral("PS4"), gameStatus, QString(),
-                                          npTitleId, titleName, detail, /*forcePlatform=*/true));
+                                          npTitleId, titleName, /*includeDetail=*/true,
+                                          /*forcePlatform=*/true));
         presence.insert(QStringLiteral("platformInfoList"), list);
     } else if (presenceType == QStringLiteral("incontext")) {
         QJsonArray list;
         if (online && inSameGame && platOk)
             list.append(MakePresenceEntry(online, QStringLiteral("PS4"), gameStatus, gameData,
-                                          npTitleId, titleName, detail, /*forcePlatform=*/true));
+                                          npTitleId, titleName, /*includeDetail=*/true,
+                                          /*forcePlatform=*/true));
         presence.insert(QStringLiteral("incontextInfoList"), list);
     } else { // primary (default)
         presence.insert(QStringLiteral("primaryInfo"),
                         MakePresenceEntry(online, platform, gameStatus, QString(), npTitleId,
-                                          titleName, detail, /*forcePlatform=*/false));
+                                          titleName, /*includeDetail=*/true,
+                                          /*forcePlatform=*/false));
     }
     return presence;
 }

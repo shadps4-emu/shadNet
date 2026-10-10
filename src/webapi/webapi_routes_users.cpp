@@ -332,6 +332,8 @@ QJsonObject BuildFriendList(Database& db, SharedState& shared,
                 entry.insert(QStringLiteral("presence"),
                              MakePresence(type, true, snap->platform, gs, gd, snap->npTitleId,
                                           snap->titleName, presenceDetail, sameGame, QString()));
+                qDebug() << "WebAPI: friendList entry" << accountId << "type" << type << "sameGame"
+                         << sameGame << "gameData bytes" << gd.size();
             } else {
                 entry.insert(QStringLiteral("presence"),
                              MakePresence(type, false, {}, {}, {}, {}, {}, presenceDetail, false,
