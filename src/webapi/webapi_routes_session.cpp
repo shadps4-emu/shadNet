@@ -796,7 +796,9 @@ QHttpServerResponse HandleSessionUpdate(Database& db, SharedState& shared, const
     if (notify)
         for (const auto& m : s.members)
             recipients.append(m.userId);
-    qInfo() << "WebAPI: session updated" << sessionId << "by" << auth.npid;
+    qInfo() << "WebAPI: session updated" << sessionId << "by" << auth.npid << "->"
+            << QString::fromUtf8(QJsonDocument(obj).toJson(QJsonDocument::Compact)) << "privacy"
+            << s.sessionPrivacy << "lock" << s.sessionLockFlag;
     lk.unlock();
     if (notify)
         SendSessionInvitationEvent(shared,
