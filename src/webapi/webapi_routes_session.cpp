@@ -355,7 +355,8 @@ void SendSessionInvitationEvent(SharedState& shared, const QString& dataType, in
 // no filter, the single highest-priority + most-recently-joined session. Shared by the single- and
 // multi-user session-list endpoints so privacy/selection stay identical.
 QList<SessionRow> CollectUserSessions(SharedState& shared, int64_t targetId, int64_t callerId,
-                                      bool hasIndexFilter, const QSet<int>& indexFilter) {
+                                      bool hasIndexFilter, const QSet<int>& indexFilter,
+                                      bool includePrivate = false) {
     QList<SessionRow> rows;
     {
         QReadLocker lk(&shared.sessionsLock);
@@ -371,8 +372,8 @@ QList<SessionRow> CollectUserSessions(SharedState& shared, int64_t targetId, int
             }
             if (!tm)
                 continue;
-            if (s.sessionPrivacy == QStringLiteral("private") && !callerIsMember &&
-                !HasActiveInvitation(shared, s.sessionId, callerId))
+            if (!includePrivate && s.sessionPrivacy == QStringLiteral("private") &&
+                !callerIsMember && !HasActiveInvitation(shared, s.sessionId, callerId))
                 continue;
             SessionRow r;
             r.sessionId = s.sessionId;
@@ -1042,8 +1043,6 @@ QHttpServerResponse HandleFriendsSessions(Database& db, SharedState& shared,
         QString onlineId;
         QString platform;
     };
-    // Phase 1: each friend's highest-priority visible session -> the set of result sessions, in
-    // friend-list order. details[] holds session info from the first contributor.
     QList<QString> order;
     QHash<QString, SessionRow> details;
     QHash<int64_t, QString> friendNpid; // accountId -> onlineId, for the membership scan below
@@ -1052,7 +1051,8 @@ QHttpServerResponse HandleFriendsSessions(Database& db, SharedState& shared,
         for (const auto& f : rels.friends) {
             friendNpid.insert(f.first, f.second);
             const QList<SessionRow> top =
-                CollectUserSessions(shared, f.first, *auth.userId, false, {});
+                CollectUserSessions(shared, f.first, *auth.userId, false, {},
+                                    /*includePrivate=*/true);
             if (top.isEmpty())
                 continue;
             const SessionRow& r = top.first();
@@ -1062,8 +1062,6 @@ QHttpServerResponse HandleFriendsSessions(Database& db, SharedState& shared,
             }
         }
     }
-    // Phase 2: for each result session, the caller's friends who are members (platform = the
-    // friend's platform in that session).
     QHash<QString, QList<FriendRef>> sessionFriends;
     if (!order.isEmpty()) {
         QReadLocker lk(&shared.sessionsLock);
@@ -1316,6 +1314,9 @@ QHttpServerResponse HandleSessionGetData(Database& db, SharedState& shared,
     }
     // A private session's data is readable by participants or invitees.
     if (privacy == QStringLiteral("private") && !callerIsMember && !callerInvited) {
+        qInfo() << "WebAPI:" << (changeable ? "changeable session data" : "session data")
+                << "for private" << sessionId << "refused to" << auth.npid
+                << "(not a member or invitee)";
         return JsonError(QHttpServerResponse::StatusCode::Forbidden, SESSION_NOT_PERMITTED,
                          QStringLiteral("Not permitted to access the session"));
     }
