@@ -129,6 +129,20 @@ void ConfigManager::Parse(const QString& path) {
     m_adminsList = strList("AdminsList");
     m_registrationSecretKey = str("RegistrationSecretKey", "");
     m_logFile = str("LogFile", "shadnet.log").trimmed();
+    // Which emulator builds may stay signed in (see clientversions.cfg; empty = no rules).
+    m_clientVersionRulesFile = str("ClientVersionRulesFile", "clientversions.cfg").trimmed();
+    bool timeoutOk = false;
+    m_clientVersionTimeoutSeconds = str("ClientVersionTimeoutSeconds", "15").toInt(&timeoutOk);
+    if (!timeoutOk || m_clientVersionTimeoutSeconds < 0) {
+        qWarning() << "ClientVersionTimeoutSeconds must be a whole number (0 = off); using 15";
+        m_clientVersionTimeoutSeconds = 15;
+    }
+    bool cooldownOk = false;
+    m_clientVersionCooldownSeconds = str("ClientVersionCooldownSeconds", "120").toInt(&cooldownOk);
+    if (!cooldownOk || m_clientVersionCooldownSeconds < 0) {
+        qWarning() << "ClientVersionCooldownSeconds must be a whole number (0 = off); using 120";
+        m_clientVersionCooldownSeconds = 120;
+    }
     bool sizeOk = false;
     m_logMaxSizeMB = str("LogMaxSizeMB", "10").toInt(&sizeOk);
     if (!sizeOk || m_logMaxSizeMB < 0) {

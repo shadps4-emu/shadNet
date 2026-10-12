@@ -7,6 +7,7 @@
 #include <optional>
 #include <QAtomicInt>
 #include <QByteArray>
+#include <QDateTime>
 #include <QHash>
 #include <QList>
 #include <QMutex>
@@ -28,9 +29,37 @@
 
 // Shared state visible to all sessions (thread-safe with locks)
 class WorldsService;
+class ClientVersionRules;
 
 struct SharedState {
     WorldsService* worlds = nullptr;
+    // Which client versions may stay signed in (null = no rules). Loaded at startup.
+    const ClientVersionRules* clientVersionRules = nullptr;
+
+    // Accounts recently rejected for their client version: userId -> refuse logins until
+    // (ms since epoch). Keeps auto-reconnecting older clients from cycling online.
+    QMutex versionCooldownMutex;
+    QHash<int64_t, qint64> versionCooldownUntil;
+    void StartVersionCooldown(int64_t userId, int seconds) {
+        if (seconds <= 0)
+            return;
+        QMutexLocker lk(&versionCooldownMutex);
+        versionCooldownUntil.insert(userId,
+                                    QDateTime::currentMSecsSinceEpoch() + qint64(seconds) * 1000);
+    }
+    // Milliseconds left on userId's cooldown, 0 when none (expired entries are dropped).
+    qint64 VersionCooldownRemainingMs(int64_t userId) {
+        QMutexLocker lk(&versionCooldownMutex);
+        const auto it = versionCooldownUntil.find(userId);
+        if (it == versionCooldownUntil.end())
+            return 0;
+        const qint64 left = it.value() - QDateTime::currentMSecsSinceEpoch();
+        if (left <= 0) {
+            versionCooldownUntil.erase(it);
+            return 0;
+        }
+        return left;
+    }
     ConfigManager* config;
     ScoreCache* scoreCache = nullptr;
     ScoreFiles* scoreFiles = nullptr;
@@ -258,6 +287,9 @@ public:
     // Returns the error to answer with, or nullopt to let the command run.
     std::optional<ErrorType> CheckMatching2Access(CommandType cmd);
     bool Matching2AllowedForAccount() const;
+    // Applies clientversions.cfg to version ("" = none reported). A denied client is sent
+    // NotifyClientRejected and disconnected.
+    void CheckClientVersion(const QString& version, bool reported);
     ErrorType CmdSetClientVersion(StreamExtractor& data);
 
     // commands cmd_matching.cpp
@@ -352,7 +384,9 @@ private:
     bool m_isSsl = true;
     SharedState* m_shared;
     bool m_authenticated = false;
-    bool m_matching2RefusalLogged = false; // one log line per refusal streak, not per command
+    bool m_matching2RefusalLogged = false;
+    bool m_versionReported = false;
+    bool m_versionRejected = false; 
     QByteArray m_readBuf;
     std::unique_ptr<Database> m_db;
     ClientInfo m_info;

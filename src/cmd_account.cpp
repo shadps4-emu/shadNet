@@ -4,6 +4,7 @@
 #include <tuple>
 #include <QDateTime>
 #include <QDebug>
+#include <QTimer>
 #include "client_session.h"
 #include "proto_utils.h"
 #include "shadnet.pb.h"
@@ -88,6 +89,15 @@ ErrorType ClientSession::CmdLogin(StreamExtractor& data, QByteArray& reply) {
         return ErrorType::LoginError;
     }
 
+    // Recently rejected for its client version: refuse before signing in, so a client that
+    // reconnects on its own never shows up online. Clients retry with a growing delay.
+    if (const qint64 left = m_shared->VersionCooldownRemainingMs(user.userId); left > 0) {
+        qInfo().noquote() << "Login refused for" << user.username
+                          << ": client version was rejected," << (left + 999) / 1000
+                          << "s of cooldown left";
+        return ErrorType::LoginError;
+    }
+
     {
         QReadLocker lk(&m_shared->clientsLock);
         if (m_shared->clients.contains(user.userId))
@@ -104,6 +114,17 @@ ErrorType ClientSession::CmdLogin(StreamExtractor& data, QByteArray& reply) {
     m_info.statAgent = user.statAgent;
     m_info.banned = user.banned;
     m_authenticated = true;
+
+    // Clients report their version right after signing in (SetClientVersion). One that hasn't
+    // by the timeout is checked as having none, so builds that never report are covered too.
+    if (m_shared->clientVersionRules && m_shared->config) {
+        const int timeout = m_shared->config->GetClientVersionTimeoutSeconds();
+        if (timeout > 0)
+            QTimer::singleShot(timeout * 1000, this, [this]() {
+                if (!m_versionReported)
+                    CheckClientVersion(QString(), /*reported=*/false);
+            });
+    }
 
     m_matching.titleId = QString::fromStdString(req.title_id());
     {

@@ -252,6 +252,41 @@ refusal streak. shadPS4 shows it on screen,older clients ignore it.
 `GET /admin/v1/overview` reports `matching2Active` / `matching2Max`, and `GET /admin/v1/online`
 marks who holds a slot.
 
+### Client version rules
+
+Right after signing in, shadPS4 reports its version (stored per account and shown in the admin
+tool). `clientversions.cfg` decides which versions may stay signed in. Rules are checked top to
+bottom and the first match decides; with no match the client is allowed:
+
+```
+allow|deny  empty | any | exact TEXT | prefix TEXT | regex PATTERN  [| message to the player]
+```
+
+The default file (created on first start if missing) turns away clients that report no version,
+which are builds too old to report one, and allows everything else:
+
+```
+deny empty | Your shadPS4 build is too old for this shadNet server. Please update shadPS4.
+allow any
+```
+
+A denied client is sent notification 19 (`NotifyClientRejected`: reason 1 = version not
+accepted, plus the rule's message and the version checked) and disconnected half a second later.
+shadPS4 shows the message and stays offline for the rest of that run instead of reconnecting.
+Older builds don't know notification 19 and reconnect automatically, so the account is also put
+on a short cooldown (`ClientVersionCooldownSeconds`) during which its logins are refused.
+Each rejection is logged with the version and the rule's line number.
+
+| Key | Effect |
+|-----|--------|
+| `ClientVersionRulesFile` | Rules file, default `clientversions.cfg`. Empty turns the rules off. |
+| `ClientVersionTimeoutSeconds` | How long to wait for a client to report its version after signing in before checking it as empty (default `15`; `0` = only check versions that are reported). |
+| `ClientVersionCooldownSeconds` | After a rejection, that account's logins are refused for this long (default `120`; `0` = off). Older clients reconnect on their own; with the cooldown they get a login error and retry with a growing delay instead of cycling online. |
+
+Accounts marked as stat agents are not checked. The rules are read at startup; invalid lines are
+logged with their line number and skipped. A `|` with spaces around it starts the message, so
+write regex alternation without spaces (`a|b`).
+
 ### Server log file
 
 Everything the server prints is also written to a log file, set in `shadnet.cfg`:

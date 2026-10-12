@@ -17,6 +17,7 @@
 #include "stun_server.h"
 
 class WorldsService;
+class ClientVersionRules;
 
 class ShadNetServer : public QObject {
     Q_OBJECT
@@ -45,6 +46,7 @@ private:
     QTcpServer* m_unsecuredServer = nullptr; // plain TCP connections
     SharedState m_shared;
     std::unique_ptr<WorldsService> m_worlds;
+    std::unique_ptr<ClientVersionRules> m_clientVersionRules;
     QString m_dbPath;
 
     std::unique_ptr<ScoreCache> m_scoreCache;

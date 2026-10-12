@@ -87,6 +87,23 @@ public:
         QReadLocker lk(&m_lock);
         return m_adminsList;
     }
+    // Client version rules (clientversions.cfg) and how long to wait for a client to report
+    // its version after signing in before checking it as empty (0 = never treat silence as
+    // empty). Read at startup.
+    QString GetClientVersionRulesFile() const {
+        QReadLocker lk(&m_lock);
+        return m_clientVersionRulesFile;
+    }
+    // After a version rejection, that account's logins are refused for this long (0 = off), so
+    // older clients that reconnect automatically never appear online in between.
+    int GetClientVersionCooldownSeconds() const {
+        QReadLocker lk(&m_lock);
+        return m_clientVersionCooldownSeconds;
+    }
+    int GetClientVersionTimeoutSeconds() const {
+        QReadLocker lk(&m_lock);
+        return m_clientVersionTimeoutSeconds;
+    }
     QString GetLogFile() const {
         QReadLocker lk(&m_lock);
         return m_logFile;
@@ -184,6 +201,9 @@ private:
     QString m_adminApiPort = "31350";
     int m_adminSessionMinutes = 480;
     int m_matching2MaxUsers = 0;
+    QString m_clientVersionRulesFile;
+    int m_clientVersionTimeoutSeconds = 15;
+    int m_clientVersionCooldownSeconds = 120;
     QString m_logFile;
     int m_logMaxSizeMB = 10;
     QString m_adminApiKey;

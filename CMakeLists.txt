@@ -47,6 +47,8 @@ set(SOURCES
     common/worlds/worldsstore.cpp
     src/main.cpp
     src/file_logger.h
+    src/client_version_rules.h
+    src/client_version_rules.cpp
     src/file_logger.cpp
     src/config.cpp
     src/config.h

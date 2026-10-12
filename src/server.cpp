@@ -17,6 +17,7 @@
 #include <netinet/tcp.h>
 #include <sys/socket.h>
 #endif
+#include "client_version_rules.h"
 #include "database.h"
 #include "score_db.h"
 #include "server.h"
@@ -59,6 +60,25 @@ bool ShadNetServer::Start(ConfigManager* config) {
         return false;
     }
     m_shared.worlds = m_worlds.get();
+
+    // Client version rules: which emulator builds may stay signed in.
+    const QString rulesFile = config->GetClientVersionRulesFile();
+    if (rulesFile.isEmpty()) {
+        qInfo() << "Client version rules off (ClientVersionRulesFile is empty)";
+    } else {
+        m_clientVersionRules = std::make_unique<ClientVersionRules>();
+        QStringList ruleErrors;
+        const bool loaded = m_clientVersionRules->Load(rulesFile, ruleErrors);
+        for (const QString& e : ruleErrors)
+            qWarning().noquote() << "Client version rules:" << e;
+        if (loaded) {
+            m_shared.clientVersionRules = m_clientVersionRules.get();
+            qInfo().noquote() << "Client version rules:" << m_clientVersionRules->RuleCount()
+                              << "rule(s) from" << rulesFile;
+        } else {
+            qWarning() << "Client version rules not loaded; all client versions are accepted";
+        }
+    }
 
     QHostAddress addr;
     const QString host = config->GetHost();

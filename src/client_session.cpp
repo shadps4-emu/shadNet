@@ -5,7 +5,9 @@
 #include <QDateTime>
 #include <QJsonDocument>
 #include <QJsonObject>
+#include <QTimer>
 #include "client_session.h"
+#include "client_version_rules.h"
 #include "proto_utils.h"
 #include "protocol.h"
 #include "shadnet.pb.h"
@@ -211,6 +213,10 @@ ErrorType ClientSession::DispatchCommand(CommandType cmd, StreamExtractor& se, Q
                 EmitPresenceGameTitleInfo();
         }
     }
+    // A client being disconnected for its version gets nothing more done.
+    if (m_versionRejected)
+        return ErrorType::Unauthorized;
+
     if (const auto refused = CheckMatching2Access(cmd))
         return *refused;
 
@@ -354,7 +360,44 @@ ErrorType ClientSession::CmdSetClientVersion(StreamExtractor& data) {
 
     qInfo().nospace().noquote() << "SetClientVersion: " << m_info.npid << " is running "
                                 << (version.isEmpty() ? QStringLiteral("(cleared)") : version);
+    m_versionReported = true;
+    CheckClientVersion(version, /*reported=*/true);
     return ErrorType::NoError;
+}
+
+void ClientSession::CheckClientVersion(const QString& version, bool reported) {
+    if (m_versionRejected || !m_shared || !m_shared->clientVersionRules)
+        return;
+    // Service accounts (stat agents) aren't emulators and don't report a version.
+    if (m_info.statAgent)
+        return;
+    const auto decision = m_shared->clientVersionRules->Evaluate(version);
+    if (decision.allowed)
+        return;
+
+    m_versionRejected = true;
+    const int cooldown = m_shared->config ? m_shared->config->GetClientVersionCooldownSeconds() : 0;
+    m_shared->StartVersionCooldown(m_info.userId, cooldown);
+    qInfo().noquote() << "Client version rejected for" << m_info.npid << "("
+                      << (reported ? (version.isEmpty() ? QStringLiteral("reported empty")
+                                                        : QStringLiteral("\"%1\"").arg(version))
+                                   : QStringLiteral("none reported"))
+                      << ", clientversions.cfg line" << decision.line << "):" << decision.message;
+
+    shadnet::NotifyClientRejected n;
+    n.set_reason(1); // client version not accepted
+    n.set_message(decision.message.toStdString());
+    n.set_version(version.toStdString());
+    QByteArray payload;
+    const std::string s = n.SerializeAsString();
+    appendBlob(payload, QByteArray(s.data(), static_cast<int>(s.size())));
+    SendSelfNotification(NotificationType::ClientRejected, payload);
+
+    // Give the notification (and any reply in flight) a moment to leave before closing.
+    QTimer::singleShot(500, this, [this]() {
+        if (m_socket)
+            m_socket->disconnectFromHost();
+    });
 }
 
 bool ClientSession::Matching2AllowedForAccount() const {

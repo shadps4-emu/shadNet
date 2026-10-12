@@ -106,6 +106,9 @@ enum class NotificationType : uint16_t {
     // The server refused a service to this player and says why (NotifyServiceUnavailable), so
     // the client can tell the player instead of showing a bare network error.
     ServiceUnavailable = 18,
+    // The server won't keep this client signed in and says why (NotifyClientRejected), it
+    // disconnects right after. Sent before closing so the client can tell the player.
+    ClientRejected = 19,
 };
 
 // Error codes for Reply packets
