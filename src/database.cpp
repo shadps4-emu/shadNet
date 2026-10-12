@@ -326,6 +326,14 @@ bool Database::Migrate() {
         Exec(ins7);
     }
 
+    if (!HasMigration(12)) {
+        Exec("ALTER TABLE account ADD COLUMN matching2_access INTEGER NOT NULL DEFAULT 0");
+
+        QSqlQuery ins12(m_db);
+        ins12.prepare("INSERT OR IGNORE INTO migration VALUES(12,'matching2 access')");
+        Exec(ins12);
+    }
+
     qInfo() << "Database migrations complete";
 
     RunMaintenance();
@@ -707,7 +715,8 @@ QList<AdminUserRow> Database::ListUsers(const QString& search, UserFilter filter
     const QString sql =
         QStringLiteral("SELECT a.user_id, a.username, a.email, a.admin, a.stat_agent, a.banned, "
                        "a.ban_reason, a.ban_timestamp, t.creation, t.last_login, "
-                       "COALESCE(a.client_version,''), COALESCE(a.client_version_at,0) "
+                       "COALESCE(a.client_version,''), COALESCE(a.client_version_at,0), "
+                       "COALESCE(a.matching2_access,0) "
                        "FROM account a LEFT JOIN account_timestamp t ON t.user_id = a.user_id") +
         BuildUserFilterClause(search, filter, restrictToIds) +
         QStringLiteral(" ORDER BY a.user_id ASC LIMIT ? OFFSET ?");
@@ -740,6 +749,8 @@ QList<AdminUserRow> Database::ListUsers(const QString& search, UserFilter filter
         r.lastLogin = q.value(9).toLongLong();
         r.clientVersion = q.value(10).toString();
         r.clientVersionAt = q.value(11).toLongLong();
+        r.matching2Access = static_cast<Matching2Access>(q.value(12).toInt());
+        r.matching2Access = static_cast<Matching2Access>(q.value(12).toInt());
         rows.append(r);
     }
     return rows;
@@ -766,7 +777,8 @@ std::optional<AdminUserRow> Database::GetUserRow(int64_t userId) {
     QSqlQuery q(m_db);
     q.prepare("SELECT a.user_id, a.username, a.email, a.admin, a.stat_agent, a.banned, "
               "a.ban_reason, a.ban_timestamp, t.creation, t.last_login, "
-              "COALESCE(a.client_version,''), COALESCE(a.client_version_at,0) "
+              "COALESCE(a.client_version,''), COALESCE(a.client_version_at,0), "
+              "COALESCE(a.matching2_access,0) "
               "FROM account a LEFT JOIN account_timestamp t ON t.user_id = a.user_id "
               "WHERE a.user_id = ?");
     q.addBindValue(static_cast<qlonglong>(userId));
@@ -1791,4 +1803,24 @@ UserRelationships Database::GetRelationships(int64_t userId) {
     }
 
     return result;
+}
+
+Matching2Access Database::GetMatching2Access(int64_t userId) {
+    QSqlQuery q(m_db);
+    q.prepare("SELECT COALESCE(matching2_access,0) FROM account WHERE user_id=?");
+    q.addBindValue(static_cast<qint64>(userId));
+    if (!Exec(q) || !q.next())
+        return Matching2Access::Normal;
+    const int v = q.value(0).toInt();
+    return v == 1   ? Matching2Access::Always
+           : v == 2 ? Matching2Access::Never
+                    : Matching2Access::Normal;
+}
+
+bool Database::SetMatching2Access(int64_t userId, Matching2Access access) {
+    QSqlQuery q(m_db);
+    q.prepare("UPDATE account SET matching2_access=? WHERE user_id=?");
+    q.addBindValue(static_cast<int>(access));
+    q.addBindValue(static_cast<qint64>(userId));
+    return Exec(q) && q.numRowsAffected() > 0;
 }

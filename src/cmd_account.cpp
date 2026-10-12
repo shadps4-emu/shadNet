@@ -144,11 +144,13 @@ ErrorType ClientSession::CmdLogin(StreamExtractor& data, QByteArray& reply) {
 
     // Register session and notify online friends
     QVector<std::tuple<std::function<void(QByteArray)>, QString, int64_t>> onlineFriendSenders;
+    const Matching2Access matching2Access = m_db->GetMatching2Access(user.userId);
     {
         QWriteLocker lk(&m_shared->clientsLock);
         SharedState::ClientEntry entry;
         entry.npid = npid;
         entry.appearOffline = req.appear_offline();
+        entry.matching2Access = matching2Access;
         // Title context reported by the emulator at login -> presence gameTitleInfo.
         entry.npTitleId = QString::fromStdString(req.title_id());
         entry.titleName = QString::fromStdString(req.title_name());

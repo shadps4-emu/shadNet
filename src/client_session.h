@@ -4,10 +4,12 @@
 #pragma once
 #include <functional>
 #include <memory>
+#include <optional>
 #include <QAtomicInt>
 #include <QByteArray>
 #include <QHash>
 #include <QList>
+#include <QMutex>
 #include <QObject>
 #include <QPair>
 #include <QReadWriteLock>
@@ -57,6 +59,8 @@ struct SharedState {
         // game-status/game-data update events carry the current status/data until the user
         // ends the game, goes offline, or DELETEs game data.
         bool notifyWithData = false;
+        // Matchmaking access from the account (kept current by the admin API).
+        Matching2Access matching2Access = Matching2Access::Normal;
     };
     QHash<int64_t, ClientEntry> clients;
     QHash<QString, int64_t> npidToUserId; // reverse lookup, protected by clientsLock
@@ -65,6 +69,32 @@ struct SharedState {
 
     // Matchmaking shared state
     MatchingSharedState matching;
+
+    // Players currently holding a matchmaking slot (Matching2MaxUsers). A slot is taken on the
+    // first matchmaking command (normally ContextStart) and given back on ContextStop or
+    // disconnect.
+    mutable QMutex matching2SlotsMutex;
+    QSet<int64_t> matching2Slots;
+
+    // Takes a slot for userId. Already holding one, or bypassLimit, always succeeds; otherwise
+    // fails when maxUsers > 0 slots are taken.
+    bool TryTakeMatching2Slot(int64_t userId, int maxUsers, bool bypassLimit) {
+        QMutexLocker lk(&matching2SlotsMutex);
+        if (matching2Slots.contains(userId))
+            return true;
+        if (!bypassLimit && maxUsers > 0 && matching2Slots.size() >= maxUsers)
+            return false;
+        matching2Slots.insert(userId);
+        return true;
+    }
+    void ReleaseMatching2Slot(int64_t userId) {
+        QMutexLocker lk(&matching2SlotsMutex);
+        matching2Slots.remove(userId);
+    }
+    int Matching2SlotsInUse() const {
+        QMutexLocker lk(&matching2SlotsMutex);
+        return static_cast<int>(matching2Slots.size());
+    }
 
     // Live usage stats for the read-only stats HTTP server
     mutable QReadWriteLock usageLock;
@@ -224,6 +254,10 @@ public:
     ErrorType CmdGetScoreGameDataByAccId(StreamExtractor& data, QByteArray& reply);
     ErrorType CmdGetToken(QByteArray& reply);
     ErrorType CmdGetServerFeatures(QByteArray& reply);
+    // Matchmaking gate: Matching2Enabled, the account's access and Matching2MaxUsers.
+    // Returns the error to answer with, or nullopt to let the command run.
+    std::optional<ErrorType> CheckMatching2Access(CommandType cmd);
+    bool Matching2AllowedForAccount() const;
     ErrorType CmdSetClientVersion(StreamExtractor& data);
 
     // commands cmd_matching.cpp
@@ -318,6 +352,7 @@ private:
     bool m_isSsl = true;
     SharedState* m_shared;
     bool m_authenticated = false;
+    bool m_matching2RefusalLogged = false; // one log line per refusal streak, not per command
     QByteArray m_readBuf;
     std::unique_ptr<Database> m_db;
     ClientInfo m_info;

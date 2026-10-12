@@ -50,6 +50,10 @@ public:
         QReadLocker lk(&m_lock);
         return m_matching2Enabled;
     }
+    int GetMatching2MaxUsers() const {
+        QReadLocker lk(&m_lock);
+        return m_matching2MaxUsers;
+    }
     bool IsTrophiesEnabled() const {
         QReadLocker lk(&m_lock);
         return m_trophiesEnabled;
@@ -179,6 +183,7 @@ private:
     QString m_adminApiHost = "0.0.0.0";
     QString m_adminApiPort = "31350";
     int m_adminSessionMinutes = 480;
+    int m_matching2MaxUsers = 0;
     QString m_logFile;
     int m_logMaxSizeMB = 10;
     QString m_adminApiKey;

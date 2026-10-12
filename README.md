@@ -1,18 +1,20 @@
 # shadNet
+
 Custom online server for shadPS4.
 
 Based on RPCSN implementation, but in C++. If anyone wonders why Qt, it's because it has all the necessary components out of the box.
 
 ## Building
+
 ### Prerequisites
 
-| Requirement | Notes                                                         |
-|-------------|---------------------------------------------------------------|
-| CMake | >= 3.16                                                       |
-| C++ compiler | C++17 capable. Clang 19, GCC, or MSVC 2022 / clang-cl         |
-| Ninja | Recommended generator.                                        |
-| Qt6 | Components: **Core, Network, Sql, Concurrent, HttpServer**.   |
-| Git | Needed to fetch the external submodules                       |
+| Requirement  | Notes                                                       |
+| ------------ | ----------------------------------------------------------- |
+| CMake        | >= 3.16                                                     |
+| C++ compiler | C++17 capable. Clang 19, GCC, or MSVC 2022 / clang-cl       |
+| Ninja        | Recommended generator.                                      |
+| Qt6          | Components: **Core, Network, Sql, Concurrent, HttpServer**. |
+| Git          | Needed to fetch the external submodules                     |
 
 The SQLite Qt SQL driver (`qsqlite`) must be available at runtime for the
 database layer.
@@ -29,6 +31,7 @@ git submodule update --init --recursive
 ```
 
 ### 2. Install Qt6
+
 **Linux:** install a Qt6 desktop kit with HTTP Server and WebSockets, using
 the Qt installer or `aqtinstall`. Set `QTDIR` to that
 kit's directory. The Ubuntu package commands below install build tools;
@@ -149,11 +152,11 @@ The server also exposes these Worlds endpoints through its admin API. Requests
 use a Bearer session and the configured `X-Admin-Api-Key`. Each route addresses
 the server's `worlds.cfg`; requests cannot select arbitrary file paths:
 
-| Method and route | Request / result |
-| --- | --- |
-| `GET /admin/v1/worlds/config` | Snapshot: `content`, `revision`, `activeContent`, `activeRevision`, `canReload`, `exists`. |
-| `PUT /admin/v1/worlds/config` | `{content, revision, reload}` saves, optionally activates, and returns a snapshot. |
-| `POST /admin/v1/worlds/reload` | `{revision}` activates that saved revision and returns a snapshot. |
+| Method and route               | Request / result                                                                           |
+| ------------------------------ | ------------------------------------------------------------------------------------------ |
+| `GET /admin/v1/worlds/config`  | Snapshot: `content`, `revision`, `activeContent`, `activeRevision`, `canReload`, `exists`. |
+| `PUT /admin/v1/worlds/config`  | `{content, revision, reload}` saves, optionally activates, and returns a snapshot.         |
+| `POST /admin/v1/worlds/reload` | `{revision}` activates that saved revision and returns a snapshot.                         |
 
 The API rechecks current admin status for each request and audits mutations.
 Revisions are SHA-256 file hashes, or `missing`. Stale revisions return `409`;
@@ -224,13 +227,35 @@ The fields a registration supplies:
 - **email**: Your email (must be unique)
 - **secretKey**: only required if the server operator set one (see below)
 
+### Matchmaking access and limit
+
+`Matching2Enabled` turns matchmaking on for the server. When it is off, every matchmaking command
+is refused. Within it:
+
+| Key                 | Effect                                                                                                                                                                                                                                                                                                                                                         |
+| ------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `Matching2MaxUsers` | How many players may use matchmaking at once (default `0` = no limit). A player takes a slot when their game starts matchmaking (`ContextStart`) and gives it back when it stops (`ContextStop`) or they disconnect. When all slots are taken, further players are refused with `Unauthorized` until one frees up, players already in a room are not affected. |
+
+Each account also has a matchmaking access setting, changed from the admin tool (or
+`PUT /admin/v1/users/<id>/matching2` with `{"access": ...}`):
+
+- `normal` (default): matchmaking while a slot is free.
+- `always`: gets in even when the limit is reached. Still counted, so the live number is the real
+  load.
+- `never`: no matchmaking. The game is told at sign-in that matchmaking is off; a change made while
+  the player is online refuses their next matchmaking command and frees their slot.
+
+Leaving a room or stopping matchmaking is never refused. Refusals are logged with the reason.
+`GET /admin/v1/overview` reports `matching2Active` / `matching2Max`, and `GET /admin/v1/online`
+marks who holds a slot.
+
 ### Server log file
 
 Everything the server prints is also written to a log file, set in `shadnet.cfg`:
 
-| Key | Effect |
-|-----|--------|
-| `LogFile` | File to write, relative to the server's folder. Default `shadnet.log`; empty turns the file off. |
+| Key            | Effect                                                                                                                                                                |
+| -------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `LogFile`      | File to write, relative to the server's folder. Default `shadnet.log`; empty turns the file off.                                                                      |
 | `LogMaxSizeMB` | Size limit in megabytes (default `10`). When the next line would go past it, the file is emptied and logging starts over, with a note at the top. `0` means no limit. |
 
 The file is appended to across restarts until it reaches the limit. Both keys are read at startup.
@@ -239,11 +264,11 @@ The file is appended to across restarts until it reaches the limit. Both keys ar
 
 Registration is governed by `shadnet.cfg`:
 
-| Key | Effect                                                                                                                                                |
-|-----|-------------------------------------------------------------------------------------------------------------------------------------------------------|
+| Key                     | Effect                                                                                                                                                |
+| ----------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `RegistrationSecretKey` | Empty (default), then registration is **open** to anyone. Set to a value, then clients must send a matching `secret_key`, or they get `Unauthorized`. |
-| `EmailValidated` | When `true`, game login requires the stored account token. No email-token delivery flow is implemented.                                                                                                  |
-| `domains_banlist.txt` | Binary registration rejects listed email domains (`CreationBannedEmailProvider`); HTTP registration does not apply this list.                                                                      |
+| `EmailValidated`        | When `true`, game login requires the stored account token. No email-token delivery flow is implemented.                                               |
+| `domains_banlist.txt`   | Binary registration rejects listed email domains (`CreationBannedEmailProvider`); HTTP registration does not apply this list.                         |
 
 To host a private instance, set a `RegistrationSecretKey` in `shadnet.cfg` and
 share that key only with the people you want to allow to register.

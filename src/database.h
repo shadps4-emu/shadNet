@@ -47,6 +47,13 @@ struct UserRecord {
 };
 
 // ── Admin tooling
+// Per-account matchmaking (Matching2) access.
+enum class Matching2Access : int {
+    Normal = 0, // allowed while Matching2MaxUsers has room
+    Always = 1, // allowed even when the limit is reached (still counted)
+    Never = 2,  // never allowed
+};
+
 struct AdminUserRow {
     int64_t userId = 0;
     QString username;
@@ -60,6 +67,7 @@ struct AdminUserRow {
     int64_t lastLogin = 0;    // seconds since epoch, 0 when never logged in
     QString clientVersion;
     int64_t clientVersionAt = 0;
+    Matching2Access matching2Access = Matching2Access::Normal;
 };
 
 // Which accounts ListUsers/CountUsers should return.
@@ -183,6 +191,9 @@ public:
     bool SetRelStatus(int64_t callerId, int64_t otherId, uint8_t statusCaller, uint8_t statusOther);
     bool DeleteRel(int64_t callerId, int64_t otherId);
     UserRelationships GetRelationships(int64_t userId);
+
+    Matching2Access GetMatching2Access(int64_t userId);
+    bool SetMatching2Access(int64_t userId, Matching2Access access);
 
     bool SetTitleName(const QString& comId, const QString& titleName);
     std::optional<QString> GetTitleName(const QString& comId);

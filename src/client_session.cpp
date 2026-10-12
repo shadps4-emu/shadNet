@@ -211,6 +211,9 @@ ErrorType ClientSession::DispatchCommand(CommandType cmd, StreamExtractor& se, Q
                 EmitPresenceGameTitleInfo();
         }
     }
+    if (const auto refused = CheckMatching2Access(cmd))
+        return *refused;
+
     // Authenticated commands.
     switch (cmd) {
     case CommandType::Login:
@@ -248,8 +251,11 @@ ErrorType ClientSession::DispatchCommand(CommandType cmd, StreamExtractor& se, Q
     // Matchmaking
     case CommandType::ContextStart:
         return CmdContextStart(se);
-    case CommandType::ContextStop:
-        return CmdContextStop(se);
+    case CommandType::ContextStop: {
+        const ErrorType result = CmdContextStop(se);
+        m_shared->ReleaseMatching2Slot(m_info.userId);
+        return result;
+    }
     case CommandType::SetUserInfo:
         return CmdSetUserInfo(se, reply);
     case CommandType::CreateRoom:
@@ -351,10 +357,58 @@ ErrorType ClientSession::CmdSetClientVersion(StreamExtractor& data) {
     return ErrorType::NoError;
 }
 
+bool ClientSession::Matching2AllowedForAccount() const {
+    if (!m_shared || !m_shared->config || !m_shared->config->IsMatching2Enabled())
+        return false;
+    QReadLocker lk(&m_shared->clientsLock);
+    const auto it = m_shared->clients.constFind(m_info.userId);
+    return it == m_shared->clients.constEnd() || it->matching2Access != Matching2Access::Never;
+}
+
+std::optional<ErrorType> ClientSession::CheckMatching2Access(CommandType cmd) {
+    const auto code = static_cast<uint16_t>(cmd);
+    if (code < static_cast<uint16_t>(CommandType::ContextStart) ||
+        code > static_cast<uint16_t>(CommandType::SetRoomMemberDataInternal))
+        return std::nullopt; // not a matchmaking command
+    // Leaving is always allowed, so nobody is stuck in a room or context.
+    if (cmd == CommandType::LeaveRoom || cmd == CommandType::ContextStop)
+        return std::nullopt;
+
+    const bool enabled = m_shared->config && m_shared->config->IsMatching2Enabled();
+    Matching2Access access = Matching2Access::Normal;
+    {
+        QReadLocker lk(&m_shared->clientsLock);
+        const auto it = m_shared->clients.constFind(m_info.userId);
+        if (it != m_shared->clients.constEnd())
+            access = it->matching2Access;
+    }
+    const int maxUsers = m_shared->config ? m_shared->config->GetMatching2MaxUsers() : 0;
+    QString reason;
+    if (!enabled)
+        reason = QStringLiteral("matchmaking is disabled (Matching2Enabled=false)");
+    else if (access == Matching2Access::Never)
+        reason = QStringLiteral("the account is not allowed matchmaking");
+    else if (!m_shared->TryTakeMatching2Slot(m_info.userId, maxUsers,
+                                             access == Matching2Access::Always))
+        reason = QStringLiteral("all %1 matchmaking slots are in use").arg(maxUsers);
+
+    if (reason.isEmpty()) {
+        m_matching2RefusalLogged = false;
+        return std::nullopt;
+    }
+    if (cmd == CommandType::ContextStart || !m_matching2RefusalLogged) {
+        qInfo().noquote() << "Matching2 refused for" << m_info.npid << "(command" << code
+                          << "):" << reason;
+        m_matching2RefusalLogged = true;
+    }
+    return ErrorType::Unauthorized;
+}
+
 ErrorType ClientSession::CmdGetServerFeatures(QByteArray& reply) {
     shadnet::ServerFeaturesReply rep;
-    rep.set_matching2_enabled(m_shared && m_shared->config &&
-                              m_shared->config->IsMatching2Enabled());
+    // Per account: a player set to "never" is told matchmaking is off, so the game doesn't
+    // offer it. The slot limit is checked when matchmaking actually starts.
+    rep.set_matching2_enabled(Matching2AllowedForAccount());
     rep.set_trophies_enabled(TrophiesEnabled());
     appendProto(reply, rep);
     qInfo() << "GetServerFeatures:" << m_info.npid
@@ -371,6 +425,7 @@ void ClientSession::CleanupOnDisconnect() {
 
     // Leave any matchmaking room before tearing down the client entry
     CleanupMatchingOnDisconnect();
+    m_shared->ReleaseMatching2Slot(m_info.userId);
 
     // A user's joined-session state is linked to presence: going offline
     // auto-leaves all their sessions (owner-migration / owner-bind teardown)

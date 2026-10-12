@@ -104,6 +104,12 @@ void ConfigManager::Parse(const QString& path) {
     m_webapiPort = str("WebApiPort", "31315");
     m_statsEnabled = boolean("StatsEnabled", true);
     m_matching2Enabled = boolean("Matching2Enabled", false);
+    bool maxOk = false;
+    m_matching2MaxUsers = str("Matching2MaxUsers", "0").toInt(&maxOk);
+    if (!maxOk || m_matching2MaxUsers < 0) {
+        qWarning() << "Matching2MaxUsers must be a whole number (0 = no limit); using 0";
+        m_matching2MaxUsers = 0;
+    }
     m_trophiesEnabled = boolean("TrophiesEnabled", true);
     m_memberApiEnabled = boolean("MemberApiEnabled", false);
     m_memberApiHost = str("MemberApiHost", "127.0.0.1");

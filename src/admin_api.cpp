@@ -511,6 +511,22 @@ bool AdminApiServer::DeleteAccount(int64_t userId, PurgeSummary& summary, int& c
                                      cachedScoresDropped);
 }
 
+namespace {
+
+QString Matching2AccessName(Matching2Access access) {
+    switch (access) {
+    case Matching2Access::Always:
+        return QStringLiteral("always");
+    case Matching2Access::Never:
+        return QStringLiteral("never");
+    case Matching2Access::Normal:
+        break;
+    }
+    return QStringLiteral("normal");
+}
+
+} // namespace
+
 QJsonObject AdminApiServer::UserRowToJson(const AdminUserRow& row) const {
     QJsonObject o;
     o.insert(QStringLiteral("userId"), static_cast<qint64>(row.userId));
@@ -526,6 +542,7 @@ QJsonObject AdminApiServer::UserRowToJson(const AdminUserRow& row) const {
     o.insert(QStringLiteral("clientVersion"), row.clientVersion);
     o.insert(QStringLiteral("clientVersionAt"), static_cast<qint64>(row.clientVersionAt));
     o.insert(QStringLiteral("online"), IsOnline(row.userId));
+    o.insert(QStringLiteral("matching2Access"), Matching2AccessName(row.matching2Access));
     return o;
 }
 
@@ -706,26 +723,33 @@ void AdminApiServer::RegisterRoutes() {
                   });
 
     // GET /admin/v1/overview — counts for the tool's status bar.
-    m_http->route("/admin/v1/overview", QHttpServerRequest::Method::Get,
-                  [this](const QHttpServerRequest& req) -> QHttpServerResponse {
-                      const auto session = Authenticate(req);
-                      if (!session)
-                          return AuthError(req);
+    m_http->route(
+        "/admin/v1/overview", QHttpServerRequest::Method::Get,
+        [this](const QHttpServerRequest& req) -> QHttpServerResponse {
+            const auto session = Authenticate(req);
+            if (!session)
+                return AuthError(req);
 
-                      int online = 0;
-                      if (m_shared) {
-                          QReadLocker lk(&m_shared->usageLock);
-                          online = m_shared->usageTotalOnline;
-                      }
-                      QJsonObject body;
-                      body.insert(QStringLiteral("totalUsers"), m_db->TotalUsers());
-                      body.insert(QStringLiteral("bannedUsers"),
-                                  m_db->CountUsersWhere(UserFilter::BannedOnly));
-                      body.insert(QStringLiteral("adminUsers"),
-                                  m_db->CountUsersWhere(UserFilter::AdminsOnly));
-                      body.insert(QStringLiteral("onlineUsers"), online);
-                      return JsonOk(body);
-                  });
+            int online = 0;
+            if (m_shared) {
+                QReadLocker lk(&m_shared->usageLock);
+                online = m_shared->usageTotalOnline;
+            }
+            QJsonObject body;
+            body.insert(QStringLiteral("totalUsers"), m_db->TotalUsers());
+            body.insert(QStringLiteral("bannedUsers"),
+                        m_db->CountUsersWhere(UserFilter::BannedOnly));
+            body.insert(QStringLiteral("adminUsers"),
+                        m_db->CountUsersWhere(UserFilter::AdminsOnly));
+            body.insert(QStringLiteral("onlineUsers"), online);
+            // Matchmaking load against Matching2MaxUsers (0 = no limit).
+            const ConfigManager* cfg = m_shared ? m_shared->config : nullptr;
+            body.insert(QStringLiteral("matching2Enabled"), cfg && cfg->IsMatching2Enabled());
+            body.insert(QStringLiteral("matching2Active"),
+                        m_shared ? m_shared->Matching2SlotsInUse() : 0);
+            body.insert(QStringLiteral("matching2Max"), cfg ? cfg->GetMatching2MaxUsers() : 0);
+            return JsonOk(body);
+        });
 
     // GET /admin/v1/users?search=&filter=&limit=&offset=
     m_http->route(
@@ -1224,6 +1248,11 @@ void AdminApiServer::RegisterRoutes() {
 
                       QJsonArray players;
                       if (m_shared) {
+                          QSet<int64_t> inMatchmaking;
+                          {
+                              QMutexLocker slots(&m_shared->matching2SlotsMutex);
+                              inMatchmaking = m_shared->matching2Slots;
+                          }
                           QReadLocker lk(&m_shared->clientsLock);
                           for (auto it = m_shared->clients.constBegin();
                                it != m_shared->clients.constEnd(); ++it) {
@@ -1238,6 +1267,8 @@ void AdminApiServer::RegisterRoutes() {
                               // Reported so an admin sees the true picture: appearing offline
                               // hides someone from other players, not from moderation.
                               o.insert(QStringLiteral("appearOffline"), it->appearOffline);
+                              o.insert(QStringLiteral("matchmaking"),
+                                       inMatchmaking.contains(it.key()));
                               players.append(o);
                           }
                       }
@@ -1747,6 +1778,66 @@ void AdminApiServer::RegisterRoutes() {
             body.insert(QStringLiteral("friendUserId"), static_cast<qint64>(other->userId));
             body.insert(QStringLiteral("friendNpid"), other->username);
             return JsonOk(body);
+        });
+
+    // PUT /admin/v1/users/<id>/matching2 — { access: "normal" | "always" | "never" }.
+    // normal: matchmaking while Matching2MaxUsers has room; always: past the limit too
+    // never: no matchmaking. Applies to an online player at once: "never" frees their slot and
+    // refuses their next matchmaking command.
+    m_http->route(
+        "/admin/v1/users/<arg>/matching2", QHttpServerRequest::Method::Put,
+        [this](qint64 userId, const QHttpServerRequest& req) -> QHttpServerResponse {
+            const auto session = Authenticate(req);
+            if (!session)
+                return AuthError(req);
+            const auto actor = m_db->GetUserRow(session->userId);
+            if (!actor || !actor->admin || actor->banned)
+                return JsonError(QHttpServerResponse::StatusCode::Forbidden, ERR_NOT_ADMIN,
+                                 QStringLiteral("Current admin rights are required."));
+
+            QString parseError;
+            const auto bodyOpt = ParseJsonBody(req, parseError);
+            if (!bodyOpt)
+                return JsonError(QHttpServerResponse::StatusCode::BadRequest, ERR_BAD_REQUEST,
+                                 parseError);
+            const QString name = bodyOpt->value(QStringLiteral("access")).toString();
+            Matching2Access access;
+            if (name == QLatin1String("normal"))
+                access = Matching2Access::Normal;
+            else if (name == QLatin1String("always"))
+                access = Matching2Access::Always;
+            else if (name == QLatin1String("never"))
+                access = Matching2Access::Never;
+            else
+                return JsonError(QHttpServerResponse::StatusCode::BadRequest, ERR_BAD_REQUEST,
+                                 QStringLiteral("\"access\" must be normal, always or never."));
+
+            const auto target = m_db->GetUserRow(userId);
+            if (!target)
+                return JsonError(QHttpServerResponse::StatusCode::NotFound, ERR_NOT_FOUND,
+                                 QStringLiteral("No account has id %1.").arg(userId));
+            if (!m_db->SetMatching2Access(target->userId, access))
+                return JsonError(QHttpServerResponse::StatusCode::InternalServerError, ERR_INTERNAL,
+                                 QStringLiteral("The database rejected the change. Check the "
+                                                "server log."));
+            if (m_shared) {
+                {
+                    QWriteLocker lk(&m_shared->clientsLock);
+                    auto it = m_shared->clients.find(target->userId);
+                    if (it != m_shared->clients.end())
+                        it->matching2Access = access;
+                }
+                if (access == Matching2Access::Never)
+                    m_shared->ReleaseMatching2Slot(target->userId);
+            }
+            m_db->AddAuditEntry(session->userId, session->npid,
+                                QStringLiteral("set_matching2_access"), target->userId,
+                                target->username, name);
+            qInfo().nospace().noquote() << "AdminApi: " << session->npid << " set matchmaking for "
+                                        << target->username << " to " << name;
+
+            auto updated = m_db->GetUserRow(target->userId);
+            return JsonOk(UserRowToJson(updated ? *updated : *target));
         });
 
     // DELETE /admin/v1/users/<id>/friends/<friendId> — ends the friendship on both sides,
