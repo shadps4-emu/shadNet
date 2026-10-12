@@ -32,6 +32,7 @@ path = [
     "clientsample/samples/walkthrough-scores-accountid.bat",
     "documentation/database.md",
     "documentation/matching.md",
+    "documentation/NPAuth.md",
     "documentation/protocol.md",
     "documentation/signaling.md",
     "externals/CMakeLists.txt",

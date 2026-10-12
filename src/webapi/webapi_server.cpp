@@ -9,8 +9,10 @@
 #include <QHttpServerResponse>
 #include <QJsonDocument>
 #include <QJsonObject>
+#include "npauth.h"
 #include "webapi_auth.h"
 #include "webapi_routes_identity.h"
+#include "webapi_routes_npauth.h"
 #include "webapi_routes_presence.h"
 #include "webapi_routes_profile.h"
 #include "webapi_routes_session.h"
@@ -28,6 +30,13 @@ bool WebApiServer::Start(ConfigManager* config, const QString& dbPath, SharedSta
         qCritical() << "WebApiServer: failed to open database at" << dbPath;
         return false;
     }
+
+    m_npAuth = std::make_unique<NpAuthService>();
+    if (!m_npAuth->Load(config->GetNpAuthConfig())) {
+        qCritical() << "WebApiServer: invalid NPAuth configuration or signing key";
+        return false;
+    }
+    qInfo() << "WebApiServer: NPAuth ID tokens" << (m_npAuth->IsEnabled() ? "enabled" : "disabled");
 
     m_http = std::make_unique<QHttpServer>(this);
     RegisterRoutes();
@@ -67,6 +76,7 @@ void WebApiServer::RegisterRoutes() {
     WebApiRoutes::RegisterPresenceRoutes(*m_http, *m_db, *m_shared);
     WebApiRoutes::RegisterSessionRoutes(*m_http, *m_db, *m_shared);
     WebApiRoutes::RegisterIdentityRoutes(*m_http, *m_db);
+    WebApiRoutes::RegisterNpAuthRoutes(*m_http, *m_db, *m_shared, *m_npAuth);
 
     m_http->setMissingHandler(
         this, [](const QHttpServerRequest& req, QHttpServerResponder& responder) {

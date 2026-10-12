@@ -1,6 +1,7 @@
 /.vs/*
 /out/*
 /build/*
+/.npauth/
 /clientsample/.vs/*
 /clientsample/out/*
 /clientsample/build2/*

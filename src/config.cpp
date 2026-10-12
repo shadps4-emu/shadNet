@@ -102,6 +102,7 @@ void ConfigManager::Parse(const QString& path) {
     m_unsecured_port = str("UnsecuredPort", "31313");
     m_matchingUdpPort = str("MatchingUdpPort", "31314");
     m_webapiPort = str("WebApiPort", "31315");
+    m_npAuthConfig = str("NpAuthConfig", "");
     m_statsEnabled = boolean("StatsEnabled", true);
     m_matching2Enabled = boolean("Matching2Enabled", false);
     m_trophiesEnabled = boolean("TrophiesEnabled", true);

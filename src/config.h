@@ -30,6 +30,10 @@ public:
         QReadLocker lk(&m_lock);
         return m_webapiPort;
     }
+    QString GetNpAuthConfig() const {
+        QReadLocker lk(&m_lock);
+        return m_npAuthConfig;
+    }
     bool IsStatsEnabled() const {
         QReadLocker lk(&m_lock);
         return m_statsEnabled;
@@ -168,6 +172,7 @@ private:
     QString m_unsecured_port = "31313";
     QString m_matchingUdpPort = "31314";
     QString m_webapiPort = "31315";
+    QString m_npAuthConfig;
     bool m_statsEnabled = true;
     bool m_matching2Enabled = false;
     bool m_trophiesEnabled = true;

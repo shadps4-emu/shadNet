@@ -29,4 +29,7 @@ struct AuthResult {
 //   - token doesn't match any account         = 401, code 0x80920001
 AuthResult Authenticate(const QHttpServerRequest& req, Database& db);
 
+// Same lookup for a token that arrives outside the Authorization header.
+AuthResult AuthenticateToken(const QString& token, Database& db);
+
 } // namespace WebApiAuth

@@ -57,7 +57,11 @@ AuthResult Authenticate(const QHttpServerRequest& req, Database& db) {
                                            ERR_INVALID_HEADER, "Empty bearer token");
         return out;
     }
+    return AuthenticateToken(token, db);
+}
 
+AuthResult AuthenticateToken(const QString& token, Database& db) {
+    AuthResult out;
     QSqlQuery q(db.Conn());
     q.prepare(QStringLiteral("SELECT user_id, username FROM account WHERE token = ?"));
     q.addBindValue(token);

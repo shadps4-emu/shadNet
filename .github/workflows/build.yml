@@ -162,6 +162,8 @@ jobs:
         Copy-Item ${{ github.workspace }}/build/shadnet.exe staging/
         # Copies Qt6 DLLs, sqldrivers/qsqlite.dll, and VC runtime alongside the exe
         windeployqt6 --release --no-translations staging/shadnet.exe
+        New-Item -ItemType Directory -Force staging/licenses
+        Copy-Item externals/libressl/COPYING staging/licenses/LibreSSL.txt
 
     - name: Upload Windows artifact
       uses: actions/upload-artifact@v4
@@ -232,7 +234,11 @@ jobs:
       run: cmake --build ${{ github.workspace }}/build --config ${{ env.BUILD_TYPE }} --parallel $(nproc)
 
     - name: Package
-      run: tar czf shadnet-linux64.tar.gz -C ${{ github.workspace }}/build shadnet
+      run: |
+        mkdir -p staging/licenses
+        cp build/shadnet staging/
+        cp externals/libressl/COPYING staging/licenses/LibreSSL.txt
+        tar czf shadnet-linux64.tar.gz -C staging .
 
     - name: Upload Linux artifact
       uses: actions/upload-artifact@v4
