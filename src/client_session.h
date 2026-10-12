@@ -386,7 +386,7 @@ private:
     bool m_authenticated = false;
     bool m_matching2RefusalLogged = false;
     bool m_versionReported = false;
-    bool m_versionRejected = false; 
+    bool m_versionRejected = false;
     QByteArray m_readBuf;
     std::unique_ptr<Database> m_db;
     ClientInfo m_info;
