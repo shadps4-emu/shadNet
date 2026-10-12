@@ -384,13 +384,18 @@ std::optional<ErrorType> ClientSession::CheckMatching2Access(CommandType cmd) {
     }
     const int maxUsers = m_shared->config ? m_shared->config->GetMatching2MaxUsers() : 0;
     QString reason;
-    if (!enabled)
+    uint32_t reasonCode = 0; // NotifyServiceUnavailable.reason
+    if (!enabled) {
         reason = QStringLiteral("matchmaking is disabled (Matching2Enabled=false)");
-    else if (access == Matching2Access::Never)
+        reasonCode = 3;
+    } else if (access == Matching2Access::Never) {
         reason = QStringLiteral("the account is not allowed matchmaking");
-    else if (!m_shared->TryTakeMatching2Slot(m_info.userId, maxUsers,
-                                             access == Matching2Access::Always))
+        reasonCode = 2;
+    } else if (!m_shared->TryTakeMatching2Slot(m_info.userId, maxUsers,
+                                               access == Matching2Access::Always)) {
         reason = QStringLiteral("all %1 matchmaking slots are in use").arg(maxUsers);
+        reasonCode = 1;
+    }
 
     if (reason.isEmpty()) {
         m_matching2RefusalLogged = false;
@@ -400,6 +405,18 @@ std::optional<ErrorType> ClientSession::CheckMatching2Access(CommandType cmd) {
         qInfo().noquote() << "Matching2 refused for" << m_info.npid << "(command" << code
                           << "):" << reason;
         m_matching2RefusalLogged = true;
+        // Tell the client why, once per refusal streak, so it can show the player.
+        shadnet::NotifyServiceUnavailable n;
+        n.set_service(1); // Matching2
+        n.set_reason(reasonCode);
+        if (reasonCode == 1) {
+            n.set_in_use(static_cast<uint32_t>(m_shared->Matching2SlotsInUse()));
+            n.set_limit(static_cast<uint32_t>(maxUsers));
+        }
+        QByteArray payload;
+        const std::string s = n.SerializeAsString();
+        appendBlob(payload, QByteArray(s.data(), static_cast<int>(s.size())));
+        SendSelfNotification(NotificationType::ServiceUnavailable, payload);
     }
     return ErrorType::Unauthorized;
 }

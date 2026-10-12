@@ -103,6 +103,9 @@ enum class NotificationType : uint16_t {
     // dataType, data, fromNpid, toNpid, extdData (u32 count + key/value blobs),
     // fromAccountId (u64 LE), toAccountId (u64 LE). 0 account id = unknown/none.
     WebApiPushEvent = 17,
+    // The server refused a service to this player and says why (NotifyServiceUnavailable), so
+    // the client can tell the player instead of showing a bare network error.
+    ServiceUnavailable = 18,
 };
 
 // Error codes for Reply packets

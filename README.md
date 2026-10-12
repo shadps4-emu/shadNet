@@ -182,7 +182,7 @@ The parser, file storage and editor components live in `common/worlds`.
 ### Using the sample client
 
 The sample client is a standalone tool (protobuf only, no Qt). Build it
-separately from its own directory:
+separately from its own directory
 
 ```bash
 cd clientsample
@@ -245,7 +245,10 @@ Each account also has a matchmaking access setting, changed from the admin tool 
 - `never`: no matchmaking. The game is told at sign-in that matchmaking is off; a change made while
   the player is online refuses their next matchmaking command and frees their slot.
 
-Leaving a room or stopping matchmaking is never refused. Refusals are logged with the reason.
+Leaving a room or stopping matchmaking is never refused. Refusals are logged with the reason,
+and the player's client is sent notification 18 (`NotifyServiceUnavailable`: service 1 =
+matchmaking; reason 1 = full with `in_use`/`limit`, 2 = not allowed, 3 = disabled), once per
+refusal streak. shadPS4 shows it on screen,older clients ignore it.
 `GET /admin/v1/overview` reports `matching2Active` / `matching2Max`, and `GET /admin/v1/online`
 marks who holds a slot.
 
