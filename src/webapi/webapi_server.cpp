@@ -68,20 +68,35 @@ void WebApiServer::RegisterRoutes() {
     WebApiRoutes::RegisterSessionRoutes(*m_http, *m_db, *m_shared);
     WebApiRoutes::RegisterIdentityRoutes(*m_http, *m_db);
 
-    m_http->setMissingHandler(
-        this, [](const QHttpServerRequest& req, QHttpServerResponder& responder) {
-            qWarning() << "WebAPI: unhandled" << req.method() << req.url().path()
-                       << "(query:" << req.url().query() << ")";
+    m_http->setMissingHandler(this, [this](const QHttpServerRequest& req,
+                                           QHttpServerResponder& responder) {
+        QString who = QStringLiteral("unauthenticated");
+        if (m_db) {
+            const auto auth = WebApiAuth::Authenticate(req, *m_db);
+            if (auth.userId) {
+                const auto row = m_db->GetUserRow(*auth.userId);
+                const QString version = row ? row->clientVersion : QString();
+                who =
+                    QStringLiteral("%1 (client \"%2\")")
+                        .arg(auth.npid, version.isEmpty() ? QStringLiteral("unreported") : version);
+            } else if (!req.value("Authorization").isEmpty()) {
+                who = QStringLiteral("invalid token");
+            }
+        }
+        qWarning().noquote() << "WebAPI: unhandled" << req.method() << req.url().path()
+                             << "(query:" << req.url().query() << ") from" << who << "at"
+                             << req.remoteAddress().toString()
+                             << "UA:" << QString::fromUtf8(req.value("User-Agent"));
 
-            QJsonObject errorObj;
-            errorObj.insert("code", static_cast<qint64>(0x80920005));
-            errorObj.insert("message", QStringLiteral("Endpoint not implemented"));
-            QJsonObject body;
-            body.insert("error", errorObj);
-            responder.sendResponse(QHttpServerResponse{
-                "application/json",
-                QJsonDocument(body).toJson(QJsonDocument::Compact),
-                QHttpServerResponder::StatusCode::NotFound,
-            });
+        QJsonObject errorObj;
+        errorObj.insert("code", static_cast<qint64>(0x80920005));
+        errorObj.insert("message", QStringLiteral("Endpoint not implemented"));
+        QJsonObject body;
+        body.insert("error", errorObj);
+        responder.sendResponse(QHttpServerResponse{
+            "application/json",
+            QJsonDocument(body).toJson(QJsonDocument::Compact),
+            QHttpServerResponder::StatusCode::NotFound,
         });
+    });
 }
