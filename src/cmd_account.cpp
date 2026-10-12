@@ -100,7 +100,8 @@ ErrorType ClientSession::CmdLogin(StreamExtractor& data, QByteArray& reply) {
 
     {
         QReadLocker lk(&m_shared->clientsLock);
-        if (m_shared->clients.contains(user.userId))
+        if (m_shared->clients.contains(user.userId) ||
+            m_shared->pendingVersionLogins.contains(user.userId))
             return ErrorType::LoginAlreadyLoggedIn;
     }
 
@@ -114,17 +115,6 @@ ErrorType ClientSession::CmdLogin(StreamExtractor& data, QByteArray& reply) {
     m_info.statAgent = user.statAgent;
     m_info.banned = user.banned;
     m_authenticated = true;
-
-    // Clients report their version right after signing in (SetClientVersion). One that hasn't
-    // by the timeout is checked as having none, so builds that never report are covered too.
-    if (m_shared->clientVersionRules && m_shared->config) {
-        const int timeout = m_shared->config->GetClientVersionTimeoutSeconds();
-        if (timeout > 0)
-            QTimer::singleShot(timeout * 1000, this, [this]() {
-                if (!m_versionReported)
-                    CheckClientVersion(QString(), /*reported=*/false);
-            });
-    }
 
     m_matching.titleId = QString::fromStdString(req.title_id());
     {
@@ -163,18 +153,63 @@ ErrorType ClientSession::CmdLogin(StreamExtractor& data, QByteArray& reply) {
 
     appendProto(reply, pb);
 
+    PendingOnline pending;
+    pending.appearOffline = req.appear_offline();
+    pending.titleId = QString::fromStdString(req.title_id());
+    pending.titleName = QString::fromStdString(req.title_name());
+    pending.matching2Access = m_db->GetMatching2Access(user.userId);
+    m_pendingOnline = pending;
+
+    // Clients report their version right after signing in (SetClientVersion). With version
+    // rules on, the session isn't shown online (friends, presence, online lists, usage) until
+    // the version is accepted
+    const int versionTimeout = (m_shared->clientVersionRules && m_shared->config)
+                                   ? m_shared->config->GetClientVersionTimeoutSeconds()
+                                   : 0;
+    if (versionTimeout > 0 && !user.statAgent) {
+        {
+            QWriteLocker lk(&m_shared->clientsLock);
+            m_shared->pendingVersionLogins.insert(user.userId);
+        }
+        QTimer::singleShot(versionTimeout * 1000, this, [this]() {
+            if (!m_versionReported)
+                CheckClientVersion(QString(), /*reported=*/false);
+        });
+        qInfo() << "Authenticated:" << npid << "(online once its client version is accepted)";
+    } else {
+        RegisterOnline();
+        qInfo() << "Authenticated:" << npid;
+    }
+    return ErrorType::NoError;
+}
+
+void ClientSession::RegisterOnline() {
+    if (m_registered || !m_pendingOnline || !m_authenticated)
+        return;
+    const PendingOnline pending = *m_pendingOnline;
+    m_pendingOnline.reset();
+    m_registered = true;
+
+    const int64_t userId = m_info.userId;
+    const QString npid = m_info.npid;
+    // Read again: friendships may have changed while the login was held.
+    const UserRelationships rels = m_db->GetRelationships(userId);
+
     // Register session and notify online friends
     QVector<std::tuple<std::function<void(QByteArray)>, QString, int64_t>> onlineFriendSenders;
-    const Matching2Access matching2Access = m_db->GetMatching2Access(user.userId);
     {
         QWriteLocker lk(&m_shared->clientsLock);
+        m_shared->pendingVersionLogins.remove(userId);
         SharedState::ClientEntry entry;
         entry.npid = npid;
-        entry.appearOffline = req.appear_offline();
-        entry.matching2Access = matching2Access;
+        entry.appearOffline = pending.appearOffline;
+        // The admin API may have changed it while the login was held.
+        entry.matching2Access = m_db->GetMatching2Access(userId);
         // Title context reported by the emulator at login -> presence gameTitleInfo.
-        entry.npTitleId = QString::fromStdString(req.title_id());
-        entry.titleName = QString::fromStdString(req.title_name());
+        entry.npTitleId = pending.titleId;
+        entry.titleName = pending.titleName;
+        entry.clientVersion = m_reportedVersion;
+        entry.versionReported = m_versionReported;
         entry.send = [this](QByteArray pkt) {
             QMetaObject::invokeMethod(
                 this, [this, pkt]() { SendPacket(pkt); }, Qt::QueuedConnection);
@@ -190,16 +225,15 @@ ErrorType ClientSession::CmdLogin(StreamExtractor& data, QByteArray& reply) {
             entry.friends.insert(friendId, friendNpid);
             auto it = m_shared->clients.find(friendId);
             if (it != m_shared->clients.end()) {
-                it->friends.insert(user.userId, npid);
+                it->friends.insert(userId, npid);
                 onlineFriendSenders.append({it->send, friendNpid, friendId});
             }
         }
-        m_shared->clients[user.userId] = std::move(entry);
-        m_shared->npidToUserId[npid] = user.userId;
+        m_shared->clients[userId] = std::move(entry);
+        m_shared->npidToUserId[npid] = userId;
         // Outlives the session entry above so the WebAPI can still name the title.
-        const QString loginTitleId = QString::fromStdString(req.title_id());
-        if (!loginTitleId.isEmpty())
-            m_shared->lastLoginTitleId[user.userId] = loginTitleId;
+        if (!pending.titleId.isEmpty())
+            m_shared->lastLoginTitleId[userId] = pending.titleId;
     }
 
     // Count this authenticated session in live usage stats
@@ -207,7 +241,7 @@ ErrorType ClientSession::CmdLogin(StreamExtractor& data, QByteArray& reply) {
 
     // Notify online friends we came online -- unless Appear-Offline is set, in which case
     // we stay invisible (handled as offline by everyone else).
-    if (!onlineFriendSenders.isEmpty() && !req.appear_offline()) {
+    if (!onlineFriendSenders.isEmpty() && !pending.appearOffline) {
         shadnet::NotifyFriendStatus ns;
         ns.set_npid(npid.toStdString());
         ns.set_online(true);
@@ -228,12 +262,18 @@ ErrorType ClientSession::CmdLogin(StreamExtractor& data, QByteArray& reply) {
                 NotificationType::WebApiPushEvent,
                 ClientSession::BuildWebApiPushPayload(
                     QString(), 0, QStringLiteral("np:service:presence:onlineStatus"), QByteArray(),
-                    npid, friendNpid, {}, user.userId, friendId)));
+                    npid, friendNpid, {}, userId, friendId)));
         }
     }
 
-    qInfo() << "Authenticated:" << npid;
-    return ErrorType::NoError;
+    // A game seen while the login was held: same-game friends learn the title now.
+    bool inGame = false;
+    {
+        QReadLocker ul(&m_shared->usageLock);
+        inGame = m_shared->usageClientGame.contains(userId);
+    }
+    if (inGame)
+        EmitPresenceGameTitleInfo();
 }
 
 // Delete

@@ -90,8 +90,11 @@ struct SharedState {
         bool notifyWithData = false;
         // Matchmaking access from the account (kept current by the admin API).
         Matching2Access matching2Access = Matching2Access::Normal;
+        QString clientVersion;
+        bool versionReported = false;
     };
     QHash<int64_t, ClientEntry> clients;
+    QSet<int64_t> pendingVersionLogins;
     QHash<QString, int64_t> npidToUserId; // reverse lookup, protected by clientsLock
     // Title context reported at login (cmd_account).
     QHash<int64_t, QString> lastLoginTitleId;
@@ -135,9 +138,10 @@ struct SharedState {
         QWriteLocker lk(&usageLock);
         ++usageTotalOnline;
     }
-    void UsageOnLogout(int64_t userId) {
+    // countedOnline: the session had been counted by UsageOnLogin.
+    void UsageOnLogout(int64_t userId, bool countedOnline = true) {
         QWriteLocker lk(&usageLock);
-        if (usageTotalOnline > 0)
+        if (countedOnline && usageTotalOnline > 0)
             --usageTotalOnline;
         auto it = usageClientGame.find(userId);
         if (it != usageClientGame.end()) {
@@ -290,6 +294,7 @@ public:
     // Applies clientversions.cfg to version ("" = none reported). A denied client is sent
     // NotifyClientRejected and disconnected.
     void CheckClientVersion(const QString& version, bool reported);
+    void RegisterOnline();
     ErrorType CmdSetClientVersion(StreamExtractor& data);
 
     // commands cmd_matching.cpp
@@ -386,7 +391,16 @@ private:
     bool m_authenticated = false;
     bool m_matching2RefusalLogged = false;
     bool m_versionReported = false;
+    QString m_reportedVersion;
     bool m_versionRejected = false;
+    struct PendingOnline {
+        bool appearOffline = false;
+        QString titleId;
+        QString titleName;
+        Matching2Access matching2Access = Matching2Access::Normal;
+    };
+    std::optional<PendingOnline> m_pendingOnline;
+    bool m_registered = false; // in m_shared->clients (shown online)
     QByteArray m_readBuf;
     std::unique_ptr<Database> m_db;
     ClientInfo m_info;

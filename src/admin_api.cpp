@@ -1240,44 +1240,46 @@ void AdminApiServer::RegisterRoutes() {
         });
 
     // GET /admin/v1/online — who is connected right now, with their title context.
-    m_http->route("/admin/v1/online", QHttpServerRequest::Method::Get,
-                  [this](const QHttpServerRequest& req) -> QHttpServerResponse {
-                      const auto session = Authenticate(req);
-                      if (!session)
-                          return AuthError(req);
+    m_http->route(
+        "/admin/v1/online", QHttpServerRequest::Method::Get,
+        [this](const QHttpServerRequest& req) -> QHttpServerResponse {
+            const auto session = Authenticate(req);
+            if (!session)
+                return AuthError(req);
 
-                      QJsonArray players;
-                      if (m_shared) {
-                          QSet<int64_t> inMatchmaking;
-                          {
-                              QMutexLocker slots(&m_shared->matching2SlotsMutex);
-                              inMatchmaking = m_shared->matching2Slots;
-                          }
-                          QReadLocker lk(&m_shared->clientsLock);
-                          for (auto it = m_shared->clients.constBegin();
-                               it != m_shared->clients.constEnd(); ++it) {
-                              QJsonObject o;
-                              o.insert(QStringLiteral("userId"), static_cast<qint64>(it.key()));
-                              o.insert(QStringLiteral("npid"), it->npid);
-                              o.insert(QStringLiteral("titleId"), it->npTitleId);
-                              o.insert(QStringLiteral("titleName"), it->titleName);
-                              o.insert(QStringLiteral("gameStatus"), it->gameStatus);
-                              o.insert(QStringLiteral("platform"), it->platform);
-                              o.insert(QStringLiteral("presenceUpdatedAt"), it->presenceUpdatedAt);
-                              // Reported so an admin sees the true picture: appearing offline
-                              // hides someone from other players, not from moderation.
-                              o.insert(QStringLiteral("appearOffline"), it->appearOffline);
-                              o.insert(QStringLiteral("matchmaking"),
-                                       inMatchmaking.contains(it.key()));
-                              players.append(o);
-                          }
-                      }
+            QJsonArray players;
+            if (m_shared) {
+                QSet<int64_t> inMatchmaking;
+                {
+                    QMutexLocker slots(&m_shared->matching2SlotsMutex);
+                    inMatchmaking = m_shared->matching2Slots;
+                }
+                QReadLocker lk(&m_shared->clientsLock);
+                for (auto it = m_shared->clients.constBegin(); it != m_shared->clients.constEnd();
+                     ++it) {
+                    QJsonObject o;
+                    o.insert(QStringLiteral("userId"), static_cast<qint64>(it.key()));
+                    o.insert(QStringLiteral("npid"), it->npid);
+                    o.insert(QStringLiteral("titleId"), it->npTitleId);
+                    o.insert(QStringLiteral("titleName"), it->titleName);
+                    o.insert(QStringLiteral("gameStatus"), it->gameStatus);
+                    o.insert(QStringLiteral("platform"), it->platform);
+                    o.insert(QStringLiteral("presenceUpdatedAt"), it->presenceUpdatedAt);
+                    // Reported so an admin sees the true picture: appearing offline
+                    // hides someone from other players, not from moderation.
+                    o.insert(QStringLiteral("appearOffline"), it->appearOffline);
+                    o.insert(QStringLiteral("matchmaking"), inMatchmaking.contains(it.key()));
+                    o.insert(QStringLiteral("clientVersion"), it->clientVersion);
+                    o.insert(QStringLiteral("clientVersionReported"), it->versionReported);
+                    players.append(o);
+                }
+            }
 
-                      QJsonObject body;
-                      body.insert(QStringLiteral("players"), players);
-                      body.insert(QStringLiteral("total"), players.size());
-                      return JsonOk(body);
-                  });
+            QJsonObject body;
+            body.insert(QStringLiteral("players"), players);
+            body.insert(QStringLiteral("total"), players.size());
+            return JsonOk(body);
+        });
 
     // GET /admin/v1/boards — every board holding scores, most populated first.
     m_http->route("/admin/v1/boards", QHttpServerRequest::Method::Get,

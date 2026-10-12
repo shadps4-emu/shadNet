@@ -361,19 +361,32 @@ ErrorType ClientSession::CmdSetClientVersion(StreamExtractor& data) {
     qInfo().nospace().noquote() << "SetClientVersion: " << m_info.npid << " is running "
                                 << (version.isEmpty() ? QStringLiteral("(cleared)") : version);
     m_versionReported = true;
+    m_reportedVersion = version;
+    if (m_registered) { // already online: keep the admin's online list current
+        QWriteLocker lk(&m_shared->clientsLock);
+        const auto it = m_shared->clients.find(m_info.userId);
+        if (it != m_shared->clients.end()) {
+            it->clientVersion = version;
+            it->versionReported = true;
+        }
+    }
     CheckClientVersion(version, /*reported=*/true);
     return ErrorType::NoError;
 }
 
 void ClientSession::CheckClientVersion(const QString& version, bool reported) {
-    if (m_versionRejected || !m_shared || !m_shared->clientVersionRules)
+    if (m_versionRejected || !m_shared)
         return;
     // Service accounts (stat agents) aren't emulators and don't report a version.
-    if (m_info.statAgent)
+    if (!m_shared->clientVersionRules || m_info.statAgent) {
+        RegisterOnline();
         return;
+    }
     const auto decision = m_shared->clientVersionRules->Evaluate(version);
-    if (decision.allowed)
+    if (decision.allowed) {
+        RegisterOnline(); // no-op unless the login was held for this check
         return;
+    }
 
     m_versionRejected = true;
     const int cooldown = m_shared->config ? m_shared->config->GetClientVersionCooldownSeconds() : 0;
@@ -403,6 +416,8 @@ void ClientSession::CheckClientVersion(const QString& version, bool reported) {
 bool ClientSession::Matching2AllowedForAccount() const {
     if (!m_shared || !m_shared->config || !m_shared->config->IsMatching2Enabled())
         return false;
+    if (m_pendingOnline) // not online yet: the access read at login
+        return m_pendingOnline->matching2Access != Matching2Access::Never;
     QReadLocker lk(&m_shared->clientsLock);
     const auto it = m_shared->clients.constFind(m_info.userId);
     return it == m_shared->clients.constEnd() || it->matching2Access != Matching2Access::Never;
@@ -416,6 +431,10 @@ std::optional<ErrorType> ClientSession::CheckMatching2Access(CommandType cmd) {
     // Leaving is always allowed, so nobody is stuck in a room or context.
     if (cmd == CommandType::LeaveRoom || cmd == CommandType::ContextStop)
         return std::nullopt;
+    // Not online until the client version is accepted: other players couldn't reach this
+    // session yet. Clients report their version before the game can start matchmaking.
+    if (!m_registered)
+        return ErrorType::Unauthorized;
 
     const bool enabled = m_shared->config && m_shared->config->IsMatching2Enabled();
     Matching2Access access = Matching2Access::Normal;
@@ -494,6 +513,17 @@ void ClientSession::CleanupOnDisconnect() {
     // Collect send functions for every online friend before releasing the lock,
     // then remove ourselves from the map.
     // (send, npid, userId)
+    if (!m_registered) {
+        // Held for its client version and never shown online: nothing to tell anyone.
+        {
+            QWriteLocker lk(&m_shared->clientsLock);
+            m_shared->pendingVersionLogins.remove(m_info.userId);
+        }
+        m_shared->UsageOnLogout(m_info.userId, /*countedOnline=*/false);
+        qInfo() << "Client disconnected:" << m_info.npid << "(was not shown online)";
+        return;
+    }
+
     QVector<std::tuple<std::function<void(QByteArray)>, QString, int64_t>> friendSenders;
     bool selfAppearOffline = false;
     {
@@ -601,6 +631,10 @@ ErrorType ClientSession::CmdSetAppearOffline(StreamExtractor& data) {
     if (!decodeProto(req, data) || data.error())
         return ErrorType::Malformed;
     const bool enable = req.appear_offline();
+    if (m_pendingOnline) { // not online yet: applied when the session goes online
+        m_pendingOnline->appearOffline = enable;
+        return ErrorType::NoError;
+    }
 
     QString myNpid, gameStatusVal, gameDataVal;
     bool hasGameStatus = false, hasGameData = false, hasTitle = false, notifyWithData = false;
