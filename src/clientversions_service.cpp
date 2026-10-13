@@ -106,7 +106,7 @@ ClientVersionsResult ClientVersionsService::Handle(const QString& operation,
         return result;
     auto finish = [&]() {
         disk.activeContent = m_activeContent;
-        .disk.activeRevision = m_activeRevision.isEmpty() ? disk.revision : m_activeRevision;
+        disk.activeRevision = m_activeRevision.isEmpty() ? disk.revision : m_activeRevision;
         disk.canReload = true;
         result.ok = true;
         result.status = 200;
