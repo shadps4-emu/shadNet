@@ -49,6 +49,10 @@ set(SOURCES
     src/scoreboards_service.cpp
     common/scoreboards/scoreboardsconfig.h
     common/scoreboards/scoreboardsconfig.cpp
+    src/clientversions_service.h
+    src/clientversions_service.cpp
+    common/clientversions/clientversionsconfig.h
+    common/clientversions/clientversionsconfig.cpp
     src/main.cpp
     src/file_logger.h
     src/client_version_rules.h
@@ -122,6 +126,7 @@ add_executable(shadnet ${SOURCES})
 target_include_directories(shadnet PRIVATE
     common/worlds
     common/scoreboards
+    common/clientversions
     src
     "${PROTO_OUT}"                                    
     "${CMAKE_CURRENT_SOURCE_DIR}/externals/protobuf/src"

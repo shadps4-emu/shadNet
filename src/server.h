@@ -19,6 +19,7 @@
 class WorldsService;
 class ScoreboardsService;
 class ClientVersionRules;
+class ClientVersionsService;
 
 class ShadNetServer : public QObject {
     Q_OBJECT
@@ -49,6 +50,7 @@ private:
     std::unique_ptr<WorldsService> m_worlds;
     std::unique_ptr<ScoreboardsService> m_scoreboards;
     std::unique_ptr<ClientVersionRules> m_clientVersionRules;
+    std::unique_ptr<ClientVersionsService> m_clientVersions;
     QString m_dbPath;
 
     std::unique_ptr<ScoreCache> m_scoreCache;

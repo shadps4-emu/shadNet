@@ -172,6 +172,19 @@ from the file keep their last settings. The editor reads the file strictly (one 
 setting group, each board of a game configured once); the `#` comment directly above a line is
 kept as that game's label. Saves create `scoreboards.cfg.bak`.
 
+`clientversions.cfg` (which client builds may sign in) is edited the same way:
+
+| Method and route                       | Request / result                                                                                       |
+| -------------------------------------- | ------------------------------------------------------------------------------------------------------ |
+| `GET /admin/v1/clientversions/config`  | Snapshot, plus `rulesActive`, `timeoutSeconds` and `cooldownSeconds` from the server config.           |
+| `PUT /admin/v1/clientversions/config`  | `{content, revision, reload, recheckOnline?}` saves, optionally applies, and returns a snapshot.        |
+| `POST /admin/v1/clientversions/reload` | `{revision, recheckOnline?}` applies that saved revision and returns a snapshot.                         |
+
+Applying replaces the rules checked at sign-in and clears every sign-in cooldown earlier rules
+started. With `recheckOnline`, players already online are checked again; those the new rules deny
+get the server's message and are disconnected. An apply also returns `cooldownsCleared`,
+`rechecked` and `denied`. The routes answer `503` when `ClientVersionRulesFile` is empty.
+
 The API rechecks current admin status for each request and audits mutations.
 Revisions are SHA-256 file hashes, or `missing`. Stale revisions return `409`;
 invalid configuration or occupied-world changes return `422`. Editors preserve

@@ -221,6 +221,13 @@ void ClientSession::RegisterOnline() {
         entry.disconnect = [this]() {
             QMetaObject::invokeMethod(m_socket, "disconnectFromHost", Qt::QueuedConnection);
         };
+        if (!m_info.statAgent) {
+            entry.recheckVersion = [this]() {
+                QMetaObject::invokeMethod(
+                    this, [this]() { CheckClientVersion(m_reportedVersion, m_versionReported); },
+                    Qt::QueuedConnection);
+            };
+        }
         for (const auto& [friendId, friendNpid] : rels.friends) {
             entry.friends.insert(friendId, friendNpid);
             auto it = m_shared->clients.find(friendId);

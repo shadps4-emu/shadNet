@@ -30,12 +30,13 @@
 // Shared state visible to all sessions (thread-safe with locks)
 class WorldsService;
 class ScoreboardsService;
+class ClientVersionsService;
 class ClientVersionRules;
 
 struct SharedState {
     WorldsService* worlds = nullptr;
     ScoreboardsService* scoreboards = nullptr;
-    // Which client versions may stay signed in (null = no rules). Loaded at startup.
+    ClientVersionsService* clientVersions = nullptr;
     const ClientVersionRules* clientVersionRules = nullptr;
 
     // Accounts recently rejected for their client version: userId -> refuse logins until
@@ -94,6 +95,7 @@ struct SharedState {
         Matching2Access matching2Access = Matching2Access::Normal;
         QString clientVersion;
         bool versionReported = false;
+        std::function<void()> recheckVersion;
     };
     QHash<int64_t, ClientEntry> clients;
     QSet<int64_t> pendingVersionLogins;

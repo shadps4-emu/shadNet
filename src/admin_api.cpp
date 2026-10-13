@@ -20,6 +20,7 @@
 #include <QUrlQuery>
 
 #include "client_session.h" // SharedState
+#include "clientversions_service.h"
 #include "proto_utils.h"
 #include "score_cache.h"
 #include "score_files.h"
@@ -662,6 +663,85 @@ void AdminApiServer::RegisterRoutes() {
     m_http->route("/admin/v1/scoreboards/reload", QHttpServerRequest::Method::Post,
                   [scoreboardsRequest](const QHttpServerRequest& req) {
                       return scoreboardsRequest(req, QStringLiteral("reload"));
+                  });
+
+    auto clientVersionsRequest = [this](const QHttpServerRequest& req,
+                                        const QString& operation) -> QHttpServerResponse {
+        const auto session = Authenticate(req);
+        if (!session)
+            return AuthError(req);
+        const auto actor = m_db->GetUserRow(session->userId);
+        if (!actor || !actor->admin || actor->banned)
+            return JsonError(QHttpServerResponse::StatusCode::Forbidden, ERR_NOT_ADMIN,
+                             QStringLiteral("Current admin rights are required."));
+        if (!m_shared || !m_shared->clientVersions) {
+            const bool off = m_shared && m_shared->config &&
+                             m_shared->config->GetClientVersionRulesFile().isEmpty();
+            return JsonError(
+                QHttpServerResponse::StatusCode::ServiceUnavailable, ERR_INTERNAL,
+                off ? QStringLiteral("Client version rules are off on this server "
+                                     "(ClientVersionRulesFile is empty in its config).")
+                    : QStringLiteral("Client version rules could not be loaded at startup. "
+                                     "Check the server log."));
+        }
+        if (req.body().size() > kMaxWorldsBytes * 6 + 2048)
+            return JsonError(QHttpServerResponse::StatusCode::PayloadTooLarge, ERR_BAD_REQUEST,
+                             QStringLiteral("Client version rules request is too large."));
+        QJsonObject body;
+        if (operation != QLatin1String("read")) {
+            QString error;
+            const auto parsed = ParseJsonBody(req, error);
+            if (!parsed)
+                return JsonError(QHttpServerResponse::StatusCode::BadRequest, ERR_BAD_REQUEST,
+                                 error);
+            body = *parsed;
+        }
+        const auto result = m_shared->clientVersions->Handle(operation, body);
+        if (operation != QLatin1String("read")) {
+            const QString action = QStringLiteral("clientversions_") + operation +
+                                   (result.ok ? QString() : QStringLiteral("_failed"));
+            const QString detail =
+                result.ok ? QStringLiteral("saved=%1 active=%2 rules=%3 rechecked=%4 denied=%5")
+                                .arg(result.snapshot.revision, result.snapshot.activeRevision)
+                                .arg(result.rulesApplied)
+                                .arg(result.rechecked)
+                                .arg(result.wouldDeny)
+                          : result.message;
+            if (!m_db->AddAuditEntry(session->userId, session->npid, action, 0,
+                                     QStringLiteral("clientversions.cfg"), detail))
+                qWarning() << "Could not persist client versions audit:" << m_db->lastError();
+            qInfo() << "Admin clientversions" << operation << "by" << session->npid
+                    << (result.ok ? "succeeded" : "failed") << detail;
+        }
+        if (!result.ok)
+            return JsonError(static_cast<QHttpServerResponse::StatusCode>(result.status),
+                             result.status * 10, result.message);
+        QJsonObject out = worldsSnapshotJson(result.snapshot);
+        out.insert(QStringLiteral("rulesActive"), result.rulesApplied);
+        if (m_shared->config) {
+            out.insert(QStringLiteral("timeoutSeconds"),
+                       m_shared->config->GetClientVersionTimeoutSeconds());
+            out.insert(QStringLiteral("cooldownSeconds"),
+                       m_shared->config->GetClientVersionCooldownSeconds());
+        }
+        if (result.applied) {
+            out.insert(QStringLiteral("cooldownsCleared"), result.cooldownsCleared);
+            out.insert(QStringLiteral("rechecked"), result.rechecked);
+            out.insert(QStringLiteral("denied"), result.wouldDeny);
+        }
+        return JsonOk(out);
+    };
+    m_http->route("/admin/v1/clientversions/config", QHttpServerRequest::Method::Get,
+                  [clientVersionsRequest](const QHttpServerRequest& req) {
+                      return clientVersionsRequest(req, QStringLiteral("read"));
+                  });
+    m_http->route("/admin/v1/clientversions/config", QHttpServerRequest::Method::Put,
+                  [clientVersionsRequest](const QHttpServerRequest& req) {
+                      return clientVersionsRequest(req, QStringLiteral("save"));
+                  });
+    m_http->route("/admin/v1/clientversions/reload", QHttpServerRequest::Method::Post,
+                  [clientVersionsRequest](const QHttpServerRequest& req) {
+                      return clientVersionsRequest(req, QStringLiteral("reload"));
                   });
 
     m_http->route(

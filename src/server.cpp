@@ -18,6 +18,7 @@
 #include <sys/socket.h>
 #endif
 #include "client_version_rules.h"
+#include "clientversions_service.h"
 #include "database.h"
 #include "score_db.h"
 #include "scoreboards_service.h"
@@ -80,6 +81,10 @@ bool ShadNetServer::Start(ConfigManager* config) {
             m_shared.clientVersionRules = m_clientVersionRules.get();
             qInfo().noquote() << "Client version rules:" << m_clientVersionRules->RuleCount()
                               << "rule(s) from" << rulesFile;
+            m_clientVersions = std::make_unique<ClientVersionsService>(
+                rulesFile, m_clientVersionRules.get(), &m_shared);
+            m_clientVersions->Start();
+            m_shared.clientVersions = m_clientVersions.get();
         } else {
             qWarning() << "Client version rules not loaded; all client versions are accepted";
         }
