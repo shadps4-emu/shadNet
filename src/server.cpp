@@ -20,6 +20,7 @@
 #include "client_version_rules.h"
 #include "database.h"
 #include "score_db.h"
+#include "scoreboards_service.h"
 #include "server.h"
 #include "tss_files.h"
 #include "worlds_service.h"
@@ -60,6 +61,10 @@ bool ShadNetServer::Start(ConfigManager* config) {
         return false;
     }
     m_shared.worlds = m_worlds.get();
+    m_scoreboards = std::make_unique<ScoreboardsService>(QStringLiteral("scoreboards.cfg"),
+                                                         m_shared.scoreCache);
+    m_scoreboards->Start();
+    m_shared.scoreboards = m_scoreboards.get();
 
     // Client version rules: which emulator builds may stay signed in.
     const QString rulesFile = config->GetClientVersionRulesFile();

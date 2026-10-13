@@ -23,6 +23,7 @@
 #include "proto_utils.h"
 #include "score_cache.h"
 #include "score_files.h"
+#include "scoreboards_service.h"
 #include "shadnet.pb.h"
 #include "trophy_config.h"
 #include "version.h"
@@ -603,6 +604,64 @@ void AdminApiServer::RegisterRoutes() {
     m_http->route("/admin/v1/worlds/reload", QHttpServerRequest::Method::Post,
                   [worldsRequest](const QHttpServerRequest& req) {
                       return worldsRequest(req, QStringLiteral("reload"));
+                  });
+    auto scoreboardsRequest = [this](const QHttpServerRequest& req,
+                                     const QString& operation) -> QHttpServerResponse {
+        const auto session = Authenticate(req);
+        if (!session)
+            return AuthError(req);
+        const auto actor = m_db->GetUserRow(session->userId);
+        if (!actor || !actor->admin || actor->banned)
+            return JsonError(QHttpServerResponse::StatusCode::Forbidden, ERR_NOT_ADMIN,
+                             QStringLiteral("Current admin rights are required."));
+        if (!m_shared || !m_shared->scoreboards)
+            return JsonError(QHttpServerResponse::StatusCode::ServiceUnavailable, ERR_INTERNAL,
+                             QStringLiteral("Leaderboard configuration is unavailable."));
+        if (req.body().size() > kMaxWorldsBytes * 6 + 2048)
+            return JsonError(QHttpServerResponse::StatusCode::PayloadTooLarge, ERR_BAD_REQUEST,
+                             QStringLiteral("Leaderboard request is too large."));
+        QJsonObject body;
+        if (operation != QLatin1String("read")) {
+            QString error;
+            const auto parsed = ParseJsonBody(req, error);
+            if (!parsed)
+                return JsonError(QHttpServerResponse::StatusCode::BadRequest, ERR_BAD_REQUEST,
+                                 error);
+            body = *parsed;
+        }
+        const auto result = m_shared->scoreboards->Handle(operation, body, *m_db);
+        if (operation != QLatin1String("read")) {
+            const QString action = QStringLiteral("scoreboards_") + operation +
+                                   (result.ok ? QString() : QStringLiteral("_failed"));
+            const QString detail =
+                result.ok ? QStringLiteral("saved=%1 active=%2 boards=%3")
+                                .arg(result.snapshot.revision, result.snapshot.activeRevision)
+                                .arg(result.boardsApplied)
+                          : result.message;
+            if (!m_db->AddAuditEntry(session->userId, session->npid, action, 0,
+                                     QStringLiteral("scoreboards.cfg"), detail))
+                qWarning() << "Could not persist scoreboards audit:" << m_db->lastError();
+            qInfo() << "Admin scoreboards" << operation << "by" << session->npid
+                    << (result.ok ? "succeeded" : "failed") << detail;
+        }
+        if (!result.ok)
+            return JsonError(static_cast<QHttpServerResponse::StatusCode>(result.status),
+                             result.status * 10, result.message);
+        QJsonObject out = worldsSnapshotJson(result.snapshot);
+        out.insert(QStringLiteral("boardsApplied"), result.boardsApplied);
+        return JsonOk(out);
+    };
+    m_http->route("/admin/v1/scoreboards/config", QHttpServerRequest::Method::Get,
+                  [scoreboardsRequest](const QHttpServerRequest& req) {
+                      return scoreboardsRequest(req, QStringLiteral("read"));
+                  });
+    m_http->route("/admin/v1/scoreboards/config", QHttpServerRequest::Method::Put,
+                  [scoreboardsRequest](const QHttpServerRequest& req) {
+                      return scoreboardsRequest(req, QStringLiteral("save"));
+                  });
+    m_http->route("/admin/v1/scoreboards/reload", QHttpServerRequest::Method::Post,
+                  [scoreboardsRequest](const QHttpServerRequest& req) {
+                      return scoreboardsRequest(req, QStringLiteral("reload"));
                   });
 
     m_http->route(

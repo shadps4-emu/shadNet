@@ -158,6 +158,20 @@ the server's `worlds.cfg`; requests cannot select arbitrary file paths:
 | `PUT /admin/v1/worlds/config`  | `{content, revision, reload}` saves, optionally activates, and returns a snapshot.         |
 | `POST /admin/v1/worlds/reload` | `{revision}` activates that saved revision and returns a snapshot.                         |
 
+The same contract edits the server's `scoreboards.cfg` (leaderboard settings):
+
+| Method and route                     | Request / result                                                                                    |
+| ------------------------------------ | --------------------------------------------------------------------------------------------------- |
+| `GET /admin/v1/scoreboards/config`   | Snapshot, as for Worlds.                                                                            |
+| `PUT /admin/v1/scoreboards/config`   | `{content, revision, reload}` saves, optionally applies, and returns a snapshot plus `boardsApplied`. |
+| `POST /admin/v1/scoreboards/reload`  | `{revision}` applies that saved revision and returns a snapshot plus `boardsApplied`.                 |
+
+Applying writes each listed board's settings to the score database and reloads its cached
+leaderboard, so a new rank limit or sort order takes effect without a restart. Boards removed
+from the file keep their last settings. The editor reads the file strictly (one line per
+setting group, each board of a game configured once); the `#` comment directly above a line is
+kept as that game's label. Saves create `scoreboards.cfg.bak`.
+
 The API rechecks current admin status for each request and audits mutations.
 Revisions are SHA-256 file hashes, or `missing`. Stale revisions return `409`;
 invalid configuration or occupied-world changes return `422`. Editors preserve

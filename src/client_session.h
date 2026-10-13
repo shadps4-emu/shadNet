@@ -29,10 +29,12 @@
 
 // Shared state visible to all sessions (thread-safe with locks)
 class WorldsService;
+class ScoreboardsService;
 class ClientVersionRules;
 
 struct SharedState {
     WorldsService* worlds = nullptr;
+    ScoreboardsService* scoreboards = nullptr;
     // Which client versions may stay signed in (null = no rules). Loaded at startup.
     const ClientVersionRules* clientVersionRules = nullptr;
 
