@@ -48,6 +48,8 @@ enum class CommandType : uint16_t {
     SetAppearOffline = 40,
     // Global online ID  to account ID resolution
     LookupOnlineId = 41,
+    // Single-use authorization code for a game backend (payload: GetAuthorizationCodeRequest)
+    GetAuthorizationCode = 42,
     // Matchmaking
     ContextStart = 100,
     CreateRoom = 101,

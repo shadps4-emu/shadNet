@@ -62,6 +62,8 @@ set(SOURCES
     src/config.h
     src/server.cpp
     src/server.h
+    src/auth_code_store.cpp
+    src/auth_code_store.h
     src/client_session.cpp
     src/client_session.h
     src/protocol.h

@@ -386,3 +386,52 @@ ErrorType ClientSession::CmdLookupOnlineId(StreamExtractor& data, QByteArray& re
     qInfo() << "CmdLookupOnlineId:" << canonicalNpid << "->" << *userId;
     return ErrorType::NoError;
 }
+
+// GetAuthorizationCode
+// Request:  u32LE blob size + GetAuthorizationCodeRequest proto
+// Reply:    ErrorType(u8) + u32LE blob size + GetAuthorizationCodeReply proto
+ErrorType ClientSession::CmdGetAuthorizationCode(StreamExtractor& data, QByteArray& reply) {
+    constexpr size_t MaxClientIdLength = 128;
+    constexpr size_t MaxScopeLength = 1024;
+
+    shadnet::GetAuthorizationCodeRequest req;
+    if (!decodeProto(req, data) || data.error())
+        return ErrorType::Malformed;
+    if (req.client_id().empty() || req.client_id().size() > MaxClientIdLength ||
+        req.scope().size() > MaxScopeLength)
+        return ErrorType::InvalidInput;
+
+    // Not shown online yet (client version pending) or no longer allowed online.
+    if (!m_registered)
+        return ErrorType::Unauthorized;
+
+    AuthCodeStore::Grant grant;
+    grant.userId = m_info.userId;
+    grant.clientId = QString::fromStdString(req.client_id());
+    grant.scope = QString::fromStdString(req.scope());
+    {
+        QReadLocker lk(&m_shared->clientsLock);
+        const auto it = m_shared->clients.constFind(m_info.userId);
+        if (it != m_shared->clients.constEnd())
+            grant.npTitleId = it->npTitleId;
+        if (grant.npTitleId.isEmpty())
+            grant.npTitleId = m_shared->lastLoginTitleId.value(m_info.userId);
+    }
+
+    const QString clientId = grant.clientId;
+    const QString titleId = grant.npTitleId;
+    const auto code = m_shared->authCodes.Issue(std::move(grant));
+    if (!code) {
+        qWarning() << "CmdGetAuthorizationCode:" << m_info.npid << "has too many unused codes";
+        return ErrorType::TooSoon;
+    }
+
+    shadnet::GetAuthorizationCodeReply pb;
+    pb.set_code(code->toStdString());
+    pb.set_expires_in(AuthCodeStore::LifetimeSecs);
+    appendProto(reply, pb);
+
+    qInfo().noquote() << "CmdGetAuthorizationCode: issued to" << m_info.npid << "client" << clientId
+                      << "title" << titleId;
+    return ErrorType::NoError;
+}

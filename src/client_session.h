@@ -19,6 +19,7 @@
 #include <QStringList>
 #include <QTcpSocket>
 #include <database.h>
+#include "auth_code_store.h"
 #include "config.h"
 #include "matching_types.h"
 #include "protocol.h"
@@ -102,6 +103,8 @@ struct SharedState {
     QHash<QString, int64_t> npidToUserId; // reverse lookup, protected by clientsLock
     // Title context reported at login (cmd_account).
     QHash<int64_t, QString> lastLoginTitleId;
+    // Authorization codes issued over client sessions, redeemed at POST /2.0/oauth/token.
+    AuthCodeStore authCodes;
 
     // Matchmaking shared state
     MatchingSharedState matching;
@@ -271,6 +274,7 @@ public:
     ErrorType CmdLogin(StreamExtractor& data, QByteArray& reply);
     ErrorType CmdDelete(StreamExtractor& data);
     ErrorType CmdLookupOnlineId(StreamExtractor& data, QByteArray& reply);
+    ErrorType CmdGetAuthorizationCode(StreamExtractor& data, QByteArray& reply);
 
     // commands cmd_friend.cpp
     ErrorType CmdAddFriend(StreamExtractor& data);
