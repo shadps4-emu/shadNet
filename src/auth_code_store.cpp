@@ -8,7 +8,7 @@
 
 namespace {
 
-constexpr int CodeLength = 32;
+constexpr int CodeLength = 6;
 
 QString GenerateCode() {
     static constexpr char alphabet[] =
