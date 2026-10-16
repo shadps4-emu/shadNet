@@ -135,10 +135,23 @@ QJsonObject BuildAccountIdList(const QList<QPair<int64_t, QString>>& users, cons
     return body;
 }
 
+// fields=onlineId / fields=accountId: some titles read these at the top level of each list entry
+// rather than under user:{...}.
+void InsertFlatIdentity(QJsonObject& entry, const QStringList& fields, const QString& onlineId,
+                        int64_t accountId) {
+    if (fields.contains(QStringLiteral("onlineId"))) {
+        entry.insert(QStringLiteral("onlineId"), onlineId);
+    }
+    if (fields.contains(QStringLiteral("accountId"))) {
+        entry.insert(QStringLiteral("accountId"), QString::number(accountId));
+    }
+}
+
 // Build a {<key>:[entry...], start, size, totalResults} body from (accountId, onlineId)
 // pairs, emitting only the requested members. region is omitted unless wantRegion.
 QJsonObject BuildUserList(const QList<QPair<int64_t, QString>>& users, const QString& key,
-                          bool wantUser, bool wantRegion, bool wantNpId, int offset, int limit) {
+                          const QStringList& fields, bool wantUser, bool wantRegion, bool wantNpId,
+                          int offset, int limit) {
     const int total = static_cast<int>(users.size());
     QJsonArray arr;
     for (int i = offset; i < total && static_cast<int>(arr.size()) < limit; ++i) {
@@ -150,6 +163,7 @@ QJsonObject BuildUserList(const QList<QPair<int64_t, QString>>& users, const QSt
             user.insert(QStringLiteral("accountId"), QString::number(u.first));
             entry.insert(QStringLiteral("user"), user);
         }
+        InsertFlatIdentity(entry, fields, u.second, u.first);
         if (wantRegion) {
             entry.insert(QStringLiteral("region"), QString::fromLatin1(DefaultRegion));
         }
@@ -289,6 +303,7 @@ QJsonObject BuildFriendList(Database& db, SharedState& shared,
             user.insert(QStringLiteral("accountId"), QString::number(accountId));
             entry.insert(QStringLiteral("user"), user);
         }
+        InsertFlatIdentity(entry, fields, npid, accountId);
         if (wantNpId) {
             entry.insert(QStringLiteral("npId"), EncodeNpId(npid));
         }
@@ -524,7 +539,7 @@ void RegisterUserRoutes(QHttpServer& http, Database& db, SharedState& shared) {
 
                    const auto blocked = db.GetRelationships(*auth.userId).blocked;
                    const QJsonObject body =
-                       BuildUserList(blocked, QStringLiteral("blockList"),
+                       BuildUserList(blocked, QStringLiteral("blockList"), fields,
                                      isDefault || fields.contains(QStringLiteral("user")),
                                      /*wantRegion=*/false, fields.contains(QStringLiteral("npId")),
                                      offset, limit);
@@ -568,7 +583,7 @@ void RegisterUserRoutes(QHttpServer& http, Database& db, SharedState& shared) {
 
                    const auto blocked = db.GetRelationships(*auth.userId).blocked;
                    const QJsonObject body =
-                       BuildUserList(blocked, QStringLiteral("blockingUsers"),
+                       BuildUserList(blocked, QStringLiteral("blockingUsers"), fields,
                                      isDefault || fields.contains(QStringLiteral("user")),
                                      /*wantRegion=*/false, fields.contains(QStringLiteral("npId")),
                                      offset, limit);
