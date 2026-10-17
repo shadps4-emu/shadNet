@@ -101,6 +101,8 @@ set(SOURCES
     src/webapi/webapi_routes_session.cpp
     src/webapi/webapi_routes_identity.h
     src/webapi/webapi_routes_identity.cpp
+    src/webapi/webapi_routes_authcode.h
+    src/webapi/webapi_routes_authcode.cpp
     src/webapi/webapi_routes_common.h
     # Read-only stats HTTP/JSON listener
     src/stats_server.h

@@ -25,9 +25,16 @@ public:
     // Removes and returns the grant for code. Expired codes are treated as absent.
     std::optional<Grant> Redeem(const QString& code);
 
+    // Server-to-server access token a game backend gets for a redeemed code.
+    static constexpr int AccessTokenLifetimeSecs = 3599;
+    QString IssueAccessToken(Grant grant);
+    // The grant behind an unexpired access token.
+    std::optional<Grant> FindAccessToken(const QString& token);
+
 private:
     void PurgeExpired(qint64 now);
 
     QMutex m_mutex;
     QHash<QString, Grant> m_grants;
+    QHash<QString, Grant> m_accessTokens;
 };

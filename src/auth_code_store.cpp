@@ -5,6 +5,7 @@
 #include <QDateTime>
 #include <QMutexLocker>
 #include <QRandomGenerator>
+#include <QUuid>
 
 namespace {
 
@@ -59,8 +60,35 @@ std::optional<AuthCodeStore::Grant> AuthCodeStore::Redeem(const QString& code) {
     return grant;
 }
 
+QString AuthCodeStore::IssueAccessToken(Grant grant) {
+    QMutexLocker lk(&m_mutex);
+    const qint64 now = QDateTime::currentSecsSinceEpoch();
+    PurgeExpired(now);
+    grant.issuedAt = now;
+    grant.expiresAt = now + AccessTokenLifetimeSecs;
+    QString token;
+    do {
+        token = QUuid::createUuid().toString(QUuid::WithoutBraces);
+    } while (m_accessTokens.contains(token));
+    m_accessTokens.insert(token, std::move(grant));
+    return token;
+}
+
+std::optional<AuthCodeStore::Grant> AuthCodeStore::FindAccessToken(const QString& token) {
+    QMutexLocker lk(&m_mutex);
+    PurgeExpired(QDateTime::currentSecsSinceEpoch());
+    const auto it = m_accessTokens.constFind(token);
+    if (it == m_accessTokens.constEnd()) {
+        return std::nullopt;
+    }
+    return it.value();
+}
+
 void AuthCodeStore::PurgeExpired(qint64 now) {
     for (auto it = m_grants.begin(); it != m_grants.end();) {
         it = it->expiresAt <= now ? m_grants.erase(it) : std::next(it);
+    }
+    for (auto it = m_accessTokens.begin(); it != m_accessTokens.end();) {
+        it = it->expiresAt <= now ? m_accessTokens.erase(it) : std::next(it);
     }
 }
