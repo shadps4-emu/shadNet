@@ -131,6 +131,7 @@ void ConfigManager::Parse(const QString& path) {
     m_logFile = str("LogFile", "shadnet.log").trimmed();
     // Which emulator builds may stay signed in (see clientversions.cfg; empty = no rules).
     m_clientVersionRulesFile = str("ClientVersionRulesFile", "clientversions.cfg").trimmed();
+    m_npAuthConfig = str("NpAuthConfig", "").trimmed();
     bool timeoutOk = false;
     m_clientVersionTimeoutSeconds = str("ClientVersionTimeoutSeconds", "15").toInt(&timeoutOk);
     if (!timeoutOk || m_clientVersionTimeoutSeconds < 0) {

@@ -15,6 +15,7 @@
 
 #include "client_session.h"
 #include "database.h"
+#include "npauth.h"
 #include "webapi_routes_common.h"
 
 namespace WebApiRoutes {
@@ -23,6 +24,7 @@ namespace {
 
 constexpr int MaxFormBodyLength = 8192;
 
+constexpr int ERR_BAD_CLIENT_CREDENTIALS = 4102;
 constexpr int ERR_MISSING_PARAMETER = 4098;
 constexpr int ERR_MALFORMED_PARAMETER = 4099;
 constexpr int ERR_QUERY_ON_POST = 4130;
@@ -32,7 +34,6 @@ constexpr int ERR_CLIENT_NOT_FOUND = 4161;
 constexpr int ERR_ACCOUNT_UNAUTHORIZED = 3174913;
 
 constexpr char ConsoleRedirectUri[] = "orbis://games";
-constexpr int PlaceholderBirthYear = 1990; // Dummy value
 
 QHttpServerResponse NoStore(QHttpServerResponse response) {
 #if QT_VERSION >= QT_VERSION_CHECK(6, 8, 0)
@@ -109,6 +110,26 @@ std::optional<ClientCredentials> ReadClient(const QHttpServerRequest& req,
     return std::nullopt;
 }
 
+// Registered clients (NpAuthConfig) must present their secret. Others are accepted as before.
+std::optional<QHttpServerResponse> RejectBadSecret(const SharedState& shared,
+                                                   const ClientCredentials& client) {
+    if (!shared.npAuth || shared.npAuth->CheckClient(client.id, client.secret.toUtf8()) !=
+                              NpAuthService::ClientCheck::BadSecret) {
+        return std::nullopt;
+    }
+    auto response =
+        OAuthError(QHttpServerResponse::StatusCode::Unauthorized, QStringLiteral("invalid_client"),
+                   QStringLiteral("Bad client credentials"), ERR_BAD_CLIENT_CREDENTIALS);
+#if QT_VERSION >= QT_VERSION_CHECK(6, 8, 0)
+    QHttpHeaders headers = response.headers();
+    headers.append(QHttpHeaders::WellKnownHeader::WWWAuthenticate, "Basic realm=\"shadNet\"");
+    response.setHeaders(std::move(headers));
+#else
+    response.setHeader("WWW-Authenticate", "Basic realm=\"shadNet\"");
+#endif
+    return response;
+}
+
 QHttpServerResponse MissingParameter(const QString& name) {
     return OAuthError(
         QHttpServerResponse::StatusCode::BadRequest, QStringLiteral("invalid_request"),
@@ -128,10 +149,6 @@ QString StableUuid(const char* kind, int64_t userId) {
         .toString(QUuid::WithoutBraces);
 }
 
-int PlaceholderAge() {
-    return QDate::currentDate().year() - PlaceholderBirthYear;
-}
-
 QHttpServerResponse AccountError(QHttpServerResponse::StatusCode status, int code,
                                  const QString& message) {
     QJsonObject error;
@@ -146,6 +163,31 @@ QHttpServerResponse AccountError(QHttpServerResponse::StatusCode status, int cod
 } // namespace
 
 void RegisterAuthCodeRoutes(QHttpServer& http, Database& db, SharedState& shared) {
+    // GET /.well-known/jwks.json
+    // Public key a game backend checks NPAuth ID token signatures with.
+    http.route("/.well-known/jwks.json", QHttpServerRequest::Method::Get,
+               [&shared](const QHttpServerRequest&) -> QHttpServerResponse {
+                   if (!shared.npAuth || !shared.npAuth->IsEnabled()) {
+                       return OAuthError(
+                           QHttpServerResponse::StatusCode::ServiceUnavailable,
+                           QStringLiteral("temporarily_unavailable"),
+                           QStringLiteral("Service dependency is temporarily unavailable"), 9001);
+                   }
+                   QHttpServerResponse response{
+                       "application/json",
+                       QJsonDocument(shared.npAuth->PublicKeys()).toJson(QJsonDocument::Compact),
+                       QHttpServerResponse::StatusCode::Ok};
+#if QT_VERSION >= QT_VERSION_CHECK(6, 8, 0)
+                   QHttpHeaders headers = response.headers();
+                   headers.replaceOrAppend(QHttpHeaders::WellKnownHeader::CacheControl,
+                                           "public, max-age=300");
+                   response.setHeaders(std::move(headers));
+#else
+                   response.setHeader("Cache-Control", "public, max-age=300");
+#endif
+                   return response;
+               });
+
     // POST /2.0/oauth/token   (application/x-www-form-urlencoded, client credentials as Basic)
     //   grant_type=authorization_code&code=<code>&redirect_uri=orbis%3A%2F%2Fgames
     http.route(
@@ -183,6 +225,9 @@ void RegisterAuthCodeRoutes(QHttpServer& http, Database& db, SharedState& shared
             const auto client = ReadClient(req, &*form);
             if (!client) {
                 return InvalidClient();
+            }
+            if (auto rejected = RejectBadSecret(shared, *client)) {
+                return std::move(*rejected);
             }
             const QString code = form->value(QStringLiteral("code"));
             if (code.isEmpty()) {
@@ -225,6 +270,9 @@ void RegisterAuthCodeRoutes(QHttpServer& http, Database& db, SharedState& shared
             if (!client) {
                 return InvalidClient();
             }
+            if (auto rejected = RejectBadSecret(shared, *client)) {
+                return std::move(*rejected);
+            }
             const auto grant = shared.authCodes.FindAccessToken(token);
             if (!grant) {
                 return OAuthError(QHttpServerResponse::StatusCode::BadRequest,
@@ -251,7 +299,8 @@ void RegisterAuthCodeRoutes(QHttpServer& http, Database& db, SharedState& shared
             out.insert(QStringLiteral("online_id"), *onlineId);
             out.insert(QStringLiteral("country_code"),
                        QString::fromLatin1(DefaultRegion).toUpper());
-            out.insert(QStringLiteral("language_code"), QStringLiteral("en"));
+            out.insert(QStringLiteral("language_code"),
+                       QString::fromLatin1(AccountDefaults::Language));
             out.insert(QStringLiteral("user_uuid"), StableUuid("user", grant->userId));
             out.insert(QStringLiteral("dcim_id"), StableUuid("dcim", grant->userId));
             return OAuthOk(out);
@@ -281,11 +330,14 @@ void RegisterAuthCodeRoutes(QHttpServer& http, Database& db, SharedState& shared
                    parental.insert(QStringLiteral("RestrictStoreContent"), false);
                    QJsonObject out;
                    out.insert(QStringLiteral("accountId"), QString::number(grant->userId));
-                   out.insert(QStringLiteral("age"), PlaceholderAge());
-                   out.insert(QStringLiteral("communityDomain"), QStringLiteral("a0"));
-                   out.insert(QStringLiteral("dateOfBirth"),
-                              QStringLiteral("%1/01/01").arg(PlaceholderBirthYear));
-                   out.insert(QStringLiteral("language"), QStringLiteral("en"));
+                   out.insert(QStringLiteral("age"), AccountDefaults::Age());
+                   out.insert(QStringLiteral("communityDomain"),
+                              QString::fromLatin1(AccountDefaults::CommunityDomain));
+                   out.insert(
+                       QStringLiteral("dateOfBirth"),
+                       AccountDefaults::DateOfBirth().toString(QStringLiteral("yyyy/MM/dd")));
+                   out.insert(QStringLiteral("language"),
+                              QString::fromLatin1(AccountDefaults::Language));
                    out.insert(QStringLiteral("onlineId"), *onlineId);
                    out.insert(QStringLiteral("parentalControl"), parental);
                    out.insert(QStringLiteral("region"), QString::fromLatin1(DefaultRegion));

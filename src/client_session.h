@@ -33,12 +33,14 @@ class WorldsService;
 class ScoreboardsService;
 class ClientVersionsService;
 class ClientVersionRules;
+class NpAuthService;
 
 struct SharedState {
     WorldsService* worlds = nullptr;
     ScoreboardsService* scoreboards = nullptr;
     ClientVersionsService* clientVersions = nullptr;
     const ClientVersionRules* clientVersionRules = nullptr;
+    const NpAuthService* npAuth = nullptr;
 
     // Accounts recently rejected for their client version: userId -> refuse logins until
     // (ms since epoch). Keeps auto-reconnecting older clients from cycling online.
@@ -275,6 +277,7 @@ public:
     ErrorType CmdDelete(StreamExtractor& data);
     ErrorType CmdLookupOnlineId(StreamExtractor& data, QByteArray& reply);
     ErrorType CmdGetAuthorizationCode(StreamExtractor& data, QByteArray& reply);
+    ErrorType CmdGetIdToken(StreamExtractor& data, QByteArray& reply);
 
     // commands cmd_friend.cpp
     ErrorType CmdAddFriend(StreamExtractor& data);

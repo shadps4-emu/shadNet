@@ -1,5 +1,5 @@
-cmake_minimum_required(VERSION 3.16)
-project(shadnet VERSION 1.0.0 LANGUAGES CXX)
+cmake_minimum_required(VERSION 3.16.4)
+project(shadnet VERSION 1.0.0 LANGUAGES C CXX)
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -64,6 +64,9 @@ set(SOURCES
     src/server.h
     src/auth_code_store.cpp
     src/auth_code_store.h
+    src/account_defaults.h
+    src/npauth.cpp
+    src/npauth.h
     src/client_session.cpp
     src/client_session.h
     src/protocol.h
@@ -142,10 +145,17 @@ target_link_libraries(shadnet PRIVATE
     Qt6::Sql
     Qt6::Concurrent
     Qt6::HttpServer
+    LibreSSL::Crypto
     libprotobuf
 )
 
+if(WIN32)
+    target_link_libraries(shadnet PRIVATE bcrypt)
+endif()
+
 install(TARGETS shadnet RUNTIME DESTINATION bin)
+install(FILES externals/libressl/COPYING
+    DESTINATION share/licenses/shadnet RENAME LibreSSL.txt)
 
 if(WIN32)
     find_program(QT_WINDEPLOYQT NAMES windeployqt6 windeployqt PATHS "${Qt6_DIR}/../../../bin")

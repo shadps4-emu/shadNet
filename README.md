@@ -10,8 +10,8 @@ Based on RPCSN implementation, but in C++. If anyone wonders why Qt, it's becaus
 
 | Requirement  | Notes                                                       |
 | ------------ | ----------------------------------------------------------- |
-| CMake        | >= 3.16                                                     |
-| C++ compiler | C++17 capable. Clang 19, GCC, or MSVC 2022 / clang-cl       |
+| CMake        | >= 3.16.4                                                   |
+| C/C++ compiler | C++17 capable. Clang 19, GCC, or MSVC 2022 / clang-cl       |
 | Ninja        | Recommended generator.                                      |
 | Qt6          | Components: **Core, Network, Sql, Concurrent, HttpServer**. |
 | Git          | Needed to fetch the external submodules                     |
@@ -21,7 +21,10 @@ database layer.
 
 ### 1. Clone with submodules
 
-The `externals/protobuf` and `externals/abseil-cpp` submodules are required.
+The `externals/protobuf`, `externals/abseil-cpp` and `externals/libressl`
+submodules are required. CMake builds the pinned LibreSSL crypto library
+statically with shadNet; no separate OpenSSL development package or crypto
+runtime DLL is needed.
 
 ```bash
 git clone --recursive https://github.com/shadps4-emu/shadNet.git
@@ -313,6 +316,18 @@ Each rejection is logged with the version and the rule's line number.
 Accounts marked as stat agents are not checked. The rules are read at startup; invalid lines are
 logged with their line number and skipped. A `|` with spaces around it starts the message, so
 write regex alternation without spaces (`a|b`).
+
+### NPAuth ID tokens
+
+Games that call `sceNpAuthGetIdTokenA/V3` get an RS256 token signed with shadNet's own key,
+which their backend checks against `GET /.well-known/jwks.json`. Off by default; set
+`NpAuthConfig` in `shadnet.cfg` to a JSON policy listing the signing key and the game clients
+allowed to ask for tokens. Registered clients must also present the right secret when they
+redeem authorization codes. See [documentation/NPAuth.md](documentation/NPAuth.md).
+
+| Key | Effect |
+|-----|--------|
+| `NpAuthConfig` | Path to the NPAuth policy (default empty = ID tokens off). Read at startup. |
 
 ### Server log file
 

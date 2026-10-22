@@ -12,6 +12,7 @@
 #include <QStringList>
 #include <QUrlQuery>
 #include <QtGlobal>
+#include "account_defaults.h"
 
 // Helpers shared across the per-resource WebAPI route files (users, profile, ...).
 // All inline so the header can be included by multiple translation units.
@@ -26,7 +27,7 @@ inline constexpr quint32 UP_NON_FRIEND_NOT_ALLOWED = 2107904;  // non-owner/non-
 // Region is not stored per account yet. The User Profile API encodes npId as
 // base64("<onlineId>.<region>"), so we default the region here. Change this (or
 // promote it to an account column via a migration) when regions are tracked.
-inline constexpr char DefaultRegion[] = "us";
+inline constexpr const char* DefaultRegion = AccountDefaults::Region;
 
 inline QHttpServerResponse JsonError(QHttpServerResponse::StatusCode status, quint32 code,
                                      const QString& message) {

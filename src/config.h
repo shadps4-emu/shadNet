@@ -104,6 +104,11 @@ public:
         QReadLocker lk(&m_lock);
         return m_clientVersionTimeoutSeconds;
     }
+    // JSON policy for NPAuth ID tokens (documentation/NPAuth.md). Empty disables them.
+    QString GetNpAuthConfig() const {
+        QReadLocker lk(&m_lock);
+        return m_npAuthConfig;
+    }
     QString GetLogFile() const {
         QReadLocker lk(&m_lock);
         return m_logFile;
@@ -204,6 +209,7 @@ private:
     QString m_clientVersionRulesFile;
     int m_clientVersionTimeoutSeconds = 15;
     int m_clientVersionCooldownSeconds = 120;
+    QString m_npAuthConfig;
     QString m_logFile;
     int m_logMaxSizeMB = 10;
     QString m_adminApiKey;
