@@ -110,7 +110,6 @@ std::optional<ClientCredentials> ReadClient(const QHttpServerRequest& req,
     return std::nullopt;
 }
 
-// Registered clients (NpAuthConfig) must present their secret. Others are accepted as before.
 std::optional<QHttpServerResponse> RejectBadSecret(const SharedState& shared,
                                                    const ClientCredentials& client) {
     if (!shared.npAuth || shared.npAuth->CheckClient(client.id, client.secret.toUtf8()) !=
@@ -308,44 +307,42 @@ void RegisterAuthCodeRoutes(QHttpServer& http, Database& db, SharedState& shared
 
     // GET /vl/api/v1/s2s/users/me/info   (Authorization: Bearer <access token>)
     // Account information for the access token's account.
-    http.route("/vl/api/v1/s2s/users/me/info", QHttpServerRequest::Method::Get,
-               [&db, &shared](const QHttpServerRequest& req) -> QHttpServerResponse {
-                   const QByteArray auth = req.value("Authorization").trimmed();
-                   const QString token = auth.toLower().startsWith("bearer ")
-                                             ? QString::fromUtf8(auth.mid(7).trimmed())
-                                             : QString();
-                   const auto grant =
-                       token.isEmpty() ? std::nullopt : shared.authCodes.FindAccessToken(token);
-                   const auto onlineId = grant ? db.GetUsername(grant->userId) : std::nullopt;
-                   if (!onlineId) {
-                       return AccountError(QHttpServerResponse::StatusCode::Unauthorized,
-                                           ERR_ACCOUNT_UNAUTHORIZED,
-                                           QStringLiteral("Unauthorized"));
-                   }
+    http.route(
+        "/vl/api/v1/s2s/users/me/info", QHttpServerRequest::Method::Get,
+        [&db, &shared](const QHttpServerRequest& req) -> QHttpServerResponse {
+            const QByteArray auth = req.value("Authorization").trimmed();
+            const QString token = auth.toLower().startsWith("bearer ")
+                                      ? QString::fromUtf8(auth.mid(7).trimmed())
+                                      : QString();
+            const auto grant =
+                token.isEmpty() ? std::nullopt : shared.authCodes.FindAccessToken(token);
+            const auto onlineId = grant ? db.GetUsername(grant->userId) : std::nullopt;
+            if (!onlineId) {
+                return AccountError(QHttpServerResponse::StatusCode::Unauthorized,
+                                    ERR_ACCOUNT_UNAUTHORIZED, QStringLiteral("Unauthorized"));
+            }
 
-                   QJsonObject parental;
-                   // all these are dummy values, todo if we need to implement them
-                   parental.insert(QStringLiteral("RestrictChat"), false);
-                   parental.insert(QStringLiteral("RestrictUGM"), false);
-                   parental.insert(QStringLiteral("RestrictStoreContent"), false);
-                   QJsonObject out;
-                   out.insert(QStringLiteral("accountId"), QString::number(grant->userId));
-                   out.insert(QStringLiteral("age"), AccountDefaults::Age());
-                   out.insert(QStringLiteral("communityDomain"),
-                              QString::fromLatin1(AccountDefaults::CommunityDomain));
-                   out.insert(
-                       QStringLiteral("dateOfBirth"),
+            QJsonObject parental;
+            // all these are dummy values, todo if we need to implement them
+            parental.insert(QStringLiteral("RestrictChat"), false);
+            parental.insert(QStringLiteral("RestrictUGM"), false);
+            parental.insert(QStringLiteral("RestrictStoreContent"), false);
+            QJsonObject out;
+            out.insert(QStringLiteral("accountId"), QString::number(grant->userId));
+            out.insert(QStringLiteral("age"), AccountDefaults::Age());
+            out.insert(QStringLiteral("communityDomain"),
+                       QString::fromLatin1(AccountDefaults::CommunityDomain));
+            out.insert(QStringLiteral("dateOfBirth"),
                        AccountDefaults::DateOfBirth().toString(QStringLiteral("yyyy/MM/dd")));
-                   out.insert(QStringLiteral("language"),
-                              QString::fromLatin1(AccountDefaults::Language));
-                   out.insert(QStringLiteral("onlineId"), *onlineId);
-                   out.insert(QStringLiteral("parentalControl"), parental);
-                   out.insert(QStringLiteral("region"), QString::fromLatin1(DefaultRegion));
-                   out.insert(QStringLiteral("subaccount"), false);
-                   return NoStore(QHttpServerResponse{
-                       "application/json", QJsonDocument(out).toJson(QJsonDocument::Compact),
-                       QHttpServerResponse::StatusCode::Created});
-               });
+            out.insert(QStringLiteral("language"), QString::fromLatin1(AccountDefaults::Language));
+            out.insert(QStringLiteral("onlineId"), *onlineId);
+            out.insert(QStringLiteral("parentalControl"), parental);
+            out.insert(QStringLiteral("region"), QString::fromLatin1(DefaultRegion));
+            out.insert(QStringLiteral("subaccount"), false);
+            return NoStore(QHttpServerResponse{"application/json",
+                                               QJsonDocument(out).toJson(QJsonDocument::Compact),
+                                               QHttpServerResponse::StatusCode::Created});
+        });
 }
 
 } // namespace WebApiRoutes
