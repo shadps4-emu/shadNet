@@ -302,6 +302,8 @@ ErrorType ClientSession::DispatchCommand(CommandType cmd, StreamExtractor& se, Q
         return CmdLookupOnlineId(se, reply);
     case CommandType::GetAuthorizationCode:
         return CmdGetAuthorizationCode(se, reply);
+    case CommandType::GetIdToken:
+        return CmdGetIdToken(se, reply);
         // Title User Storage (TUS)
     case CommandType::TusSetData:
         return CmdTusSetData(se);

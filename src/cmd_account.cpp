@@ -6,6 +6,7 @@
 #include <QDebug>
 #include <QTimer>
 #include "client_session.h"
+#include "npauth.h"
 #include "proto_utils.h"
 #include "shadnet.pb.h"
 
@@ -433,5 +434,59 @@ ErrorType ClientSession::CmdGetAuthorizationCode(StreamExtractor& data, QByteArr
 
     qInfo().noquote() << "CmdGetAuthorizationCode: issued to" << m_info.npid << "client" << clientId
                       << "title" << titleId;
+    return ErrorType::NoError;
+}
+
+// GetIdToken
+// Request:  u32LE blob size + GetIdTokenRequest proto
+// Reply:    ErrorType(u8) + u32LE blob size + GetIdTokenReply proto
+ErrorType ClientSession::CmdGetIdToken(StreamExtractor& data, QByteArray& reply) {
+    shadnet::GetIdTokenRequest req;
+    if (!decodeProto(req, data) || data.error())
+        return ErrorType::Malformed;
+
+    // Not shown online yet (client version pending) or no longer allowed online.
+    if (!m_registered)
+        return ErrorType::Unauthorized;
+    const NpAuthService* npAuth = m_shared->npAuth;
+    if (!npAuth || !npAuth->IsEnabled())
+        return ErrorType::Unsupported;
+
+    NpAuthService::Request request;
+    request.clientId = QString::fromStdString(req.client_id());
+    request.clientSecret = QByteArray::fromStdString(req.client_secret());
+    request.scope = QString::fromStdString(req.scope());
+    req.mutable_client_secret()->assign(req.client_secret().size(), '\0');
+
+    NpAuthService::Account account;
+    account.accountId = m_info.userId;
+    account.onlineId = m_info.npid;
+    {
+        QReadLocker lk(&m_shared->clientsLock);
+        const auto it = m_shared->clients.constFind(m_info.userId);
+        if (it != m_shared->clients.constEnd())
+            account.titleId = it->npTitleId;
+        if (account.titleId.isEmpty())
+            account.titleId = m_shared->lastLoginTitleId.value(m_info.userId);
+    }
+
+    const QString clientId = request.clientId;
+    const auto result = npAuth->Issue(std::move(request), account);
+
+    shadnet::GetIdTokenReply pb;
+    if (result.token.isEmpty()) {
+        pb.set_error(result.error.error.toStdString());
+        pb.set_error_description(result.error.description.toStdString());
+        pb.set_error_code(static_cast<uint32_t>(result.error.code));
+        qWarning().noquote() << "CmdGetIdToken: refused for" << m_info.npid << "client" << clientId
+                             << "title" << account.titleId << "-" << result.error.error
+                             << result.error.description;
+    } else {
+        pb.set_id_token(result.token.toStdString());
+        pb.set_expires_in(static_cast<uint32_t>(result.expiresIn));
+        qInfo().noquote() << "CmdGetIdToken: issued to" << m_info.npid << "client" << clientId
+                          << "title" << account.titleId;
+    }
+    appendProto(reply, pb);
     return ErrorType::NoError;
 }

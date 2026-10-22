@@ -20,6 +20,7 @@
 #include "client_version_rules.h"
 #include "clientversions_service.h"
 #include "database.h"
+#include "npauth.h"
 #include "score_db.h"
 #include "scoreboards_service.h"
 #include "server.h"
@@ -88,6 +89,20 @@ bool ShadNetServer::Start(ConfigManager* config) {
         } else {
             qWarning() << "Client version rules not loaded; all client versions are accepted";
         }
+    }
+
+    // NPAuth ID tokens. A broken policy leaves them off rather than stopping the server.
+    m_npAuth = std::make_unique<NpAuthService>();
+    m_shared.npAuth = m_npAuth.get();
+    const QString npAuthConfig = config->GetNpAuthConfig();
+    QString npAuthError;
+    if (npAuthConfig.isEmpty()) {
+        qInfo() << "NPAuth ID tokens off (NpAuthConfig is empty)";
+    } else if (!m_npAuth->Load(npAuthConfig, npAuthError)) {
+        qCritical().noquote() << "NPAuth ID tokens off, invalid" << npAuthConfig << "-"
+                              << npAuthError;
+    } else {
+        qInfo().noquote() << "NPAuth ID tokens on, policy" << npAuthConfig;
     }
 
     QHostAddress addr;

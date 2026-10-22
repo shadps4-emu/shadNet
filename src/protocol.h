@@ -50,6 +50,8 @@ enum class CommandType : uint16_t {
     LookupOnlineId = 41,
     // Single-use authorization code for a game backend (payload: GetAuthorizationCodeRequest)
     GetAuthorizationCode = 42,
+    // Signed ID token for a game backend (payload: GetIdTokenRequest)
+    GetIdToken = 43,
     // Matchmaking
     ContextStart = 100,
     CreateRoom = 101,
