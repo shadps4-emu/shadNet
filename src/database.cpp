@@ -334,6 +334,29 @@ bool Database::Migrate() {
         Exec(ins12);
     }
 
+    // Migration 13: entitlements (Entitlements Web API). One row per account, title serial
+    // ('' = every title), NP service label and entitlement label. Dates are unix seconds.
+    if (!HasMigration(13)) {
+        Exec("CREATE TABLE IF NOT EXISTS entitlement("
+             "  user_id          INTEGER NOT NULL,"
+             "  title_id         TEXT    NOT NULL DEFAULT '',"
+             "  service_label    INTEGER NOT NULL DEFAULT 0,"
+             "  label            TEXT    NOT NULL,"
+             "  entitlement_type TEXT    NOT NULL DEFAULT 'service',"
+             "  active_date      INTEGER NOT NULL,"
+             "  inactive_date    INTEGER,"
+             "  is_consumable    INTEGER NOT NULL DEFAULT 0,"
+             "  use_count        INTEGER NOT NULL DEFAULT 0,"
+             "  use_limit        INTEGER NOT NULL DEFAULT 0,"
+             "  granted_by       TEXT,"
+             "  granted_at       INTEGER NOT NULL DEFAULT 0,"
+             "  PRIMARY KEY(user_id, title_id, service_label, label))");
+
+        QSqlQuery ins13(m_db);
+        ins13.prepare("INSERT OR IGNORE INTO migration VALUES(13,'entitlements')");
+        Exec(ins13);
+    }
+
     qInfo() << "Database migrations complete";
 
     RunMaintenance();
@@ -1035,7 +1058,8 @@ bool Database::DeleteAccount(int64_t userId, PurgeSummary& summary) {
     }
 
     for (const char* sql :
-         {"DELETE FROM account_timestamp WHERE user_id=?", "DELETE FROM account WHERE user_id=?"}) {
+         {"DELETE FROM entitlement WHERE user_id=?",
+          "DELETE FROM account_timestamp WHERE user_id=?", "DELETE FROM account WHERE user_id=?"}) {
         QSqlQuery q(m_db);
         if (!q.prepare(QString::fromLatin1(sql))) {
             m_lastError = q.lastError().text();

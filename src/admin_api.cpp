@@ -5,6 +5,7 @@
 #include <cmath>
 
 #include <QByteArray>
+#include <QDateTime>
 #include <QDebug>
 #include <QHostAddress>
 #include <QHttpServerRequest>
@@ -16,11 +17,13 @@
 #include <QJsonParseError>
 #include <QRandomGenerator>
 #include <QReadWriteLock>
+#include <QRegularExpression>
 #include <QStringList>
 #include <QUrlQuery>
 
 #include "client_session.h" // SharedState
 #include "clientversions_service.h"
+#include "entitlement_db.h"
 #include "proto_utils.h"
 #include "score_cache.h"
 #include "score_files.h"
@@ -94,6 +97,137 @@ std::optional<QJsonObject> ParseJsonBody(const QHttpServerRequest& req, QString&
         return std::nullopt;
     }
     return doc.object();
+}
+
+// Entitlement helpers
+
+QString EntitlementKey(const Entitlement& e) {
+    return QStringLiteral("%1 (title %2, service label %3)")
+        .arg(e.label, e.titleId.isEmpty() ? QStringLiteral("*") : e.titleId)
+        .arg(e.serviceLabel);
+}
+
+QString EntitlementDate(int64_t secs) {
+    return QDateTime::fromSecsSinceEpoch(secs).toUTC().toString(Qt::ISODate);
+}
+
+QJsonObject EntitlementToAdminJson(const Entitlement& e, int64_t now) {
+    QJsonObject o;
+    o.insert(QStringLiteral("label"), e.label);
+    o.insert(QStringLiteral("title_id"), e.titleId);
+    o.insert(QStringLiteral("service_label"), e.serviceLabel);
+    o.insert(QStringLiteral("entitlement_type"), e.type);
+    o.insert(QStringLiteral("active_date"), EntitlementDate(e.activeDate));
+    o.insert(QStringLiteral("inactive_date"),
+             e.inactiveDate ? QJsonValue(EntitlementDate(*e.inactiveDate)) : QJsonValue());
+    o.insert(QStringLiteral("active"), e.IsActive(now));
+    o.insert(QStringLiteral("consumable"), e.consumable);
+    o.insert(QStringLiteral("use_count"), static_cast<qint64>(e.useCount));
+    o.insert(QStringLiteral("use_limit"), static_cast<qint64>(e.useLimit));
+    o.insert(QStringLiteral("granted_by"), e.grantedBy);
+    o.insert(QStringLiteral("granted_at"), EntitlementDate(e.grantedAt));
+    return o;
+}
+
+bool ParseEntitlementDate(const QJsonValue& v, int64_t& out) {
+    if (v.isDouble()) {
+        out = static_cast<int64_t>(v.toDouble());
+        return out >= 0;
+    }
+    if (!v.isString())
+        return false;
+    const QDateTime dt = QDateTime::fromString(v.toString(), Qt::ISODate);
+    if (!dt.isValid())
+        return false;
+    out = dt.toSecsSinceEpoch();
+    return true;
+}
+
+// Body of PUT /admin/v1/users/<id>/entitlements
+bool EntitlementFromAdminJson(const QJsonObject& b, Entitlement& e, QString& error) {
+    static const QRegularExpression labelRe(
+        QRegularExpression::anchoredPattern(QStringLiteral("[A-Za-z0-9_-]{1,32}")));
+    static const QRegularExpression titleRe(
+        QRegularExpression::anchoredPattern(QStringLiteral("[A-Z]{4}[0-9]{5}")));
+
+    e.label = b.value(QStringLiteral("label")).toString().trimmed();
+    if (!labelRe.match(e.label).hasMatch()) {
+        error = QStringLiteral("\"label\" must be 1-32 letters, digits, '_' or '-'.");
+        return false;
+    }
+    e.titleId = b.value(QStringLiteral("title_id")).toString().trimmed().toUpper();
+    if (e.titleId.startsWith(QStringLiteral("NPWR"))) {
+        error = QStringLiteral("\"title_id\" is the title serial (e.g. CUSA00003), not the NP "
+                               "Communication ID.");
+        return false;
+    }
+    if (!e.titleId.isEmpty() && !titleRe.match(e.titleId).hasMatch()) {
+        error = QStringLiteral("\"title_id\" must be a title serial like CUSA00003, or empty "
+                               "for every title.");
+        return false;
+    }
+    const QJsonValue sl = b.value(QStringLiteral("service_label"));
+    if (!sl.isUndefined() && !sl.isNull() && (!sl.isDouble() || sl.toDouble() < 0)) {
+        error = QStringLiteral("\"service_label\" must be a non-negative number.");
+        return false;
+    }
+    e.serviceLabel = sl.toInt(0);
+
+    e.type = b.value(QStringLiteral("entitlement_type")).toString(QStringLiteral("service"));
+    if (e.type != QStringLiteral("service") && e.type != QStringLiteral("unified")) {
+        error = QStringLiteral("\"entitlement_type\" must be \"service\" or \"unified\".");
+        return false;
+    }
+
+    e.activeDate = QDateTime::currentSecsSinceEpoch();
+    const QJsonValue ad = b.value(QStringLiteral("active_date"));
+    if (!ad.isUndefined() && !ad.isNull() && !ParseEntitlementDate(ad, e.activeDate)) {
+        error = QStringLiteral("\"active_date\" must be an RFC 3339 date or unix seconds.");
+        return false;
+    }
+    const QJsonValue id = b.value(QStringLiteral("inactive_date"));
+    if (!id.isUndefined() && !id.isNull()) {
+        int64_t end = 0;
+        if (!ParseEntitlementDate(id, end)) {
+            error = QStringLiteral("\"inactive_date\" must be an RFC 3339 date, unix seconds or "
+                                   "null.");
+            return false;
+        }
+        if (end <= e.activeDate) {
+            error = QStringLiteral("\"inactive_date\" must be after \"active_date\".");
+            return false;
+        }
+        e.inactiveDate = end;
+    }
+
+    e.consumable = b.value(QStringLiteral("consumable")).toBool(false);
+    const QJsonValue limit = b.value(QStringLiteral("use_limit"));
+    const QJsonValue count = b.value(QStringLiteral("use_count"));
+    if (e.consumable) {
+        // Consumables are always service entitlements and are limited by uses, not dates.
+        if (e.type != QStringLiteral("service")) {
+            error = QStringLiteral("Consumable entitlements must be \"service\" entitlements.");
+            return false;
+        }
+        if (e.inactiveDate) {
+            error = QStringLiteral("A consumable entitlement is limited by uses; leave "
+                                   "\"inactive_date\" out.");
+            return false;
+        }
+        if (!limit.isDouble() || limit.toDouble() < 0 ||
+            (!count.isUndefined() && (!count.isDouble() || count.toDouble() < 0))) {
+            error = QStringLiteral("A consumable entitlement needs \"use_limit\" (uses left) and "
+                                   "optionally \"use_count\" (uses so far), both >= 0.");
+            return false;
+        }
+        e.useLimit = static_cast<int64_t>(limit.toDouble());
+        e.useCount = static_cast<int64_t>(count.toDouble(0));
+    } else if (!limit.isUndefined() || !count.isUndefined()) {
+        error = QStringLiteral("\"use_limit\" and \"use_count\" only apply when \"consumable\" is "
+                               "true.");
+        return false;
+    }
+    return true;
 }
 
 UserFilter ParseFilter(const QString& raw) {
@@ -1312,6 +1446,108 @@ void AdminApiServer::RegisterRoutes() {
                       body.insert(QStringLiteral("userId"), static_cast<qint64>(target->userId));
                       return JsonOk(body);
                   });
+
+    // Entitlements (Entitlements Web API). shadNet has no store, so operators grant them here.
+    // GET    /admin/v1/users/<id>/entitlements
+    // PUT    /admin/v1/users/<id>/entitlements   { label, title_id?, service_label?, ... }
+    // DELETE /admin/v1/users/<id>/entitlements?label=X[&title_id=CUSA00003][&service_label=0]
+    m_http->route("/admin/v1/users/<arg>/entitlements", QHttpServerRequest::Method::Get,
+                  [this](qint64 userId, const QHttpServerRequest& req) -> QHttpServerResponse {
+                      const auto session = Authenticate(req);
+                      if (!session)
+                          return AuthError(req);
+                      if (!m_db->GetUserRow(userId))
+                          return JsonError(QHttpServerResponse::StatusCode::NotFound, ERR_NOT_FOUND,
+                                           QStringLiteral("No account has id %1.").arg(userId));
+                      EntitlementDb edb(m_db->Conn());
+                      const int64_t now = QDateTime::currentSecsSinceEpoch();
+                      QJsonArray list;
+                      for (const Entitlement& e : edb.ListAll(userId))
+                          list.append(EntitlementToAdminJson(e, now));
+                      QJsonObject body;
+                      body.insert(QStringLiteral("entitlements"), list);
+                      return JsonOk(body);
+                  });
+
+    m_http->route(
+        "/admin/v1/users/<arg>/entitlements", QHttpServerRequest::Method::Put,
+        [this](qint64 userId, const QHttpServerRequest& req) -> QHttpServerResponse {
+            const auto session = Authenticate(req);
+            if (!session)
+                return AuthError(req);
+            QString parseError;
+            const auto bodyOpt = ParseJsonBody(req, parseError);
+            if (!bodyOpt)
+                return JsonError(QHttpServerResponse::StatusCode::BadRequest, ERR_BAD_REQUEST,
+                                 parseError);
+            const auto target = m_db->GetUserRow(userId);
+            if (!target)
+                return JsonError(QHttpServerResponse::StatusCode::NotFound, ERR_NOT_FOUND,
+                                 QStringLiteral("No account has id %1.").arg(userId));
+
+            Entitlement e;
+            QString error;
+            if (!EntitlementFromAdminJson(*bodyOpt, e, error))
+                return JsonError(QHttpServerResponse::StatusCode::BadRequest, ERR_BAD_REQUEST,
+                                 error);
+            e.userId = target->userId;
+            e.grantedBy = session->npid;
+            e.grantedAt = QDateTime::currentSecsSinceEpoch();
+
+            EntitlementDb edb(m_db->Conn());
+            if (!edb.Upsert(e))
+                return JsonError(QHttpServerResponse::StatusCode::InternalServerError, ERR_INTERNAL,
+                                 QStringLiteral("The database rejected the change. "
+                                                "Check the server log."));
+
+            const QString what = EntitlementKey(e);
+            m_db->AddAuditEntry(session->userId, session->npid, QStringLiteral("entitlement_grant"),
+                                target->userId, target->username, what);
+            qInfo().nospace().noquote() << "AdminApi: " << session->npid << " granted entitlement "
+                                        << what << " to " << target->username;
+            return JsonOk(EntitlementToAdminJson(e, e.grantedAt));
+        });
+
+    m_http->route(
+        "/admin/v1/users/<arg>/entitlements", QHttpServerRequest::Method::Delete,
+        [this](qint64 userId, const QHttpServerRequest& req) -> QHttpServerResponse {
+            const auto session = Authenticate(req);
+            if (!session)
+                return AuthError(req);
+            const auto target = m_db->GetUserRow(userId);
+            if (!target)
+                return JsonError(QHttpServerResponse::StatusCode::NotFound, ERR_NOT_FOUND,
+                                 QStringLiteral("No account has id %1.").arg(userId));
+
+            const QUrlQuery query(req.url());
+            Entitlement key;
+            key.userId = target->userId;
+            key.label = query.queryItemValue(QStringLiteral("label"));
+            key.titleId = query.queryItemValue(QStringLiteral("title_id"));
+            bool ok = true;
+            if (query.hasQueryItem(QStringLiteral("service_label")))
+                key.serviceLabel = query.queryItemValue(QStringLiteral("service_label")).toInt(&ok);
+            if (key.label.isEmpty() || !ok || key.serviceLabel < 0)
+                return JsonError(QHttpServerResponse::StatusCode::BadRequest, ERR_BAD_REQUEST,
+                                 QStringLiteral("Pass label, and optionally title_id and "
+                                                "service_label, as query parameters."));
+
+            EntitlementDb edb(m_db->Conn());
+            if (!edb.Remove(key.userId, key.titleId, key.serviceLabel, key.label))
+                return JsonError(QHttpServerResponse::StatusCode::NotFound, ERR_NOT_FOUND,
+                                 QStringLiteral("%1 has no entitlement %2.")
+                                     .arg(target->username, EntitlementKey(key)));
+
+            const QString what = EntitlementKey(key);
+            m_db->AddAuditEntry(session->userId, session->npid,
+                                QStringLiteral("entitlement_revoke"), target->userId,
+                                target->username, what);
+            qInfo().nospace().noquote() << "AdminApi: " << session->npid << " revoked entitlement "
+                                        << what << " from " << target->username;
+            QJsonObject body;
+            body.insert(QStringLiteral("removed"), true);
+            return JsonOk(body);
+        });
 
     // POST /admin/v1/users/<id>/password — { password?: string }
     // With no password supplied the server generates one and returns it once.
