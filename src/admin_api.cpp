@@ -23,6 +23,7 @@
 
 #include "client_session.h" // SharedState
 #include "clientversions_service.h"
+#include "commerce_db.h"
 #include "entitlement_db.h"
 #include "proto_utils.h"
 #include "score_cache.h"
@@ -1546,6 +1547,33 @@ void AdminApiServer::RegisterRoutes() {
                                         << what << " from " << target->username;
             QJsonObject body;
             body.insert(QStringLiteral("removed"), true);
+            return JsonOk(body);
+        });
+
+    // GET /admin/v1/commerce/labels[?title_id=CUSA00003]
+    // Store labels games have asked about (Commerce GET Container), per title serial. These are
+    // usually the entitlement labels that unlock the content, so they are what to grant.
+    m_http->route(
+        "/admin/v1/commerce/labels", QHttpServerRequest::Method::Get,
+        [this](const QHttpServerRequest& req) -> QHttpServerResponse {
+            const auto session = Authenticate(req);
+            if (!session)
+                return AuthError(req);
+            const QString titleId =
+                QUrlQuery(req.url()).queryItemValue(QStringLiteral("title_id")).trimmed().toUpper();
+            QJsonArray list;
+            for (const CommerceLabel& l : CommerceDb(m_db->Conn()).All(titleId)) {
+                QJsonObject o;
+                o.insert(QStringLiteral("title_id"), l.titleId);
+                o.insert(QStringLiteral("service_label"), l.serviceLabel);
+                o.insert(QStringLiteral("label"), l.label);
+                o.insert(QStringLiteral("first_seen"), EntitlementDate(l.firstSeen));
+                o.insert(QStringLiteral("last_seen"), EntitlementDate(l.lastSeen));
+                o.insert(QStringLiteral("requests"), static_cast<qint64>(l.requests));
+                list.append(o);
+            }
+            QJsonObject body;
+            body.insert(QStringLiteral("labels"), list);
             return JsonOk(body);
         });
 

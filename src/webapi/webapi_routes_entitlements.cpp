@@ -48,14 +48,6 @@ bool IsCaller(const QString& userKey, const WebApiAuth::AuthResult& auth) {
            userKey == QString::number(*auth.userId);
 }
 
-QString CallerTitleId(SharedState& shared, int64_t userId) {
-    QReadLocker lk(&shared.clientsLock);
-    auto it = shared.clients.constFind(userId);
-    if (it != shared.clients.constEnd() && !it->npTitleId.isEmpty())
-        return it->npTitleId;
-    return shared.lastLoginTitleId.value(userId);
-}
-
 QString Rfc3339(int64_t secs) {
     return QDateTime::fromSecsSinceEpoch(secs).toUTC().toString(
         QStringLiteral("yyyy-MM-ddTHH:mm:ssZ"));
@@ -113,6 +105,14 @@ QStringList SplitValues(const QUrlQuery& query, const QString& name) {
 }
 
 } // namespace
+
+QString CallerTitleId(SharedState& shared, int64_t userId) {
+    QReadLocker lk(&shared.clientsLock);
+    auto it = shared.clients.constFind(userId);
+    if (it != shared.clients.constEnd() && !it->npTitleId.isEmpty())
+        return it->npTitleId;
+    return shared.lastLoginTitleId.value(userId);
+}
 
 void RegisterEntitlementRoutes(QHttpServer& http, Database& db, SharedState& shared) {
     // GET /v1/users/me/entitlements

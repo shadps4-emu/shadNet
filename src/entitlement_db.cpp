@@ -15,6 +15,10 @@ constexpr const char* kColumns =
     "user_id,title_id,service_label,label,entitlement_type,active_date,inactive_date,"
     "is_consumable,use_count,use_limit,granted_by,granted_at";
 
+QString TitleKey(const QString& titleId) {
+    return titleId.isNull() ? QStringLiteral("") : titleId;
+}
+
 Entitlement FromRow(const QSqlQuery& q) {
     Entitlement e;
     e.userId = q.value(0).toLongLong();
@@ -61,7 +65,7 @@ QVector<Entitlement> EntitlementDb::Query(const QString& where, const QVariantLi
 QVector<Entitlement> EntitlementDb::ListVisible(int64_t userId, const QString& titleId,
                                                 int serviceLabel) {
     const auto rows = Query(QStringLiteral("user_id=? AND service_label=? AND title_id IN (?, '')"),
-                            {static_cast<qlonglong>(userId), serviceLabel, titleId});
+                            {static_cast<qlonglong>(userId), serviceLabel, TitleKey(titleId)});
     // One row per label; a row for this title shadows an all-titles row.
     QHash<QString, Entitlement> byLabel;
     for (const Entitlement& e : rows) {
@@ -77,9 +81,10 @@ QVector<Entitlement> EntitlementDb::ListVisible(int64_t userId, const QString& t
 std::optional<Entitlement> EntitlementDb::GetVisible(int64_t userId, const QString& titleId,
                                                      int serviceLabel, const QString& label) {
     // Title-specific first (non-empty title_id sorts after ''), so take the last row.
-    const auto rows = Query(QStringLiteral("user_id=? AND service_label=? AND label=? AND "
-                                           "title_id IN (?, '') ORDER BY title_id"),
-                            {static_cast<qlonglong>(userId), serviceLabel, label, titleId});
+    const auto rows =
+        Query(QStringLiteral("user_id=? AND service_label=? AND label=? AND "
+                             "title_id IN (?, '') ORDER BY title_id"),
+              {static_cast<qlonglong>(userId), serviceLabel, label, TitleKey(titleId)});
     if (rows.isEmpty())
         return std::nullopt;
     return rows.last();
@@ -116,7 +121,7 @@ std::optional<int64_t> EntitlementDb::Consume(int64_t userId, const QString& tit
     q.addBindValue(static_cast<qlonglong>(count));
     q.addBindValue(static_cast<qlonglong>(count));
     q.addBindValue(static_cast<qlonglong>(userId));
-    q.addBindValue(row->titleId);
+    q.addBindValue(TitleKey(row->titleId));
     q.addBindValue(serviceLabel);
     q.addBindValue(label);
     q.addBindValue(static_cast<qlonglong>(count));
@@ -139,7 +144,7 @@ std::optional<int64_t> EntitlementDb::Consume(int64_t userId, const QString& tit
     r.prepare("SELECT use_limit FROM entitlement WHERE user_id=? AND title_id=? AND "
               "service_label=? AND label=?");
     r.addBindValue(static_cast<qlonglong>(userId));
-    r.addBindValue(row->titleId);
+    r.addBindValue(TitleKey(row->titleId));
     r.addBindValue(serviceLabel);
     r.addBindValue(label);
     if (!r.exec() || !r.next()) {
@@ -173,7 +178,7 @@ bool EntitlementDb::Upsert(const Entitlement& e) {
         QStringLiteral("INSERT OR REPLACE INTO entitlement(%1) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)")
             .arg(QString::fromLatin1(kColumns)));
     q.addBindValue(static_cast<qlonglong>(e.userId));
-    q.addBindValue(e.titleId);
+    q.addBindValue(TitleKey(e.titleId));
     q.addBindValue(e.serviceLabel);
     q.addBindValue(e.label);
     q.addBindValue(e.type);
@@ -199,7 +204,7 @@ bool EntitlementDb::Remove(int64_t userId, const QString& titleId, int serviceLa
     q.prepare("DELETE FROM entitlement WHERE user_id=? AND title_id=? AND service_label=? AND "
               "label=?");
     q.addBindValue(static_cast<qlonglong>(userId));
-    q.addBindValue(titleId);
+    q.addBindValue(TitleKey(titleId));
     q.addBindValue(serviceLabel);
     q.addBindValue(label);
     if (!q.exec()) {

@@ -242,3 +242,29 @@ CREATE TABLE IF NOT EXISTS entitlement (
 
 A game sees the rows for its own `title_id` plus the `''` rows,when both have the same label,
 the title-specific row wins. Deleting an account deletes its rows.
+
+### commerce_label
+
+Store labels games have asked about through the Commerce Web API (GET Container). One row per title serial, service label and label,written by the server on every
+container request and listed by `GET /admin/v1/commerce/labels`.
+
+```sql
+CREATE TABLE IF NOT EXISTS commerce_label (
+    title_id      TEXT    NOT NULL DEFAULT '',
+    service_label INTEGER NOT NULL DEFAULT 0,
+    label         TEXT    NOT NULL,
+    first_seen    INTEGER NOT NULL,
+    last_seen     INTEGER NOT NULL,
+    requests      INTEGER NOT NULL DEFAULT 1,
+    PRIMARY KEY(title_id, service_label, label)
+);
+```
+
+| Column          | Type    | Notes                                                                      |
+| --------------- | ------- | -------------------------------------------------------------------------- |
+| `title_id`      | TEXT    | Title serial the request came from; `''` when the client didn't report one |
+| `service_label` | INTEGER | NP service label of the request (default `0`)                              |
+| `label`         | TEXT    | Product label the game asked about                                         |
+| `first_seen`    | INTEGER | Unix seconds of the first request                                          |
+| `last_seen`     | INTEGER | Unix seconds of the latest request                                         |
+| `requests`      | INTEGER | How many requests included it                                              |

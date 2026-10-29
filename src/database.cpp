@@ -357,6 +357,23 @@ bool Database::Migrate() {
         Exec(ins13);
     }
 
+    // Migration 14: store labels games ask about through the Commerce Web API, per title serial
+    // and service label. Dates are unix seconds.
+    if (!HasMigration(14)) {
+        Exec("CREATE TABLE IF NOT EXISTS commerce_label("
+             "  title_id      TEXT    NOT NULL DEFAULT '',"
+             "  service_label INTEGER NOT NULL DEFAULT 0,"
+             "  label         TEXT    NOT NULL,"
+             "  first_seen    INTEGER NOT NULL,"
+             "  last_seen     INTEGER NOT NULL,"
+             "  requests      INTEGER NOT NULL DEFAULT 1,"
+             "  PRIMARY KEY(title_id, service_label, label))");
+
+        QSqlQuery ins14(m_db);
+        ins14.prepare("INSERT OR IGNORE INTO migration VALUES(14,'commerce labels')");
+        Exec(ins14);
+    }
+
     qInfo() << "Database migrations complete";
 
     RunMaintenance();
