@@ -103,6 +103,8 @@ set(SOURCES
     src/webapi/webapi_routes_identity.cpp
     src/webapi/webapi_routes_authcode.h
     src/webapi/webapi_routes_authcode.cpp
+    src/webapi/webapi_routes_entitlements.h
+    src/webapi/webapi_routes_entitlements.cpp
     src/webapi/webapi_routes_common.h
     # Read-only stats HTTP/JSON listener
     src/stats_server.h
@@ -123,6 +125,10 @@ set(SOURCES
     src/member_api.cpp
     src/tus_db.cpp
     src/tus_db.h
+    src/entitlement_db.h
+    src/entitlement_db.cpp
+
+    
 )
 
 add_executable(shadnet ${SOURCES})
