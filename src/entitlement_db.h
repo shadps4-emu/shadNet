@@ -39,6 +39,7 @@ public:
                                    const QString& label, int64_t count, int64_t now,
                                    ConsumeError& error);
     QVector<Entitlement> ListAll(int64_t userId);
+    QVector<Entitlement> ListEveryone(const std::optional<QString>& titleId, const QString& label);
     bool Upsert(const Entitlement& e);
     bool Remove(int64_t userId, const QString& titleId, int serviceLabel, const QString& label);
 

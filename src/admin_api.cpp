@@ -7,6 +7,7 @@
 #include <QByteArray>
 #include <QDateTime>
 #include <QDebug>
+#include <QHash>
 #include <QHostAddress>
 #include <QHttpServerRequest>
 #include <QHttpServerResponder>
@@ -18,6 +19,7 @@
 #include <QRandomGenerator>
 #include <QReadWriteLock>
 #include <QRegularExpression>
+#include <QSet>
 #include <QStringList>
 #include <QUrlQuery>
 
@@ -1549,6 +1551,43 @@ void AdminApiServer::RegisterRoutes() {
             body.insert(QStringLiteral("removed"), true);
             return JsonOk(body);
         });
+
+    // GET /admin/v1/entitlements[?title_id=CUSA00003][&label=X]
+    // Every account's entitlements in one list, for an overview across players. title_id= with an
+    // empty value selects the all-titles grants.
+    m_http->route("/admin/v1/entitlements", QHttpServerRequest::Method::Get,
+                  [this](const QHttpServerRequest& req) -> QHttpServerResponse {
+                      const auto session = Authenticate(req);
+                      if (!session)
+                          return AuthError(req);
+                      const QUrlQuery query(req.url());
+                      std::optional<QString> titleId;
+                      if (query.hasQueryItem(QStringLiteral("title_id")))
+                          titleId =
+                              query.queryItemValue(QStringLiteral("title_id")).trimmed().toUpper();
+                      const QString label = query.queryItemValue(QStringLiteral("label")).trimmed();
+
+                      const auto rows = EntitlementDb(m_db->Conn()).ListEveryone(titleId, label);
+                      QSet<int64_t> ids;
+                      for (const Entitlement& e : rows)
+                          ids.insert(e.userId);
+                      QHash<int64_t, QString> names;
+                      for (const auto& [id, name] : m_db->GetUsernamesFromIds(ids))
+                          names.insert(id, name);
+
+                      const int64_t now = QDateTime::currentSecsSinceEpoch();
+                      QJsonArray list;
+                      for (const Entitlement& e : rows) {
+                          QJsonObject o = EntitlementToAdminJson(e, now);
+                          o.insert(QStringLiteral("userId"), static_cast<qint64>(e.userId));
+                          o.insert(QStringLiteral("npid"), names.value(e.userId));
+                          list.append(o);
+                      }
+                      QJsonObject body;
+                      body.insert(QStringLiteral("entitlements"), list);
+                      body.insert(QStringLiteral("players"), ids.size());
+                      return JsonOk(body);
+                  });
 
     // GET /admin/v1/commerce/labels[?title_id=CUSA00003]
     // Store labels games have asked about (Commerce GET Container), per title serial. These are

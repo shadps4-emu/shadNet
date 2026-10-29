@@ -7,6 +7,7 @@
 #include <QHash>
 #include <QSqlError>
 #include <QSqlQuery>
+#include <QStringList>
 #include <QVariant>
 
 namespace {
@@ -170,6 +171,22 @@ QVector<Entitlement> EntitlementDb::ListAll(int64_t userId) {
     auto rows = Query(QStringLiteral("user_id=? ORDER BY title_id, service_label, label"),
                       {static_cast<qlonglong>(userId)});
     return rows;
+}
+
+QVector<Entitlement> EntitlementDb::ListEveryone(const std::optional<QString>& titleId,
+                                                 const QString& label) {
+    QStringList where;
+    QVariantList binds;
+    if (titleId) {
+        where << QStringLiteral("title_id=?");
+        binds << TitleKey(*titleId);
+    }
+    if (!label.isEmpty()) {
+        where << QStringLiteral("label=?");
+        binds << label;
+    }
+    where << QStringLiteral("1 ORDER BY title_id, service_label, label, user_id");
+    return Query(where.join(QStringLiteral(" AND ")), binds);
 }
 
 bool EntitlementDb::Upsert(const Entitlement& e) {
