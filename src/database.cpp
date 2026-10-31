@@ -374,6 +374,41 @@ bool Database::Migrate() {
         Exec(ins14);
     }
 
+    // Migration 15: game custom data (Game Custom Data Web API). One row per sent item, shared by
+    // its recipients; each recipient has a row with their own "used" flag. Dates are unix seconds;
+    // expires_at NULL = never. platforms is a comma list ("PS4,PSVITA"); localized_* are JSON
+    // objects keyed by npLanguage.
+    if (!HasMigration(15)) {
+        Exec("CREATE TABLE IF NOT EXISTS game_custom_data("
+             "  item_id                INTEGER PRIMARY KEY AUTOINCREMENT,"
+             "  from_user_id           INTEGER NOT NULL,"
+             "  communication_id       TEXT    NOT NULL DEFAULT '',"
+             "  title_id               TEXT    NOT NULL DEFAULT '',"
+             "  message                TEXT    NOT NULL DEFAULT '',"
+             "  data_name              TEXT    NOT NULL,"
+             "  data_description       TEXT    NOT NULL,"
+             "  localized_names        TEXT    NOT NULL DEFAULT '{}',"
+             "  localized_descriptions TEXT    NOT NULL DEFAULT '{}',"
+             "  attachment_type        TEXT    NOT NULL DEFAULT 'gameData',"
+             "  url                    TEXT,"
+             "  game_data              BLOB,"
+             "  thumbnail              BLOB,"
+             "  platforms              TEXT    NOT NULL DEFAULT 'PS4',"
+             "  created_at             INTEGER NOT NULL,"
+             "  expires_at             INTEGER)");
+        Exec("CREATE TABLE IF NOT EXISTS game_custom_data_recipient("
+             "  item_id   INTEGER NOT NULL REFERENCES game_custom_data(item_id) ON DELETE CASCADE,"
+             "  user_id   INTEGER NOT NULL,"
+             "  data_used INTEGER NOT NULL DEFAULT 0,"
+             "  PRIMARY KEY(item_id, user_id))");
+        Exec("CREATE INDEX IF NOT EXISTS game_custom_data_recipient_user "
+             "ON game_custom_data_recipient(user_id, item_id)");
+
+        QSqlQuery ins15(m_db);
+        ins15.prepare("INSERT OR IGNORE INTO migration VALUES(15,'game custom data')");
+        Exec(ins15);
+    }
+
     qInfo() << "Database migrations complete";
 
     RunMaintenance();
@@ -1076,6 +1111,8 @@ bool Database::DeleteAccount(int64_t userId, PurgeSummary& summary) {
 
     for (const char* sql :
          {"DELETE FROM entitlement WHERE user_id=?",
+          "DELETE FROM game_custom_data_recipient WHERE user_id=?",
+          "DELETE FROM game_custom_data WHERE from_user_id=?",
           "DELETE FROM account_timestamp WHERE user_id=?", "DELETE FROM account WHERE user_id=?"}) {
         QSqlQuery q(m_db);
         if (!q.prepare(QString::fromLatin1(sql))) {
