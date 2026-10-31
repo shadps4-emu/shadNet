@@ -268,3 +268,66 @@ CREATE TABLE IF NOT EXISTS commerce_label (
 | `first_seen`    | INTEGER | Unix seconds of the first request                                          |
 | `last_seen`     | INTEGER | Unix seconds of the latest request                                         |
 | `requests`      | INTEGER | How many requests included it                                              |
+
+### game_custom_data
+
+Game custom data sent through the Game Custom Data Web API (`POST /v1/gameCustomData/items`):
+one row per sent item, shared by all its recipients. Recipients only see items sent from the same
+game: the same NP Communication ID when both sides have one, otherwise the same title serial.
+
+```sql
+CREATE TABLE IF NOT EXISTS game_custom_data (
+    item_id                INTEGER PRIMARY KEY AUTOINCREMENT,
+    from_user_id           INTEGER NOT NULL,
+    communication_id       TEXT    NOT NULL DEFAULT '',
+    title_id               TEXT    NOT NULL DEFAULT '',
+    message                TEXT    NOT NULL DEFAULT '',
+    data_name              TEXT    NOT NULL,
+    data_description       TEXT    NOT NULL,
+    localized_names        TEXT    NOT NULL DEFAULT '{}',
+    localized_descriptions TEXT    NOT NULL DEFAULT '{}',
+    attachment_type        TEXT    NOT NULL DEFAULT 'gameData',
+    url                    TEXT,
+    game_data              BLOB,
+    thumbnail              BLOB,
+    platforms              TEXT    NOT NULL DEFAULT 'PS4',
+    created_at             INTEGER NOT NULL,
+    expires_at             INTEGER
+);
+```
+
+| Column                   | Type    | Notes                                                                 |
+| ------------------------ | ------- | --------------------------------------------------------------------- |
+| `item_id`                | INTEGER | The game custom data ID games see                                     |
+| `from_user_id`           | INTEGER | Sender's account                                                      |
+| `communication_id`       | TEXT    | Sender's NP Communication ID at send time; `''` when unknown          |
+| `title_id`               | TEXT    | Sender's title serial at send time; `''` when unknown                 |
+| `message`                | TEXT    | The sender's message (up to 512 characters)                           |
+| `data_name`              | TEXT    | Default name (up to 128 characters)                                   |
+| `data_description`       | TEXT    | Default description (up to 512 characters)                            |
+| `localized_names`        | TEXT    | JSON object, `npLanguage` -> name                                     |
+| `localized_descriptions` | TEXT    | JSON object, `npLanguage` -> description                              |
+| `attachment_type`        | TEXT    | `gameData` or `url`                                                   |
+| `url`                    | TEXT    | Attached URL, with `itemId=<id>` appended when asked; URL items only |
+| `game_data`              | BLOB    | Attached game data (up to 1 MiB); game data items only               |
+| `thumbnail`              | BLOB    | Thumbnail image (up to 160 KiB)                                       |
+| `platforms`              | TEXT    | Comma list of `PS4` / `PSVITA`                                        |
+| `created_at`             | INTEGER | Unix seconds; reported as `receivedDate`                              |
+| `expires_at`             | INTEGER | Unix seconds; `NULL` = never expires                                  |
+
+### game_custom_data_recipient
+
+Who received each item, with their own "used" flag (set by `PUT .../items/<id>`). Each user keeps
+their newest 100 items; older ones are dropped, and an item nobody holds any more is deleted.
+Deleting an account deletes the items it sent and its received rows.
+
+```sql
+CREATE TABLE IF NOT EXISTS game_custom_data_recipient (
+    item_id   INTEGER NOT NULL REFERENCES game_custom_data(item_id) ON DELETE CASCADE,
+    user_id   INTEGER NOT NULL,
+    data_used INTEGER NOT NULL DEFAULT 0,
+    PRIMARY KEY(item_id, user_id)
+);
+CREATE INDEX IF NOT EXISTS game_custom_data_recipient_user
+    ON game_custom_data_recipient(user_id, item_id);
+```

@@ -13,6 +13,7 @@
 #include "webapi_routes_authcode.h"
 #include "webapi_routes_commerce.h"
 #include "webapi_routes_entitlements.h"
+#include "webapi_routes_game_custom_data.h"
 #include "webapi_routes_identity.h"
 #include "webapi_routes_presence.h"
 #include "webapi_routes_profile.h"
@@ -73,6 +74,7 @@ void WebApiServer::RegisterRoutes() {
     WebApiRoutes::RegisterAuthCodeRoutes(*m_http, *m_db, *m_shared);
     WebApiRoutes::RegisterEntitlementRoutes(*m_http, *m_db, *m_shared);
     WebApiRoutes::RegisterCommerceRoutes(*m_http, *m_db, *m_shared);
+    WebApiRoutes::RegisterGameCustomDataRoutes(*m_http, *m_db, *m_shared);
 
     m_http->setMissingHandler(this, [this](const QHttpServerRequest& req,
                                            QHttpServerResponder& responder) {
