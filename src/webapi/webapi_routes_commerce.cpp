@@ -2,6 +2,13 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
 #include "webapi_routes_commerce.h"
 
+#include <algorithm>
+#include <optional>
+#include <utility>
+
+#include <QDateTime>
+#include <QDebug>
+#include <QHash>
 #include <QHttpServer>
 #include <QHttpServerRequest>
 #include <QHttpServerResponse>

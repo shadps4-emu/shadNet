@@ -107,6 +107,13 @@ set(SOURCES
     src/webapi/webapi_routes_identity.cpp
     src/webapi/webapi_routes_authcode.h
     src/webapi/webapi_routes_authcode.cpp
+    src/webapi/webapi_routes_entitlements.h
+    src/webapi/webapi_routes_entitlements.cpp
+    src/webapi/webapi_routes_commerce.h
+    src/webapi/webapi_routes_commerce.cpp
+    src/webapi/webapi_routes_game_custom_data.h
+    src/webapi/webapi_routes_game_custom_data.cpp
+    src/webapi/webapi_multipart.h
     src/webapi/webapi_routes_common.h
     # Read-only stats HTTP/JSON listener
     src/stats_server.h
@@ -127,6 +134,14 @@ set(SOURCES
     src/member_api.cpp
     src/tus_db.cpp
     src/tus_db.h
+    src/entitlement_db.h
+    src/entitlement_db.cpp
+    src/commerce_db.h
+    src/commerce_db.cpp
+    src/game_custom_data_db.h
+    src/game_custom_data_db.cpp
+
+    
 )
 
 add_executable(shadnet ${SOURCES})

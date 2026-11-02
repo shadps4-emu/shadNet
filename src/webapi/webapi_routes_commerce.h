@@ -4,11 +4,10 @@
 
 class QHttpServer;
 class Database;
+struct SharedState;
 
 namespace WebApiRoutes {
 
-// Store/commerce container lookups (GET /v5/container). shadNet has no catalogue, so every
-// requested container is reported as unavailable.
-void RegisterCommerceRoutes(QHttpServer& http, Database& db);
+void RegisterCommerceRoutes(QHttpServer& http, Database& db, SharedState& shared);
 
 } // namespace WebApiRoutes
