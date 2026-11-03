@@ -145,8 +145,6 @@ QHttpServerResponse MemberApiServer::ApiKeyError(const QHttpServerRequest& req) 
     const bool absent = req.value("X-Member-Api-Key").isEmpty();
     qWarning().nospace().noquote() << "MemberApi: rejected request from " << PeerOf(req)
                                    << " — key " << (absent ? "not supplied" : "did not match");
-    // Deliberately vague about the key itself, and identical whether it was
-    // absent or wrong, so probing tells an unknown caller nothing.
     return JsonError(QHttpServerResponse::StatusCode::Unauthorized, ERR_BAD_API_KEY,
                      QStringLiteral("This server does not accept requests from this client."));
 }
@@ -505,13 +503,8 @@ void MemberApiServer::RegisterRoutes() {
             body.insert(QStringLiteral("clientVersion"), row->clientVersion);
             body.insert(QStringLiteral("clientVersionAt"),
                         static_cast<qint64>(row->clientVersionAt));
-            // Not on the admin row, so read separately. This is the
-            // avatar the game shows next to the account.
             body.insert(QStringLiteral("avatarUrl"),
                         m_db->GetAvatarUrl(session->userId).value_or(QString()));
-            // Deliberately not included: ban reason, admin flag, other accounts.
-            // This endpoint answers "who am I", not "what does the server think
-            // of me".
             return JsonOk(body);
         });
 
@@ -538,6 +531,8 @@ void MemberApiServer::RegisterRoutes() {
                     QJsonObject o;
                     o.insert(QStringLiteral("npid"), f.second);
                     o.insert(QStringLiteral("online"), online);
+                    o.insert(QStringLiteral("avatarUrl"),
+                             m_db->GetAvatarUrl(f.first).value_or(QString()));
                     // What they are playing, only while they show as online.
                     o.insert(QStringLiteral("title"), online ? it->titleName : QString());
                     friends.append(o);
@@ -823,7 +818,6 @@ void MemberApiServer::RegisterRoutes() {
                                  QStringLiteral("Choose a password of at least %1 characters.")
                                      .arg(MinPasswordLength));
             }
-
             const QString notFound =
                 QStringLiteral("No account matches that NP ID and email address.");
             const auto userId = ValidNpid(npid) ? m_db->GetUserId(npid) : std::nullopt;

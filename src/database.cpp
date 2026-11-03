@@ -689,6 +689,27 @@ std::optional<QString> Database::GetAvatarUrl(int64_t userId) {
     return q.value(0).toString();
 }
 
+QHash<QString, QString> Database::GetAvatarUrlsByNpid(const QStringList& npids) {
+    QHash<QString, QString> out;
+    constexpr int Chunk = 200; // well under SQLite's bound-variable limit
+    for (int i = 0; i < npids.size(); i += Chunk) {
+        const QStringList part = npids.mid(i, Chunk);
+        QStringList marks;
+        for (int k = 0; k < part.size(); ++k)
+            marks << QStringLiteral("?");
+        QSqlQuery q(m_db);
+        q.prepare("SELECT username, avatar_url FROM account WHERE username IN (" + marks.join(',') +
+                  ")");
+        for (const QString& n : part)
+            q.addBindValue(n);
+        if (!Exec(q))
+            continue;
+        while (q.next())
+            out.insert(q.value(0).toString(), q.value(1).toString());
+    }
+    return out;
+}
+
 std::optional<int64_t> Database::GetAccountCreationTime(int64_t userId) {
     QSqlQuery q(m_db);
     q.prepare("SELECT creation FROM account_timestamp WHERE user_id=?");
@@ -1560,7 +1581,7 @@ QList<Database::TrophyPlayerRow> Database::ListTopTrophyPlayers(const QString& c
     if (limit <= 0)
         return out;
     QSqlQuery q(m_db);
-    q.prepare("SELECT t.user_id, a.username, COUNT(*), MAX(t.earned_at) "
+    q.prepare("SELECT t.user_id, a.username, COUNT(*), MAX(t.earned_at), a.avatar_url "
               "FROM user_trophies t JOIN account a ON a.user_id = t.user_id "
               "WHERE t.communication_id = ? "
               "GROUP BY t.user_id "
@@ -1576,6 +1597,7 @@ QList<Database::TrophyPlayerRow> Database::ListTopTrophyPlayers(const QString& c
         r.npid = q.value(1).toString();
         r.trophies = q.value(2).toInt();
         r.lastEarnedAt = q.value(3).toLongLong();
+        r.avatarUrl = q.value(4).toString();
         out.append(r);
     }
     return out;
@@ -1628,7 +1650,8 @@ QList<Database::TrophyRankRow> Database::ListTrophyRanking(int limit) {
               "       SUM(g.bronze), SUM(g.silver), SUM(g.gold), SUM(g.platinum), "
               "       SUM(g.ungraded), SUM(g.points) AS points, "
               "       SUM(CASE WHEN g.total_in_game > 0 AND g.trophies >= g.total_in_game "
-              "                THEN 1 ELSE 0 END) "
+              "                THEN 1 ELSE 0 END), "
+              "       a.avatar_url "
               "FROM (SELECT t.user_id AS uid, t.communication_id AS cid, COUNT(*) AS trophies, "
               "             SUM(CASE WHEN m.grade='B' THEN 1 ELSE 0 END) AS bronze, "
               "             SUM(CASE WHEN m.grade='S' THEN 1 ELSE 0 END) AS silver, "
@@ -1665,6 +1688,7 @@ QList<Database::TrophyRankRow> Database::ListTrophyRanking(int limit) {
         r.unknownGrade = q.value(7).toInt();
         r.points = q.value(8).toInt();
         r.completed = q.value(9).toInt();
+        r.avatarUrl = q.value(10).toString();
         out.append(r);
     }
     return out;
@@ -1675,7 +1699,7 @@ QList<Database::RecentTrophyRow> Database::ListRecentTrophies(int limit) {
     QSqlQuery q(m_db);
     q.prepare("SELECT a.username, t.communication_id, COALESCE(tn.title_name, ''), "
               "       t.trophy_id, t.earned_at, COALESCE(m.name, ''), COALESCE(m.grade, ''), "
-              "       COALESCE(m.hidden, 0) "
+              "       COALESCE(m.hidden, 0), a.avatar_url "
               "FROM user_trophies t "
               "JOIN account a ON a.user_id = t.user_id "
               "LEFT JOIN title_name tn ON tn.communication_id = t.communication_id "
@@ -1697,6 +1721,7 @@ QList<Database::RecentTrophyRow> Database::ListRecentTrophies(int limit) {
         r.name = q.value(5).toString();
         r.grade = q.value(6).toString();
         r.hidden = q.value(7).toBool();
+        r.avatarUrl = q.value(8).toString();
         out.append(r);
     }
     return out;
@@ -1953,7 +1978,6 @@ UserRelationships Database::GetRelationships(int64_t userId) {
             statusOther = su1;
         }
 
-        // Resolve the other user's npid.
         auto npidOpt = GetUsername(otherId);
         if (!npidOpt)
             continue;

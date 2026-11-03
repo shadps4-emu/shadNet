@@ -5,6 +5,7 @@
 #include <optional>
 #include <QByteArray>
 #include <QDateTime>
+#include <QHash>
 #include <QList>
 #include <QMutex>
 #include <QObject>
@@ -81,7 +82,6 @@ enum class UserFilter {
     OnlineOnly,   // currently connected
 };
 
-// One entry of the admin action log.
 struct AuditRow {
     int64_t id = 0;
     int64_t timestamp = 0;
@@ -93,14 +93,12 @@ struct AuditRow {
     QString reason;
 };
 
-// What a PurgeUserData call removed.
 struct PurgeSummary {
     int scores = 0;
     int trophies = 0;
     int tusVariables = 0;
     int tusData = 0;
     int friendships = 0;
-    // data_id of every score blob that belonged to the purged rows.
     QList<uint64_t> scoreDataIds;
 
     int total() const {
@@ -139,29 +137,17 @@ public:
     std::optional<int64_t> GetUserId(const QString& npid);
     std::optional<QString> GetUsername(int64_t userId);
     std::optional<QString> GetAvatarUrl(int64_t userId);
-    // Account creation instant, in seconds since the epoch (account_timestamp.creation).
+    QHash<QString, QString> GetAvatarUrlsByNpid(const QStringList& npids);
     std::optional<int64_t> GetAccountCreationTime(int64_t userId);
     QList<QPair<int64_t, QString>> GetUsernamesFromIds(const QSet<int64_t>& ids);
     bool UpdateLoginTime(int64_t userId);
-    // Sets/clears the ban flag.
     bool BanUser(int64_t userId, bool ban, const QString& reason = QString());
-
-    // Removes the account row itself along with everything PurgeUserData covers
     bool DeleteAccount(int64_t userId, PurgeSummary& summary);
     bool SetAdmin(int64_t userId, bool admin);
     bool SetClientVersion(int64_t userId, const QString& version);
-
-    // Replaces an account's password. Generates a fresh salt, and rotates the
-    // account token so any client still holding the old one has to sign in again —
-    // a password reset that left existing sessions working would not be much of a
-    // reset. Also clears any pending reset_token.
     bool SetPassword(int64_t userId, const QString& newPassword);
-    // Points an account at a different picture.
     bool SetAvatarUrl(int64_t userId, const QString& avatarUrl);
     int TotalUsers();
-
-    // Deletes everything this account produced: leaderboard scores, TUS variable
-    // and data slots, and friend/block relationships.
     bool PurgeUserData(int64_t userId, PurgeSummary& summary);
 
     QList<AdminUserRow> ListUsers(
@@ -172,7 +158,6 @@ public:
     std::optional<AdminUserRow> GetUserRow(int64_t userId);
     int CountUsersWhere(UserFilter filter);
 
-    // Append an entry to the admin action log. Returns false only on a DB error.
     bool AddAuditEntry(int64_t actorUserId, const QString& actorNpid, const QString& action,
                        int64_t targetUserId, const QString& targetNpid, const QString& reason);
     QList<AuditRow> ListAudit(int limit, int offset);
@@ -180,8 +165,6 @@ public:
     void CleanNeverUsedAccounts();
     void RunMaintenance();
 
-    // Friendship
-    // Returns (status_caller, status_other). Empty = no row exists yet.
     enum class RelResult { Ok, Empty, Error };
     struct RelStatus {
         uint8_t caller = 0;
@@ -227,10 +210,8 @@ public:
         uint32_t boardId = 0;
         int scoreCount = 0;
     };
-    // Every (com id, board) pair with at least one score, most populated first.
     QList<BoardRow> ListScoreBoards();
 
-    // One posted score, joined to the account that posted it.
     struct BoardScoreRow {
         QString comId;
         uint32_t boardId = 0;
@@ -242,12 +223,11 @@ public:
         uint64_t dataId = 0; // 0 when the entry has no saved game data
         int64_t timestamp = 0;
     };
-    // Scores on one board, highest first.
+
     QList<BoardScoreRow> ListBoardScores(const QString& comId, uint32_t boardId, int limit,
                                          int offset);
     int CountBoardScores(const QString& comId, uint32_t boardId);
 
-    // One score this account has posted, with the game's name when known.
     struct UserScoreRow {
         QString comId;
         QString titleName; // empty when no name has been imported
@@ -260,7 +240,6 @@ public:
     bool DeleteScore(const QString& comId, uint32_t boardId, int64_t userId, int32_t characterId,
                      uint64_t& dataId);
 
-    // Trophies
     struct TrophyRow {
         QString comId;
         QString titleName;
@@ -274,7 +253,6 @@ public:
         int trophies = 0; // distinct trophy ids earned at least once
         int unlocks = 0;  // total unlock records
     };
-    // How many accounts hold a given trophy in a game.
     struct TrophyEarnerRow {
         int32_t trophyId = 0;
         int earners = 0;
@@ -301,12 +279,13 @@ public:
     struct TrophyPlayerRow {
         int64_t userId = 0;
         QString npid;
+        QString avatarUrl;
         int trophies = 0;
         int64_t lastEarnedAt = 0;
     };
+
     QList<TrophyPlayerRow> ListTopTrophyPlayers(const QString& comId, int limit);
 
-    // One game in a player's trophy profile.
     struct TrophyProfileRow {
         QString comId;
         QString titleName;
@@ -320,7 +299,9 @@ public:
         int unknownGrade = 0;
         int totalInGame = 0;
     };
+
     QList<TrophyProfileRow> ListPlayerTrophySummary(int64_t userId);
+
     struct TrophyRankRow {
         QString npid;
         int trophies = 0;
@@ -332,7 +313,9 @@ public:
         int unknownGrade = 0;
         int points = 0;
         int completed = 0; // games where every trophy of an imported set is held
+        QString avatarUrl;
     };
+
     QList<TrophyRankRow> ListTrophyRanking(int limit);
 
     // One unlock in the recent-activity feed.
@@ -345,6 +328,7 @@ public:
         QString name;  // empty when the game has no imported configuration
         QString grade; // B, S, G, P or empty
         bool hidden = false;
+        QString avatarUrl;
     };
     QList<RecentTrophyRow> ListRecentTrophies(int limit);
 
@@ -367,6 +351,7 @@ public:
         int32_t groupId = 0;
         QString language; // which TROP_xx.XML it came from; empty for the master
     };
+
     struct TrophyGroupRow {
         int32_t groupId = 0;
         QString name;

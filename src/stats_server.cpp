@@ -34,7 +34,6 @@ QHttpServerResponse jsonResponse(const QByteArray& body) {
     return QHttpServerResponse{"application/json", body, QHttpServerResponse::StatusCode::Ok};
 }
 
-// Serialize a GetScoreResponse's rank array to JSON (best-first, as cached).
 QJsonArray ranksToJson(const shadnet::GetScoreResponse& resp) {
     QJsonArray arr;
     for (int i = 0; i < resp.rankarray_size(); ++i) {
@@ -51,6 +50,18 @@ QJsonArray ranksToJson(const shadnet::GetScoreResponse& resp) {
         arr.append(o);
     }
     return arr;
+}
+
+void AddAvatars(QJsonArray& ranks, Database& db) {
+    QStringList npids;
+    for (const auto& v : std::as_const(ranks))
+        npids << v.toObject().value("npid").toString();
+    const auto avatars = db.GetAvatarUrlsByNpid(npids);
+    for (int i = 0; i < ranks.size(); ++i) {
+        QJsonObject o = ranks.at(i).toObject();
+        o.insert("avatarUrl", avatars.value(o.value("npid").toString()));
+        ranks[i] = o;
+    }
 }
 
 } // namespace
@@ -247,6 +258,8 @@ QByteArray StatsServer::BuildComIdScoreJson(const QString& comId) const {
     QJsonObject root;
     root.insert("com_id", comId);
     QJsonArray boardsArr;
+    Database db(QString{});
+    const bool haveDb = db.Open(m_dbPath);
     const QVector<uint32_t> boards = m_scoreCache->ListBoards(comId);
     for (uint32_t boardId : boards) {
         const shadnet::GetScoreResponse resp = m_scoreCache->GetScoreRange(
@@ -257,7 +270,10 @@ QByteArray StatsServer::BuildComIdScoreJson(const QString& comId) const {
         b.insert("total_record", static_cast<qint64>(resp.totalrecord()));
         b.insert("last_sort_date", static_cast<qint64>(resp.lastsortdate()));
         b.insert("sorted_at", static_cast<qint64>(ShadNetTimestampToUnix(resp.lastsortdate())));
-        b.insert("ranks", ranksToJson(resp));
+        QJsonArray ranks = ranksToJson(resp);
+        if (haveDb)
+            AddAvatars(ranks, db);
+        b.insert("ranks", ranks);
         boardsArr.append(b);
     }
     root.insert("boards", boardsArr);
@@ -274,7 +290,11 @@ QByteArray StatsServer::BuildBoardScoreJson(const QString& comId, uint32_t board
     root.insert("total_record", static_cast<qint64>(resp.totalrecord()));
     root.insert("last_sort_date", static_cast<qint64>(resp.lastsortdate()));
     root.insert("sorted_at", static_cast<qint64>(ShadNetTimestampToUnix(resp.lastsortdate())));
-    root.insert("ranks", ranksToJson(resp));
+    QJsonArray ranks = ranksToJson(resp);
+    Database db(QString{});
+    if (db.Open(m_dbPath))
+        AddAvatars(ranks, db);
+    root.insert("ranks", ranks);
     return toJson(root);
 }
 
@@ -353,6 +373,7 @@ QByteArray StatsServer::BuildTrophyStatsJson(const QString& comId) const {
     for (const auto& tp : db.ListTopTrophyPlayers(comId, 25)) {
         QJsonObject o;
         o.insert("npid", tp.npid);
+        o.insert("avatarUrl", tp.avatarUrl);
         o.insert("trophies", tp.trophies);
         o.insert("lastEarnedAt", static_cast<qint64>(tp.lastEarnedAt));
         o.insert("completion",
@@ -472,6 +493,7 @@ QByteArray StatsServer::BuildTrophyPlayerJson(const QString& npid) const {
     }
 
     root.insert("npid", db.GetUsername(*userId).value_or(npid));
+    root.insert("avatarUrl", db.GetAvatarUrl(*userId).value_or(QString()));
     root.insert("total", total);
     root.insert("grades", GradesJson(bronze, silver, gold, platinum));
     root.insert("unknownGrade", unknown);
@@ -496,6 +518,7 @@ QByteArray StatsServer::BuildTrophyRankingJson() const {
     for (const auto& r : db.ListTrophyRanking(RankingLimit)) {
         QJsonObject o;
         o.insert("npid", r.npid);
+        o.insert("avatarUrl", r.avatarUrl);
         o.insert("points", r.points);
         o.insert("trophies", r.trophies);
         o.insert("games", r.games);
@@ -524,6 +547,7 @@ QByteArray StatsServer::BuildTrophyRecentJson() const {
     for (const auto& r : db.ListRecentTrophies(RecentLimit)) {
         QJsonObject o;
         o.insert("npid", r.npid);
+        o.insert("avatarUrl", r.avatarUrl);
         o.insert("commid", r.comId);
         o.insert("game", r.titleName);
         o.insert("trophyId", r.trophyId);
