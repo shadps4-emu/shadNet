@@ -480,39 +480,83 @@ void MemberApiServer::RegisterRoutes() {
                   });
 
     // GET /member/v1/me — the caller's own account.
-    m_http->route("/member/v1/me", QHttpServerRequest::Method::Get,
-                  [this](const QHttpServerRequest& req) -> QHttpServerResponse {
-                      if (!CheckApiKey(req))
-                          return ApiKeyError(req);
+    m_http->route(
+        "/member/v1/me", QHttpServerRequest::Method::Get,
+        [this](const QHttpServerRequest& req) -> QHttpServerResponse {
+            if (!CheckApiKey(req))
+                return ApiKeyError(req);
 
-                      const auto session = Authenticate(req);
-                      if (!session)
-                          return JsonError(QHttpServerResponse::StatusCode::Unauthorized,
-                                           ERR_UNAUTHORIZED, QStringLiteral("Sign in first."));
+            const auto session = Authenticate(req);
+            if (!session)
+                return JsonError(QHttpServerResponse::StatusCode::Unauthorized, ERR_UNAUTHORIZED,
+                                 QStringLiteral("Sign in first."));
 
-                      const auto row = m_db->GetUserRow(session->userId);
-                      if (!row)
-                          return JsonError(QHttpServerResponse::StatusCode::Unauthorized,
-                                           ERR_UNAUTHORIZED,
-                                           QStringLiteral("This account no longer exists."));
+            const auto row = m_db->GetUserRow(session->userId);
+            if (!row)
+                return JsonError(QHttpServerResponse::StatusCode::Unauthorized, ERR_UNAUTHORIZED,
+                                 QStringLiteral("This account no longer exists."));
 
-                      QJsonObject body;
-                      body.insert(QStringLiteral("npid"), row->username);
-                      body.insert(QStringLiteral("email"), row->email);
-                      body.insert(QStringLiteral("creation"), static_cast<qint64>(row->creation));
-                      body.insert(QStringLiteral("lastLogin"), static_cast<qint64>(row->lastLogin));
-                      body.insert(QStringLiteral("clientVersion"), row->clientVersion);
-                      body.insert(QStringLiteral("clientVersionAt"),
-                                  static_cast<qint64>(row->clientVersionAt));
-                      // Not on the admin row, so read separately. This is the
-                      // avatar the game shows next to the account.
-                      body.insert(QStringLiteral("avatarUrl"),
-                                  m_db->GetAvatarUrl(session->userId).value_or(QString()));
-                      // Deliberately not included: ban reason, admin flag, other accounts.
-                      // This endpoint answers "who am I", not "what does the server think
-                      // of me".
-                      return JsonOk(body);
-                  });
+            QJsonObject body;
+            body.insert(QStringLiteral("npid"), row->username);
+            body.insert(QStringLiteral("email"), row->email);
+            body.insert(QStringLiteral("emailVerified"), m_db->IsEmailVerified(session->userId));
+            body.insert(QStringLiteral("creation"), static_cast<qint64>(row->creation));
+            body.insert(QStringLiteral("lastLogin"), static_cast<qint64>(row->lastLogin));
+            body.insert(QStringLiteral("clientVersion"), row->clientVersion);
+            body.insert(QStringLiteral("clientVersionAt"),
+                        static_cast<qint64>(row->clientVersionAt));
+            // Not on the admin row, so read separately. This is the
+            // avatar the game shows next to the account.
+            body.insert(QStringLiteral("avatarUrl"),
+                        m_db->GetAvatarUrl(session->userId).value_or(QString()));
+            // Deliberately not included: ban reason, admin flag, other accounts.
+            // This endpoint answers "who am I", not "what does the server think
+            // of me".
+            return JsonOk(body);
+        });
+
+    // GET /member/v1/me/friends — the caller's friends and open friend requests.
+    m_http->route(
+        "/member/v1/me/friends", QHttpServerRequest::Method::Get,
+        [this](const QHttpServerRequest& req) -> QHttpServerResponse {
+            if (!CheckApiKey(req))
+                return ApiKeyError(req);
+
+            const auto session = Authenticate(req);
+            if (!session)
+                return JsonError(QHttpServerResponse::StatusCode::Unauthorized, ERR_UNAUTHORIZED,
+                                 QStringLiteral("Sign in first."));
+
+            const UserRelationships rel = m_db->GetRelationships(session->userId);
+
+            QJsonArray friends;
+            {
+                QReadLocker lk(&m_shared->clientsLock);
+                for (const auto& f : rel.friends) {
+                    const auto it = m_shared->clients.constFind(f.first);
+                    const bool online = it != m_shared->clients.constEnd() && !it->appearOffline;
+                    QJsonObject o;
+                    o.insert(QStringLiteral("npid"), f.second);
+                    o.insert(QStringLiteral("online"), online);
+                    // What they are playing, only while they show as online.
+                    o.insert(QStringLiteral("title"), online ? it->titleName : QString());
+                    friends.append(o);
+                }
+            }
+
+            const auto names = [](const QList<QPair<int64_t, QString>>& list) {
+                QJsonArray a;
+                for (const auto& p : list)
+                    a.append(p.second);
+                return a;
+            };
+
+            QJsonObject body;
+            body.insert(QStringLiteral("friends"), friends);
+            body.insert(QStringLiteral("requestsReceived"), names(rel.friendRequestsReceived));
+            body.insert(QStringLiteral("requestsSent"), names(rel.friendRequestsSent));
+            return JsonOk(body);
+        });
 
     // GET /member/v1/me/trophies
     m_http->route(
@@ -747,6 +791,242 @@ void MemberApiServer::RegisterRoutes() {
             QJsonObject body;
             body.insert(QStringLiteral("changed"), true);
             body.insert(QStringLiteral("signedOutEverywhere"), true);
+            return JsonOk(body);
+        });
+
+    // POST /member/v1/reset-password — { npid, email, password }
+    m_http->route(
+        "/member/v1/reset-password", QHttpServerRequest::Method::Post,
+        [this](const QHttpServerRequest& req) -> QHttpServerResponse {
+            if (!CheckApiKey(req))
+                return ApiKeyError(req);
+
+            int retryAfter = 0;
+            if (IsThrottled(PeerOf(req), retryAfter)) {
+                return JsonError(
+                    QHttpServerResponse::StatusCode::TooManyRequests, ERR_TOO_MANY,
+                    QStringLiteral("Too many attempts. Try again in %1 seconds.").arg(retryAfter));
+            }
+
+            QString parseError;
+            const auto bodyOpt = ParseJsonBody(req, parseError);
+            if (!bodyOpt)
+                return JsonError(QHttpServerResponse::StatusCode::BadRequest, ERR_BAD_REQUEST,
+                                 parseError);
+
+            const QString npid = bodyOpt->value(QStringLiteral("npid")).toString().trimmed();
+            const QString email = bodyOpt->value(QStringLiteral("email")).toString().trimmed();
+            const QString password = bodyOpt->value(QStringLiteral("password")).toString();
+
+            if (password.size() < MinPasswordLength || password.size() > MaxPasswordLength) {
+                return JsonError(QHttpServerResponse::StatusCode::BadRequest, ERR_BAD_REQUEST,
+                                 QStringLiteral("Choose a password of at least %1 characters.")
+                                     .arg(MinPasswordLength));
+            }
+
+            const QString notFound =
+                QStringLiteral("No account matches that NP ID and email address.");
+            const auto userId = ValidNpid(npid) ? m_db->GetUserId(npid) : std::nullopt;
+            if (!userId || email.isEmpty()) {
+                return JsonError(QHttpServerResponse::StatusCode::NotFound, 404, notFound);
+            }
+            const auto row = m_db->GetUserRow(*userId);
+            if (!row || row->email.trimmed().isEmpty() ||
+                row->email.trimmed().compare(email, Qt::CaseInsensitive) != 0) {
+                return JsonError(QHttpServerResponse::StatusCode::NotFound, 404, notFound);
+            }
+
+            if (!m_db->SetPassword(*userId, password)) {
+                qCritical() << "MemberApi: password reset failed for" << npid;
+                return JsonError(QHttpServerResponse::StatusCode::InternalServerError, ERR_INTERNAL,
+                                 QStringLiteral("The password could not be reset."));
+            }
+
+            m_db->SetEmailVerified(*userId, true);
+            RevokeSessionsFor(*userId);
+
+            qInfo().nospace().noquote()
+                << "MemberApi: " << npid << " reset their password by email";
+            QJsonObject body;
+            body.insert(QStringLiteral("reset"), true);
+            return JsonOk(body);
+        });
+
+    // POST /member/v1/verify-email — { npid, email }
+    m_http->route(
+        "/member/v1/verify-email", QHttpServerRequest::Method::Post,
+        [this](const QHttpServerRequest& req) -> QHttpServerResponse {
+            if (!CheckApiKey(req))
+                return ApiKeyError(req);
+
+            QString parseError;
+            const auto bodyOpt = ParseJsonBody(req, parseError);
+            if (!bodyOpt)
+                return JsonError(QHttpServerResponse::StatusCode::BadRequest, ERR_BAD_REQUEST,
+                                 parseError);
+
+            const QString npid = bodyOpt->value(QStringLiteral("npid")).toString().trimmed();
+            const QString email = bodyOpt->value(QStringLiteral("email")).toString().trimmed();
+
+            const QString notFound =
+                QStringLiteral("No account matches that NP ID and email address.");
+            const auto userId = ValidNpid(npid) ? m_db->GetUserId(npid) : std::nullopt;
+            if (!userId || email.isEmpty())
+                return JsonError(QHttpServerResponse::StatusCode::NotFound, 404, notFound);
+            const auto row = m_db->GetUserRow(*userId);
+            if (!row || row->email.trimmed().compare(email, Qt::CaseInsensitive) != 0)
+                return JsonError(QHttpServerResponse::StatusCode::NotFound, 404, notFound);
+
+            if (!m_db->SetEmailVerified(*userId, true)) {
+                qCritical() << "MemberApi: could not mark email verified for" << npid;
+                return JsonError(QHttpServerResponse::StatusCode::InternalServerError, ERR_INTERNAL,
+                                 QStringLiteral("The email could not be verified."));
+            }
+            qInfo().nospace().noquote() << "MemberApi: " << npid << " verified their email";
+            QJsonObject body;
+            body.insert(QStringLiteral("verified"), true);
+            return JsonOk(body);
+        });
+
+    // POST /member/v1/me/verify-password — { current }
+    m_http->route(
+        "/member/v1/me/verify-password", QHttpServerRequest::Method::Post,
+        [this](const QHttpServerRequest& req) -> QHttpServerResponse {
+            if (!CheckApiKey(req))
+                return ApiKeyError(req);
+
+            const auto session = Authenticate(req);
+            if (!session)
+                return JsonError(QHttpServerResponse::StatusCode::Unauthorized, ERR_UNAUTHORIZED,
+                                 QStringLiteral("Sign in first."));
+
+            const QString peer = PeerOf(req);
+            int retryAfter = 0;
+            if (IsThrottled(peer, retryAfter)) {
+                return JsonError(
+                    QHttpServerResponse::StatusCode::TooManyRequests, ERR_TOO_MANY,
+                    QStringLiteral("Too many attempts. Try again in %1 seconds.").arg(retryAfter));
+            }
+
+            QString parseError;
+            const auto bodyOpt = ParseJsonBody(req, parseError);
+            if (!bodyOpt)
+                return JsonError(QHttpServerResponse::StatusCode::BadRequest, ERR_BAD_REQUEST,
+                                 parseError);
+
+            const QString current = bodyOpt->value(QStringLiteral("current")).toString();
+            if (!m_db->CheckUser(session->npid, current, QString(), false)) {
+                RegisterFailure(peer);
+                return JsonError(QHttpServerResponse::StatusCode::Unauthorized, ERR_UNAUTHORIZED,
+                                 QStringLiteral("That is not your current password."));
+            }
+            ClearFailures(peer);
+            QJsonObject body;
+            body.insert(QStringLiteral("ok"), true);
+            return JsonOk(body);
+        });
+
+    // POST /member/v1/change-email — { npid, email, from }
+    m_http->route(
+        "/member/v1/change-email", QHttpServerRequest::Method::Post,
+        [this](const QHttpServerRequest& req) -> QHttpServerResponse {
+            if (!CheckApiKey(req))
+                return ApiKeyError(req);
+
+            QString parseError;
+            const auto bodyOpt = ParseJsonBody(req, parseError);
+            if (!bodyOpt)
+                return JsonError(QHttpServerResponse::StatusCode::BadRequest, ERR_BAD_REQUEST,
+                                 parseError);
+
+            const QString npid = bodyOpt->value(QStringLiteral("npid")).toString().trimmed();
+            const QString email = bodyOpt->value(QStringLiteral("email")).toString().trimmed();
+            const QString from = bodyOpt->value(QStringLiteral("from")).toString().trimmed();
+
+            if (!LooksLikeEmail(email)) {
+                return JsonError(QHttpServerResponse::StatusCode::BadRequest, ERR_BAD_REQUEST,
+                                 QStringLiteral("That does not look like an email address."));
+            }
+            const QString notFound = QStringLiteral("This change is no longer valid.");
+            const auto userId = ValidNpid(npid) ? m_db->GetUserId(npid) : std::nullopt;
+            if (!userId)
+                return JsonError(QHttpServerResponse::StatusCode::NotFound, 404, notFound);
+            const auto row = m_db->GetUserRow(*userId);
+            if (!row || row->email.trimmed().compare(from, Qt::CaseInsensitive) != 0)
+                return JsonError(QHttpServerResponse::StatusCode::NotFound, 404, notFound);
+
+            if (const auto err = m_db->SetEmail(*userId, email)) {
+                if (*err == DbError::ExistingEmail) {
+                    return JsonError(
+                        QHttpServerResponse::StatusCode::Conflict, ERR_CONFLICT,
+                        QStringLiteral("There is already an account with that email address."));
+                }
+                if (*err == DbError::InvalidEmail) {
+                    return JsonError(
+                        QHttpServerResponse::StatusCode::BadRequest, ERR_BAD_REQUEST,
+                        QStringLiteral("The server did not accept that email address."));
+                }
+                qCritical() << "MemberApi: email change failed for" << npid;
+                return JsonError(QHttpServerResponse::StatusCode::InternalServerError, ERR_INTERNAL,
+                                 QStringLiteral("The email could not be changed."));
+            }
+            qInfo().nospace().noquote() << "MemberApi: " << npid << " changed their email";
+            QJsonObject body;
+            body.insert(QStringLiteral("changed"), true);
+            return JsonOk(body);
+        });
+
+    // POST /member/v1/me/delete — { current }
+    m_http->route(
+        "/member/v1/me/delete", QHttpServerRequest::Method::Post,
+        [this](const QHttpServerRequest& req) -> QHttpServerResponse {
+            if (!CheckApiKey(req))
+                return ApiKeyError(req);
+
+            const auto session = Authenticate(req);
+            if (!session)
+                return JsonError(QHttpServerResponse::StatusCode::Unauthorized, ERR_UNAUTHORIZED,
+                                 QStringLiteral("Sign in first."));
+
+            const QString peer = PeerOf(req);
+            int retryAfter = 0;
+            if (IsThrottled(peer, retryAfter)) {
+                return JsonError(
+                    QHttpServerResponse::StatusCode::TooManyRequests, ERR_TOO_MANY,
+                    QStringLiteral("Too many attempts. Try again in %1 seconds.").arg(retryAfter));
+            }
+
+            QString parseError;
+            const auto bodyOpt = ParseJsonBody(req, parseError);
+            if (!bodyOpt)
+                return JsonError(QHttpServerResponse::StatusCode::BadRequest, ERR_BAD_REQUEST,
+                                 parseError);
+
+            const QString current = bodyOpt->value(QStringLiteral("current")).toString();
+            if (!m_db->CheckUser(session->npid, current, QString(), false)) {
+                RegisterFailure(peer);
+                return JsonError(QHttpServerResponse::StatusCode::Unauthorized, ERR_UNAUTHORIZED,
+                                 QStringLiteral("That is not your current password."));
+            }
+
+            PurgeSummary summary;
+            int blobsDeleted = 0;
+            int cachedScoresDropped = 0;
+            if (!DeleteAccountAndArtifacts(*m_db, m_shared, session->userId, summary, blobsDeleted,
+                                           cachedScoresDropped)) {
+                qCritical() << "MemberApi: deleting" << session->npid
+                            << "failed:" << m_db->lastError();
+                return JsonError(QHttpServerResponse::StatusCode::InternalServerError, ERR_INTERNAL,
+                                 QStringLiteral("The account could not be deleted. Nothing was "
+                                                "removed."));
+            }
+
+            RevokeSessionsFor(session->userId);
+            qInfo().nospace().noquote() << "MemberApi: " << session->npid
+                                        << " deleted their account (scores: " << summary.scores
+                                        << ", score blobs: " << blobsDeleted << ")";
+            QJsonObject body;
+            body.insert(QStringLiteral("deleted"), true);
             return JsonOk(body);
         });
 }

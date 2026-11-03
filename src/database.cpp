@@ -409,6 +409,24 @@ bool Database::Migrate() {
         Exec(ins15);
     }
 
+    // Migration 16: email verification flag. Existing accounts start unverified.
+    if (!HasMigration(16)) {
+        Exec("ALTER TABLE account ADD COLUMN email_verified INTEGER NOT NULL DEFAULT 0");
+
+        QSqlQuery ins16(m_db);
+        ins16.prepare("INSERT OR IGNORE INTO migration VALUES(16,'email verified')");
+        Exec(ins16);
+    }
+
+    // Migration 17: the recent-unlocks feed sorts every unlock by time.
+    if (!HasMigration(17)) {
+        Exec("CREATE INDEX IF NOT EXISTS user_trophies_recent ON user_trophies(earned_at)");
+
+        QSqlQuery ins17(m_db);
+        ins17.prepare("INSERT OR IGNORE INTO migration VALUES(17,'recent trophies index')");
+        Exec(ins17);
+    }
+
     qInfo() << "Database migrations complete";
 
     RunMaintenance();
@@ -1603,6 +1621,87 @@ QList<Database::TrophyProfileRow> Database::ListPlayerTrophySummary(int64_t user
     return out;
 }
 
+QList<Database::TrophyRankRow> Database::ListTrophyRanking(int limit) {
+    QList<TrophyRankRow> out;
+    QSqlQuery q(m_db);
+    q.prepare("SELECT a.username, SUM(g.trophies), COUNT(*), "
+              "       SUM(g.bronze), SUM(g.silver), SUM(g.gold), SUM(g.platinum), "
+              "       SUM(g.ungraded), SUM(g.points) AS points, "
+              "       SUM(CASE WHEN g.total_in_game > 0 AND g.trophies >= g.total_in_game "
+              "                THEN 1 ELSE 0 END) "
+              "FROM (SELECT t.user_id AS uid, t.communication_id AS cid, COUNT(*) AS trophies, "
+              "             SUM(CASE WHEN m.grade='B' THEN 1 ELSE 0 END) AS bronze, "
+              "             SUM(CASE WHEN m.grade='S' THEN 1 ELSE 0 END) AS silver, "
+              "             SUM(CASE WHEN m.grade='G' THEN 1 ELSE 0 END) AS gold, "
+              "             SUM(CASE WHEN m.grade='P' THEN 1 ELSE 0 END) AS platinum, "
+              "             SUM(CASE WHEN m.grade IS NULL OR m.grade='' THEN 1 ELSE 0 END) "
+              "                 AS ungraded, "
+              "             SUM(CASE m.grade WHEN 'B' THEN 15 WHEN 'S' THEN 30 "
+              "                              WHEN 'G' THEN 90 WHEN 'P' THEN 180 ELSE 0 END) "
+              "                 AS points, "
+              "             (SELECT COUNT(*) FROM trophy_meta mm "
+              "              WHERE mm.communication_id = t.communication_id) AS total_in_game "
+              "      FROM user_trophies t "
+              "      LEFT JOIN trophy_meta m ON m.communication_id = t.communication_id "
+              "                             AND m.trophy_id = t.trophy_id "
+              "      GROUP BY t.user_id, t.communication_id) g "
+              "JOIN account a ON a.user_id = g.uid "
+              "WHERE a.banned = 0 "
+              "GROUP BY g.uid "
+              "ORDER BY points DESC, SUM(g.trophies) DESC, a.username COLLATE NOCASE ASC "
+              "LIMIT ?");
+    q.addBindValue(limit);
+    if (!Exec(q))
+        return out;
+    while (q.next()) {
+        TrophyRankRow r;
+        r.npid = q.value(0).toString();
+        r.trophies = q.value(1).toInt();
+        r.games = q.value(2).toInt();
+        r.bronze = q.value(3).toInt();
+        r.silver = q.value(4).toInt();
+        r.gold = q.value(5).toInt();
+        r.platinum = q.value(6).toInt();
+        r.unknownGrade = q.value(7).toInt();
+        r.points = q.value(8).toInt();
+        r.completed = q.value(9).toInt();
+        out.append(r);
+    }
+    return out;
+}
+
+QList<Database::RecentTrophyRow> Database::ListRecentTrophies(int limit) {
+    QList<RecentTrophyRow> out;
+    QSqlQuery q(m_db);
+    q.prepare("SELECT a.username, t.communication_id, COALESCE(tn.title_name, ''), "
+              "       t.trophy_id, t.earned_at, COALESCE(m.name, ''), COALESCE(m.grade, ''), "
+              "       COALESCE(m.hidden, 0) "
+              "FROM user_trophies t "
+              "JOIN account a ON a.user_id = t.user_id "
+              "LEFT JOIN title_name tn ON tn.communication_id = t.communication_id "
+              "LEFT JOIN trophy_meta m ON m.communication_id = t.communication_id "
+              "                       AND m.trophy_id = t.trophy_id "
+              "WHERE a.banned = 0 "
+              "ORDER BY t.earned_at DESC "
+              "LIMIT ?");
+    q.addBindValue(limit);
+    if (!Exec(q))
+        return out;
+    while (q.next()) {
+        RecentTrophyRow r;
+        r.npid = q.value(0).toString();
+        r.comId = q.value(1).toString();
+        r.titleName = q.value(2).toString();
+        r.trophyId = q.value(3).toInt();
+        r.earnedAt = q.value(4).toLongLong();
+        r.name = q.value(5).toString();
+        r.grade = q.value(6).toString();
+        r.hidden = q.value(7).toBool();
+        out.append(r);
+    }
+    return out;
+}
+
 Database::TrophyTotals Database::GetTrophyTotals() {
     TrophyTotals t;
     QSqlQuery q(m_db);
@@ -1627,7 +1726,6 @@ bool Database::ImportTrophyMeta(const QString& comId, const QList<TrophyMetaRow>
         return false;
     }
 
-    // Clear first so trophies dropped from a corrected file do not linger.
     QSqlQuery del(m_db);
     del.prepare("DELETE FROM trophy_meta WHERE communication_id=?");
     del.addBindValue(comId);
@@ -1768,11 +1866,6 @@ bool Database::DeleteUserTrophy(int64_t userId, const QString& comId, int32_t tr
     return q.numRowsAffected() > 0;
 }
 
-// Friendship DB methods
-
-// The friendship table always stores rows with user_id_1 < user_id_2.
-// This helper returns the canonical (lower, higher) order and a flag
-// indicating whether the caller is user_id_2 (i.e. the IDs were swapped).
 static std::tuple<int64_t, int64_t, bool> orderedIds(int64_t a, int64_t b) {
     if (a < b)
         return {a, b, false};
@@ -1848,7 +1941,6 @@ UserRelationships Database::GetRelationships(int64_t userId) {
         uint8_t su1 = static_cast<uint8_t>(q.value(2).toInt());
         uint8_t su2 = static_cast<uint8_t>(q.value(3).toInt());
 
-        // Rotate so statusMe / statusOther are from our perspective.
         int64_t otherId;
         uint8_t statusMe, statusOther;
         if (uid1 == userId) {
@@ -1874,7 +1966,6 @@ UserRelationships Database::GetRelationships(int64_t userId) {
         } else if (!(statusMe & F) && (statusOther & F)) {
             result.friendRequestsReceived.append(pair);
         }
-        // Blocked: we blocked them
         if (statusMe & B) {
             result.blocked.append(pair);
         }
@@ -1893,6 +1984,46 @@ Matching2Access Database::GetMatching2Access(int64_t userId) {
     return v == 1   ? Matching2Access::Always
            : v == 2 ? Matching2Access::Never
                     : Matching2Access::Normal;
+}
+
+bool Database::IsEmailVerified(int64_t userId) {
+    QSqlQuery q(m_db);
+    q.prepare("SELECT COALESCE(email_verified,0) FROM account WHERE user_id=?");
+    q.addBindValue(static_cast<qint64>(userId));
+    return Exec(q) && q.next() && q.value(0).toInt() != 0;
+}
+
+std::optional<DbError> Database::SetEmail(int64_t userId, const QString& email) {
+    const QString trimmed = email.trimmed();
+    const QString check = trimmed.toLower();
+    if (!check.contains('@') || !check.contains('.'))
+        return DbError::InvalidEmail;
+
+    QSqlQuery q(m_db);
+    q.prepare("SELECT COUNT(*) FROM account WHERE email_check=? AND user_id<>?");
+    q.addBindValue(check);
+    q.addBindValue(static_cast<qlonglong>(userId));
+    if (!Exec(q) || !q.next())
+        return DbError::Internal;
+    if (q.value(0).toInt() > 0)
+        return DbError::ExistingEmail;
+
+    QSqlQuery u(m_db);
+    u.prepare("UPDATE account SET email=?, email_check=?, email_verified=1 WHERE user_id=?");
+    u.addBindValue(trimmed);
+    u.addBindValue(check);
+    u.addBindValue(static_cast<qlonglong>(userId));
+    if (!Exec(u) || u.numRowsAffected() <= 0)
+        return DbError::Internal;
+    return std::nullopt;
+}
+
+bool Database::SetEmailVerified(int64_t userId, bool verified) {
+    QSqlQuery q(m_db);
+    q.prepare("UPDATE account SET email_verified=? WHERE user_id=?");
+    q.addBindValue(verified ? 1 : 0);
+    q.addBindValue(static_cast<qint64>(userId));
+    return Exec(q) && q.numRowsAffected() > 0;
 }
 
 bool Database::SetMatching2Access(int64_t userId, Matching2Access access) {

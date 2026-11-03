@@ -194,6 +194,9 @@ public:
 
     Matching2Access GetMatching2Access(int64_t userId);
     bool SetMatching2Access(int64_t userId, Matching2Access access);
+    bool IsEmailVerified(int64_t userId);
+    bool SetEmailVerified(int64_t userId, bool verified);
+    std::optional<DbError> SetEmail(int64_t userId, const QString& email);
 
     bool SetTitleName(const QString& comId, const QString& titleName);
     std::optional<QString> GetTitleName(const QString& comId);
@@ -253,22 +256,17 @@ public:
         int64_t score = 0;
         int64_t timestamp = 0;
     };
-    // Every score an account holds, newest first.
     QList<UserScoreRow> ListUserScores(int64_t userId);
-
-    // Removes exactly one posted score.
     bool DeleteScore(const QString& comId, uint32_t boardId, int64_t userId, int32_t characterId,
                      uint64_t& dataId);
 
     // Trophies
-    // One trophy a player has unlocked.
     struct TrophyRow {
         QString comId;
         QString titleName;
         int32_t trophyId = 0;
         int64_t earnedAt = 0;
     };
-    // A game somebody has earned trophies in, with how widely.
     struct TrophyGameRow {
         QString comId;
         QString titleName;
@@ -282,18 +280,12 @@ public:
         int earners = 0;
     };
 
-    // Records an unlock.
     bool RecordUserTrophy(int64_t userId, const QString& comId, int32_t trophyId, int64_t earnedAt);
     bool RecordUserTrophies(int64_t userId, const QString& comId,
                             const QList<QPair<int32_t, int64_t>>& trophies);
-
-    // Every trophy one account holds, ordered by game then trophy id.
     QList<TrophyRow> ListUserTrophies(int64_t userId);
-    // Trophies one account holds in one game.
     QList<TrophyRow> ListUserTrophiesForGame(int64_t userId, const QString& comId);
-    // Games with any trophy activity, most played first.
     QList<TrophyGameRow> ListTrophyGames();
-    // Earner counts per trophy for one game — the input to "earned by X%".
     QList<TrophyEarnerRow> ListTrophyEarners(const QString& comId);
 
     struct TrophySetShape {
@@ -306,14 +298,12 @@ public:
     TrophySetShape GetTrophySetShape(const QString& comId);
     int CountTrophyPlayers(const QString& comId);
 
-    // A player ranked by how many trophies they hold in one game.
     struct TrophyPlayerRow {
         int64_t userId = 0;
         QString npid;
         int trophies = 0;
         int64_t lastEarnedAt = 0;
     };
-    // Top trophy holders for a game, most trophies first.
     QList<TrophyPlayerRow> ListTopTrophyPlayers(const QString& comId, int limit);
 
     // One game in a player's trophy profile.
@@ -330,8 +320,33 @@ public:
         int unknownGrade = 0;
         int totalInGame = 0;
     };
-    // Per-game breakdown for one account, most trophies first.
     QList<TrophyProfileRow> ListPlayerTrophySummary(int64_t userId);
+    struct TrophyRankRow {
+        QString npid;
+        int trophies = 0;
+        int games = 0;
+        int bronze = 0;
+        int silver = 0;
+        int gold = 0;
+        int platinum = 0;
+        int unknownGrade = 0;
+        int points = 0;
+        int completed = 0; // games where every trophy of an imported set is held
+    };
+    QList<TrophyRankRow> ListTrophyRanking(int limit);
+
+    // One unlock in the recent-activity feed.
+    struct RecentTrophyRow {
+        QString npid;
+        QString comId;
+        QString titleName;
+        int trophyId = 0;
+        int64_t earnedAt = 0;
+        QString name;  // empty when the game has no imported configuration
+        QString grade; // B, S, G, P or empty
+        bool hidden = false;
+    };
+    QList<RecentTrophyRow> ListRecentTrophies(int limit);
 
     // Server-wide trophy totals.
     struct TrophyTotals {
@@ -352,9 +367,6 @@ public:
         int32_t groupId = 0;
         QString language; // which TROP_xx.XML it came from; empty for the master
     };
-
-    // A trophy group: the base game, or a DLC pack. Trophies carry a groupId
-    // that points here, so DLC can be shown as its own section.
     struct TrophyGroupRow {
         int32_t groupId = 0;
         QString name;

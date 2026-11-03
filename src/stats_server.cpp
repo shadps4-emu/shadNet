@@ -101,6 +101,20 @@ void StatsServer::RegisterRoutes() {
             CachedOrBuild(QStringLiteral("trophylist"), [this] { return BuildTrophyListJson(); }));
     });
 
+    // GET /<path>/trophies/ranking -> the top accounts by trophy points. Registered
+    // before /trophies/<comId> so "ranking" is not taken for a communication id.
+    m_http->route(base + "/trophies/ranking", [this](const QHttpServerRequest&) {
+        return jsonResponse(CachedOrBuild(QStringLiteral("trophyranking"),
+                                          [this] { return BuildTrophyRankingJson(); }));
+    });
+
+    // GET /<path>/trophies/recent -> the newest unlocks across the server. Registered
+    // before /trophies/<comId>, like "ranking".
+    m_http->route(base + "/trophies/recent", [this](const QHttpServerRequest&) {
+        return jsonResponse(CachedOrBuild(QStringLiteral("trophyrecent"),
+                                          [this] { return BuildTrophyRecentJson(); }));
+    });
+
     // GET /<path>/trophies/player/<npid> -> one player's trophy profile.
     m_http->route(base + "/trophies/player/<arg>",
                   [this](const QString& npid, const QHttpServerRequest&) {
@@ -467,12 +481,68 @@ QByteArray StatsServer::BuildTrophyPlayerJson(const QString& npid) const {
     return toJson(root);
 }
 
+QByteArray StatsServer::BuildTrophyRankingJson() const {
+    constexpr int RankingLimit = 500;
+
+    QJsonObject root;
+    Database db(QString{});
+    if (!db.Open(m_dbPath)) {
+        qWarning() << "StatsServer: cannot open DB for trophy ranking";
+        root.insert("error", QStringLiteral("db unavailable"));
+        return toJson(root);
+    }
+
+    QJsonArray players;
+    for (const auto& r : db.ListTrophyRanking(RankingLimit)) {
+        QJsonObject o;
+        o.insert("npid", r.npid);
+        o.insert("points", r.points);
+        o.insert("trophies", r.trophies);
+        o.insert("games", r.games);
+        o.insert("gamesCompleted", r.completed);
+        o.insert("grades", GradesJson(r.bronze, r.silver, r.gold, r.platinum));
+        o.insert("unknownGrade", r.unknownGrade);
+        players.append(o);
+    }
+    root.insert("limit", RankingLimit);
+    root.insert("players", players);
+    return toJson(root);
+}
+
+QByteArray StatsServer::BuildTrophyRecentJson() const {
+    constexpr int RecentLimit = 30;
+
+    QJsonObject root;
+    Database db(QString{});
+    if (!db.Open(m_dbPath)) {
+        qWarning() << "StatsServer: cannot open DB for recent trophies";
+        root.insert("error", QStringLiteral("db unavailable"));
+        return toJson(root);
+    }
+
+    QJsonArray unlocks;
+    for (const auto& r : db.ListRecentTrophies(RecentLimit)) {
+        QJsonObject o;
+        o.insert("npid", r.npid);
+        o.insert("commid", r.comId);
+        o.insert("game", r.titleName);
+        o.insert("trophyId", r.trophyId);
+        o.insert("earnedAt", static_cast<qint64>(r.earnedAt));
+        o.insert("grade", r.grade);
+        o.insert("hidden", r.hidden);
+        if (!r.hidden)
+            o.insert("name", r.name);
+        unlocks.append(o);
+    }
+    root.insert("unlocks", unlocks);
+    return toJson(root);
+}
+
 QByteArray StatsServer::BuildVersionJson() const {
     QJsonObject body;
     body.insert(QStringLiteral("version"), ShadNet::Version());
     body.insert(QStringLiteral("buildDate"), ShadNet::BuildDate());
     body.insert(QStringLiteral("buildTime"), ShadNet::BuildTime());
-    // Combined ISO 8601 form, for callers that would rather parse one field.
     body.insert(QStringLiteral("buildTimestamp"), ShadNet::BuildTimestamp());
     return toJson(body);
 }
