@@ -500,6 +500,16 @@ QByteArray StatsServer::BuildTrophyPlayerJson(const QString& npid) const {
     root.insert("points", TrophyPoints(bronze, silver, gold, platinum));
     root.insert("gamesCompleted", completed);
     root.insert("games", games);
+
+    QJsonArray monthly;
+    for (const auto& m : db.ListPlayerTrophyMonths(*userId)) {
+        QJsonObject o;
+        o.insert("month", m.month);
+        o.insert("trophies", m.trophies);
+        o.insert("points", m.points);
+        monthly.append(o);
+    }
+    root.insert("monthly", monthly);
     return toJson(root);
 }
 

@@ -318,6 +318,16 @@ public:
 
     QList<TrophyRankRow> ListTrophyRanking(int limit);
 
+    // Trophies one player earned in one calendar month (UTC), for the history chart.
+    struct TrophyMonthRow {
+        QString month; // "YYYY-MM"
+        int trophies = 0;
+        int points = 0;
+    };
+
+    // Oldest month first; months with no unlocks are simply absent.
+    QList<TrophyMonthRow> ListPlayerTrophyMonths(int64_t userId);
+
     // One unlock in the recent-activity feed.
     struct RecentTrophyRow {
         QString npid;

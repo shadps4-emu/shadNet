@@ -1694,6 +1694,30 @@ QList<Database::TrophyRankRow> Database::ListTrophyRanking(int limit) {
     return out;
 }
 
+QList<Database::TrophyMonthRow> Database::ListPlayerTrophyMonths(int64_t userId) {
+    QList<TrophyMonthRow> out;
+    QSqlQuery q(m_db);
+    q.prepare("SELECT strftime('%Y-%m', t.earned_at, 'unixepoch') AS ym, COUNT(*), "
+              "       SUM(CASE m.grade WHEN 'B' THEN 15 WHEN 'S' THEN 30 "
+              "                        WHEN 'G' THEN 90 WHEN 'P' THEN 180 ELSE 0 END) "
+              "FROM user_trophies t "
+              "LEFT JOIN trophy_meta m ON m.communication_id = t.communication_id "
+              "                       AND m.trophy_id = t.trophy_id "
+              "WHERE t.user_id = ? AND t.earned_at > 946684800 "
+              "GROUP BY ym ORDER BY ym");
+    q.addBindValue(static_cast<qlonglong>(userId));
+    if (!Exec(q))
+        return out;
+    while (q.next()) {
+        TrophyMonthRow r;
+        r.month = q.value(0).toString();
+        r.trophies = q.value(1).toInt();
+        r.points = q.value(2).toInt();
+        out.append(r);
+    }
+    return out;
+}
+
 QList<Database::RecentTrophyRow> Database::ListRecentTrophies(int limit) {
     QList<RecentTrophyRow> out;
     QSqlQuery q(m_db);
