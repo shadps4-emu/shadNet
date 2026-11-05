@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
 #include "client_session.h"
 #include "member_api.h"
+#include "proto_utils.h"
 #include "score_cache.h"
 #include "score_types.h"
 #include "shadnet.pb.h"
@@ -100,6 +101,53 @@ bool ValidNpid(const QString& npid) {
     return true;
 }
 
+const QString kWebApiFriendDataType = QStringLiteral("np:service:friendlist:friend");
+
+template <typename T>
+QByteArray NotifPayload(const T& msg) {
+    QByteArray buf;
+    appendProto(buf, msg);
+    return buf;
+}
+
+void NotifyUser(SharedState* shared, int64_t userId, NotificationType type,
+                const QByteArray& payload) {
+    std::function<void(QByteArray)> sender;
+    {
+        QReadLocker lk(&shared->clientsLock);
+        const auto it = shared->clients.constFind(userId);
+        if (it == shared->clients.constEnd())
+            return;
+        sender = it->send;
+    }
+    sender(ClientSession::BuildNotification(type, payload));
+}
+
+QList<QPair<QString, QString>> FriendExtd(const QString& friendNpid, int64_t friendAccountId,
+                                          const char* event) {
+    const QString ev = QString::fromLatin1(event);
+    QJsonObject trigger;
+    trigger.insert(QStringLiteral("friend"), friendNpid);
+    trigger.insert(QStringLiteral("event"), ev);
+    QJsonObject addl;
+    addl.insert(QStringLiteral("friendAccountId"), QString::number(friendAccountId));
+    addl.insert(QStringLiteral("event"), ev);
+    return {
+        {QStringLiteral("trigger"),
+         QString::fromUtf8(QJsonDocument(trigger).toJson(QJsonDocument::Compact))},
+        {QStringLiteral("additionalTrigger"),
+         QString::fromUtf8(QJsonDocument(addl).toJson(QJsonDocument::Compact))},
+    };
+}
+
+void PushFriendEvent(SharedState* shared, const QString& toNpid, int64_t toUserId,
+                     const QList<QPair<QString, QString>>& extd = {}) {
+    NotifyUser(shared, toUserId, NotificationType::WebApiPushEvent,
+               ClientSession::BuildWebApiPushPayload(QString(), 0, kWebApiFriendDataType,
+                                                     QByteArray(), QString(), toNpid, extd, 0,
+                                                     toUserId));
+}
+
 bool LooksLikeEmail(const QString& email) {
     const int at = email.indexOf(QLatin1Char('@'));
     return at > 0 && at < email.size() - 1 && !email.contains(QLatin1Char(' ')) &&
@@ -137,7 +185,7 @@ int PointsForGrade(const QString& grade) {
 bool MemberApiServer::CheckApiKey(const QHttpServerRequest& req) const {
     const QString configured = m_config ? m_config->GetMemberApiKey() : QString();
     if (configured.isEmpty())
-        return true; // no key configured, nothing to check
+        return true;
     return SecretsEqual(req.value("X-Member-Api-Key"), configured.toUtf8());
 }
 
@@ -533,16 +581,20 @@ void MemberApiServer::RegisterRoutes() {
                     o.insert(QStringLiteral("online"), online);
                     o.insert(QStringLiteral("avatarUrl"),
                              m_db->GetAvatarUrl(f.first).value_or(QString()));
-                    // What they are playing, only while they show as online.
                     o.insert(QStringLiteral("title"), online ? it->titleName : QString());
                     friends.append(o);
                 }
             }
 
-            const auto names = [](const QList<QPair<int64_t, QString>>& list) {
+            const auto names = [this](const QList<QPair<int64_t, QString>>& list) {
                 QJsonArray a;
-                for (const auto& p : list)
-                    a.append(p.second);
+                for (const auto& p : list) {
+                    QJsonObject o;
+                    o.insert(QStringLiteral("npid"), p.second);
+                    o.insert(QStringLiteral("avatarUrl"),
+                             m_db->GetAvatarUrl(p.first).value_or(QString()));
+                    a.append(o);
+                }
                 return a;
             };
 
@@ -835,7 +887,6 @@ void MemberApiServer::RegisterRoutes() {
                 return JsonError(QHttpServerResponse::StatusCode::InternalServerError, ERR_INTERNAL,
                                  QStringLiteral("The password could not be reset."));
             }
-
             m_db->SetEmailVerified(*userId, true);
             RevokeSessionsFor(*userId);
 
@@ -1021,6 +1072,182 @@ void MemberApiServer::RegisterRoutes() {
                                         << ", score blobs: " << blobsDeleted << ")";
             QJsonObject body;
             body.insert(QStringLiteral("deleted"), true);
+            return JsonOk(body);
+        });
+
+    // POST /member/v1/me/friends/add — { npid }
+    m_http->route(
+        "/member/v1/me/friends/add", QHttpServerRequest::Method::Post,
+        [this](const QHttpServerRequest& req) -> QHttpServerResponse {
+            if (!CheckApiKey(req))
+                return ApiKeyError(req);
+            const auto session = Authenticate(req);
+            if (!session)
+                return JsonError(QHttpServerResponse::StatusCode::Unauthorized, ERR_UNAUTHORIZED,
+                                 QStringLiteral("Sign in first."));
+
+            QString parseError;
+            const auto bodyOpt = ParseJsonBody(req, parseError);
+            if (!bodyOpt)
+                return JsonError(QHttpServerResponse::StatusCode::BadRequest, ERR_BAD_REQUEST,
+                                 parseError);
+
+            const QString friendNpid = bodyOpt->value(QStringLiteral("npid")).toString().trimmed();
+            const auto friendIdOpt =
+                ValidNpid(friendNpid) ? m_db->GetUserId(friendNpid) : std::nullopt;
+            if (!friendIdOpt) {
+                return JsonError(QHttpServerResponse::StatusCode::NotFound, 404,
+                                 QStringLiteral("No player has that NP ID."));
+            }
+            const int64_t friendId = *friendIdOpt;
+            if (friendId == session->userId) {
+                return JsonError(QHttpServerResponse::StatusCode::BadRequest, ERR_BAD_REQUEST,
+                                 QStringLiteral("You cannot add yourself."));
+            }
+
+            constexpr uint8_t F = static_cast<uint8_t>(FriendStatus::Friend);
+            constexpr uint8_t B = static_cast<uint8_t>(FriendStatus::Blocked);
+
+            const auto [res, rel] = m_db->GetRelStatus(session->userId, friendId);
+            if (res == Database::RelResult::Error) {
+                return JsonError(QHttpServerResponse::StatusCode::InternalServerError, ERR_INTERNAL,
+                                 QStringLiteral("The friend could not be added."));
+            }
+            if (res == Database::RelResult::Ok) {
+                if ((rel.caller & B) || (rel.other & B)) {
+                    return JsonError(QHttpServerResponse::StatusCode::Conflict, ERR_CONFLICT,
+                                     QStringLiteral("You cannot add this player."));
+                }
+                if (rel.caller & F) {
+                    return JsonError(QHttpServerResponse::StatusCode::Conflict, ERR_CONFLICT,
+                                     QStringLiteral("You are already friends, or a request is "
+                                                    "already waiting for a reply."));
+                }
+            }
+
+            const uint8_t newCaller = (res == Database::RelResult::Ok ? rel.caller : 0) | F;
+            const uint8_t newOther = (res == Database::RelResult::Ok ? rel.other : 0);
+            if (!m_db->SetRelStatus(session->userId, friendId, newCaller, newOther)) {
+                return JsonError(QHttpServerResponse::StatusCode::InternalServerError, ERR_INTERNAL,
+                                 QStringLiteral("The friend could not be added."));
+            }
+
+            const bool mutual = (newOther & F) != 0;
+            QJsonObject body;
+            if (mutual) {
+                bool targetOnline = false;
+                {
+                    QWriteLocker lk(&m_shared->clientsLock);
+                    auto selfIt = m_shared->clients.find(session->userId);
+                    if (selfIt != m_shared->clients.end())
+                        selfIt->friends.insert(friendId, friendNpid);
+                    auto friendIt = m_shared->clients.find(friendId);
+                    if (friendIt != m_shared->clients.end()) {
+                        friendIt->friends.insert(session->userId, session->npid);
+                        targetOnline = true;
+                    }
+                }
+                shadnet::NotifyFriendNew toSelf;
+                toSelf.set_npid(friendNpid.toStdString());
+                toSelf.set_online(targetOnline);
+                NotifyUser(m_shared, session->userId, NotificationType::FriendNew,
+                           NotifPayload(toSelf));
+                shadnet::NotifyFriendNew toFriend;
+                toFriend.set_npid(session->npid.toStdString());
+                toFriend.set_online(true);
+                NotifyUser(m_shared, friendId, NotificationType::FriendNew, NotifPayload(toFriend));
+                PushFriendEvent(m_shared, session->npid, session->userId,
+                                FriendExtd(friendNpid, friendId, "add"));
+                PushFriendEvent(m_shared, friendNpid, friendId,
+                                FriendExtd(session->npid, session->userId, "add"));
+                qInfo().nospace().noquote()
+                    << "MemberApi: friendship formed " << session->npid << " <-> " << friendNpid;
+                body.insert(QStringLiteral("status"), QStringLiteral("friends"));
+            } else {
+                shadnet::NotifyFriendQuery q;
+                q.set_from_npid(session->npid.toStdString());
+                NotifyUser(m_shared, friendId, NotificationType::FriendQuery, NotifPayload(q));
+                PushFriendEvent(m_shared, friendNpid, friendId);
+                qInfo().nospace().noquote()
+                    << "MemberApi: friend request " << session->npid << " -> " << friendNpid;
+                body.insert(QStringLiteral("status"), QStringLiteral("requested"));
+            }
+            return JsonOk(body);
+        });
+
+    // POST /member/v1/me/friends/remove — { npid }
+    m_http->route(
+        "/member/v1/me/friends/remove", QHttpServerRequest::Method::Post,
+        [this](const QHttpServerRequest& req) -> QHttpServerResponse {
+            if (!CheckApiKey(req))
+                return ApiKeyError(req);
+            const auto session = Authenticate(req);
+            if (!session)
+                return JsonError(QHttpServerResponse::StatusCode::Unauthorized, ERR_UNAUTHORIZED,
+                                 QStringLiteral("Sign in first."));
+
+            QString parseError;
+            const auto bodyOpt = ParseJsonBody(req, parseError);
+            if (!bodyOpt)
+                return JsonError(QHttpServerResponse::StatusCode::BadRequest, ERR_BAD_REQUEST,
+                                 parseError);
+
+            const QString friendNpid = bodyOpt->value(QStringLiteral("npid")).toString().trimmed();
+            const auto friendIdOpt =
+                ValidNpid(friendNpid) ? m_db->GetUserId(friendNpid) : std::nullopt;
+            const QString notFound =
+                QStringLiteral("There is no friend or request with that NP ID.");
+            if (!friendIdOpt)
+                return JsonError(QHttpServerResponse::StatusCode::NotFound, 404, notFound);
+            const int64_t friendId = *friendIdOpt;
+            if (friendId == session->userId) {
+                return JsonError(QHttpServerResponse::StatusCode::BadRequest, ERR_BAD_REQUEST,
+                                 QStringLiteral("That is you."));
+            }
+
+            constexpr uint8_t F = static_cast<uint8_t>(FriendStatus::Friend);
+
+            const auto [res, rel] = m_db->GetRelStatus(session->userId, friendId);
+            if (res != Database::RelResult::Ok || (!(rel.caller & F) && !(rel.other & F)))
+                return JsonError(QHttpServerResponse::StatusCode::NotFound, 404, notFound);
+
+            const uint8_t newCaller = rel.caller & static_cast<uint8_t>(~F);
+            const uint8_t newOther = rel.other & static_cast<uint8_t>(~F);
+            const bool ok =
+                (newCaller == 0 && newOther == 0)
+                    ? m_db->DeleteRel(session->userId, friendId)
+                    : m_db->SetRelStatus(session->userId, friendId, newCaller, newOther);
+            if (!ok) {
+                return JsonError(QHttpServerResponse::StatusCode::InternalServerError, ERR_INTERNAL,
+                                 QStringLiteral("The friend could not be removed."));
+            }
+
+            {
+                QWriteLocker lk(&m_shared->clientsLock);
+                auto selfIt = m_shared->clients.find(session->userId);
+                if (selfIt != m_shared->clients.end())
+                    selfIt->friends.remove(friendId);
+                auto friendIt = m_shared->clients.find(friendId);
+                if (friendIt != m_shared->clients.end())
+                    friendIt->friends.remove(session->userId);
+            }
+
+            shadnet::NotifyFriendLost toSelf;
+            toSelf.set_npid(friendNpid.toStdString());
+            NotifyUser(m_shared, session->userId, NotificationType::FriendLost,
+                       NotifPayload(toSelf));
+            shadnet::NotifyFriendLost toFriend;
+            toFriend.set_npid(session->npid.toStdString());
+            NotifyUser(m_shared, friendId, NotificationType::FriendLost, NotifPayload(toFriend));
+            PushFriendEvent(m_shared, session->npid, session->userId,
+                            FriendExtd(friendNpid, friendId, "remove"));
+            PushFriendEvent(m_shared, friendNpid, friendId,
+                            FriendExtd(session->npid, session->userId, "remove"));
+
+            qInfo().nospace().noquote()
+                << "MemberApi: friend removed " << session->npid << " x " << friendNpid;
+            QJsonObject body;
+            body.insert(QStringLiteral("removed"), true);
             return JsonOk(body);
         });
 }
