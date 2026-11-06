@@ -99,6 +99,10 @@ set(SOURCES
     src/webapi/webapi_routes_presence.cpp
     src/webapi/webapi_routes_session.h
     src/webapi/webapi_routes_session.cpp
+    src/webapi/webapi_routes_playersession.h
+    src/webapi/webapi_routes_playersession.cpp
+    src/webapi/webapi_routes_commerce.h
+    src/webapi/webapi_routes_commerce.cpp
     src/webapi/webapi_routes_identity.h
     src/webapi/webapi_routes_identity.cpp
     src/webapi/webapi_routes_authcode.h

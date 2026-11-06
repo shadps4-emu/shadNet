@@ -190,76 +190,78 @@ QJsonObject BuildProfile(Database& db, SharedState& shared, qint64 userId, const
 
 void RegisterProfileRoutes(QHttpServer& http, Database& db, SharedState& shared) {
     // GET /v1/profiles?onlineId=<a[,b,...]>&fields=...
-    http.route(
-        "/v1/profiles", [&db, &shared](const QHttpServerRequest& req) -> QHttpServerResponse {
-            static const QSet<QString> kKnown = {
-                QStringLiteral("accountIds"),
-                QStringLiteral("onlineId"),
-                QStringLiteral("fields"),
-                QStringLiteral("avatarSize"),
-                QStringLiteral("avatarSizes"),
-                QStringLiteral("avatarUrlScheme"),
-                QStringLiteral("profilePictureSizes"),
-                QStringLiteral("aboutMeType"),
-                QStringLiteral("languagesUsedLanguageSet"),
-                QStringLiteral("npLanguages"),
-            };
-            LogUnsupportedQueryParams(req, kKnown);
+    const auto profilesHandler = [&db,
+                                  &shared](const QHttpServerRequest& req) -> QHttpServerResponse {
+        static const QSet<QString> kKnown = {
+            QStringLiteral("accountIds"),
+            QStringLiteral("onlineId"),
+            QStringLiteral("fields"),
+            QStringLiteral("avatarSize"),
+            QStringLiteral("avatarSizes"),
+            QStringLiteral("avatarUrlScheme"),
+            QStringLiteral("profilePictureSizes"),
+            QStringLiteral("aboutMeType"),
+            QStringLiteral("languagesUsedLanguageSet"),
+            QStringLiteral("npLanguages"),
+        };
+        LogUnsupportedQueryParams(req, kKnown);
 
-            auto auth = WebApiAuth::Authenticate(req, db);
-            if (!auth.userId.has_value()) {
-                return std::move(auth.errorResponse);
-            }
+        auto auth = WebApiAuth::Authenticate(req, db);
+        if (!auth.userId.has_value()) {
+            return std::move(auth.errorResponse);
+        }
 
-            const QUrlQuery query(req.url());
-            // Accept either accountIds (numeric) or onlineId (handles, resolved to account IDs).
-            // shadPS4's NpWebApi layer looks profiles up by onlineId.
-            QStringList accountIds;
-            if (query.hasQueryItem(QStringLiteral("accountIds"))) {
-                accountIds = query.queryItemValue(QStringLiteral("accountIds"))
-                                 .split(QLatin1Char(','), Qt::SkipEmptyParts);
-                if (accountIds.isEmpty() || accountIds.size() > 50) {
-                    return JsonError(QHttpServerResponse::StatusCode::BadRequest,
-                                     UP_INVALID_QUERY_PARAM,
-                                     QStringLiteral("Invalid parameter in query string (parameter: "
-                                                    "'accountIds')"));
-                }
-            } else if (query.hasQueryItem(QStringLiteral("onlineId"))) {
-                const QStringList onlineIds = query.queryItemValue(QStringLiteral("onlineId"))
-                                                  .split(QLatin1Char(','), Qt::SkipEmptyParts);
-                if (onlineIds.isEmpty() || onlineIds.size() > 50) {
-                    return JsonError(QHttpServerResponse::StatusCode::BadRequest,
-                                     UP_INVALID_QUERY_PARAM,
-                                     QStringLiteral("Invalid parameter in query string (parameter: "
-                                                    "'onlineId')"));
-                }
-                // Resolve each handle to an account ID; unknown handles are omitted from the
-                // result (matching batch-lookup semantics).
-                for (const QString& oid : onlineIds) {
-                    const auto uid = db.GetUserId(oid);
-                    if (uid)
-                        accountIds.append(QString::number(*uid));
-                }
-            } else {
+        const QUrlQuery query(req.url());
+        // Accept either accountIds (numeric) or onlineId (handles, resolved to account IDs).
+        // shadPS4's NpWebApi layer looks profiles up by onlineId.
+        QStringList accountIds;
+        if (query.hasQueryItem(QStringLiteral("accountIds"))) {
+            accountIds = query.queryItemValue(QStringLiteral("accountIds"))
+                             .split(QLatin1Char(','), Qt::SkipEmptyParts);
+            if (accountIds.isEmpty() || accountIds.size() > 50) {
                 return JsonError(QHttpServerResponse::StatusCode::BadRequest,
-                                 UP_QUERY_PARAM_REQUIRED,
-                                 QStringLiteral("'accountIds' or 'onlineId' parameter required in "
-                                                "query string"));
+                                 UP_INVALID_QUERY_PARAM,
+                                 QStringLiteral("Invalid parameter in query string (parameter: "
+                                                "'accountIds')"));
             }
-
-            QString fieldsStr = query.queryItemValue(QStringLiteral("fields"));
-            if (fieldsStr.isEmpty()) {
-                fieldsStr = QStringLiteral("@default");
+        } else if (query.hasQueryItem(QStringLiteral("onlineId"))) {
+            const QStringList onlineIds = query.queryItemValue(QStringLiteral("onlineId"))
+                                              .split(QLatin1Char(','), Qt::SkipEmptyParts);
+            if (onlineIds.isEmpty() || onlineIds.size() > 50) {
+                return JsonError(QHttpServerResponse::StatusCode::BadRequest,
+                                 UP_INVALID_QUERY_PARAM,
+                                 QStringLiteral("Invalid parameter in query string (parameter: "
+                                                "'onlineId')"));
             }
-            const QStringList fields = fieldsStr.split(QLatin1Char(','), Qt::SkipEmptyParts);
-            const bool isDefault = fields.contains(QStringLiteral("@default"));
+            // Resolve each handle to an account ID; unknown handles are omitted from the
+            // result (matching batch-lookup semantics).
+            for (const QString& oid : onlineIds) {
+                const auto uid = db.GetUserId(oid);
+                if (uid)
+                    accountIds.append(QString::number(*uid));
+            }
+        } else {
+            return JsonError(QHttpServerResponse::StatusCode::BadRequest, UP_QUERY_PARAM_REQUIRED,
+                             QStringLiteral("'accountIds' or 'onlineId' parameter required in "
+                                            "query string"));
+        }
 
-            const QJsonObject body =
-                BuildProfiles(db, shared, accountIds, fields, isDefault, *auth.userId);
-            qInfo() << "WebAPI: profiles lookup" << accountIds.size() << "account(s) -> returned"
-                    << body.value(QStringLiteral("size")).toInt();
-            return JsonOk(body);
-        });
+        QString fieldsStr = query.queryItemValue(QStringLiteral("fields"));
+        if (fieldsStr.isEmpty()) {
+            fieldsStr = QStringLiteral("@default");
+        }
+        const QStringList fields = fieldsStr.split(QLatin1Char(','), Qt::SkipEmptyParts);
+        const bool isDefault = fields.contains(QStringLiteral("@default"));
+
+        const QJsonObject body =
+            BuildProfiles(db, shared, accountIds, fields, isDefault, *auth.userId);
+        qInfo() << "WebAPI: profiles lookup" << accountIds.size() << "account(s) -> returned"
+                << body.value(QStringLiteral("size")).toInt();
+        return JsonOk(body);
+    };
+    http.route("/v1/profiles", profilesHandler);
+    // NpWebApi2's userProfile group addresses the same lookup as /v1/users/profiles.
+    http.route("/v1/users/profiles", profilesHandler);
 
     // GET /v1/users/<arg>/profile -- single user's profile.
     http.route("/v1/users/<arg>/profile",
