@@ -736,6 +736,26 @@ void RegisterUserRoutes(QHttpServer& http, Database& db, SharedState& shared) {
                     << "->" << verifiedUsers.size() << "verified accounts";
             return JsonOk(body);
         });
+
+    // GET /v3/users/<arg>/communication/restriction/status
+    http.route("/v3/users/<arg>/communication/restriction/status",
+               [&db](const QString& userKey, const QHttpServerRequest& req) -> QHttpServerResponse {
+                   auto auth = WebApiAuth::Authenticate(req, db);
+                   if (!auth.userId.has_value()) {
+                       return std::move(auth.errorResponse);
+                   }
+                   if (!IsSelf(userKey, auth)) {
+                       return JsonError(QHttpServerResponse::StatusCode::Forbidden,
+                                        UP_ACCESS_DENIED_OWNERSHIP,
+                                        QStringLiteral("Access denied by resource ownership"));
+                   }
+
+                   QJsonObject body;
+                   body.insert(QStringLiteral("restricted"), false);
+                   qInfo() << "WebAPI: communication restriction status for" << userKey
+                           << "-> restricted: false";
+                   return JsonOk(body);
+               });
 }
 
 } // namespace WebApiRoutes
