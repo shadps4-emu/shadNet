@@ -34,6 +34,7 @@ private:
 
     void RegisterRoutes();
     bool CheckApiKey(const QHttpServerRequest& req) const;
+    QString ClientKey(const QHttpServerRequest& req) const;
     QHttpServerResponse ApiKeyError(const QHttpServerRequest& req) const;
     std::optional<MemberSession> Authenticate(const QHttpServerRequest& req);
     QString IssueToken(int64_t userId, const QString& npid);

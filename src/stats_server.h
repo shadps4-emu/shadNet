@@ -30,9 +30,9 @@ public:
 
 private:
     void RegisterRoutes();
-
-    QByteArray CachedOrBuild(const QString& key, const std::function<QByteArray()>& build);
-
+    QByteArray CachedOrBuild(const QString& key, const std::function<QByteArray()>& build,
+                             int lifeSeconds = -1);
+    int LiveCacheLife() const;
     QByteArray BuildUsageJson() const;
     QByteArray BuildRegisteredJson() const;
     QByteArray BuildComIdScoreJson(const QString& comId) const;

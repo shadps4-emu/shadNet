@@ -427,6 +427,46 @@ bool Database::Migrate() {
         Exec(ins17);
     }
 
+    // Migration 18: trophy unlock times in a single unit, Unix seconds (see trophy_time.h).
+    // Rows saved with the server's own clock (a client that sent no time) hold microseconds
+    // since the year 0001, which sorts above every real time. Same ranges as TrophyUnixSeconds,
+    // a value in none of them is left alone, and the queries that sort or chart by time skip
+    // anything outside 2000..2100.
+    if (!HasMigration(18)) {
+        QSqlQuery fix(m_db);
+        fix.prepare(R"SQL(
+            UPDATE user_trophies SET earned_at = CAST(CASE
+                WHEN earned_at >= 100000000000 AND earned_at < 100000000000000
+                    THEN earned_at / 1000
+                WHEN earned_at >= 100000000000000 AND earned_at < 10000000000000000
+                    THEN earned_at / 1000000
+                WHEN earned_at >= 62135596800000000 AND earned_at < 70000000000000000
+                    THEN earned_at / 1000000 - 62135596800
+                WHEN earned_at >= 1000000000000000000 AND earned_at < 9223372036854775807
+                    THEN earned_at / 1000000000
+                ELSE earned_at END AS INTEGER)
+            WHERE (earned_at >= 100000000000 AND earned_at < 10000000000000000)
+               OR (earned_at >= 62135596800000000 AND earned_at < 70000000000000000)
+               OR (earned_at >= 1000000000000000000 AND earned_at < 9223372036854775807)
+        )SQL");
+        Exec(fix);
+        const int fixed = fix.numRowsAffected();
+
+        QSqlQuery left(m_db);
+        left.prepare("SELECT COUNT(*) FROM user_trophies "
+                     "WHERE earned_at < 946684800 OR earned_at > 4102444800");
+        int unreadable = 0;
+        if (Exec(left) && left.next())
+            unreadable = left.value(0).toInt();
+        qInfo().nospace() << "Migration 18: converted " << fixed
+                          << " trophy times from another unit to Unix seconds; " << unreadable
+                          << " have no readable time and are left out of recent activity";
+
+        QSqlQuery ins18(m_db);
+        ins18.prepare("INSERT OR IGNORE INTO migration VALUES(18,'trophy times in unix seconds')");
+        Exec(ins18);
+    }
+
     qInfo() << "Database migrations complete";
 
     RunMaintenance();
@@ -1703,7 +1743,7 @@ QList<Database::TrophyMonthRow> Database::ListPlayerTrophyMonths(int64_t userId)
               "FROM user_trophies t "
               "LEFT JOIN trophy_meta m ON m.communication_id = t.communication_id "
               "                       AND m.trophy_id = t.trophy_id "
-              "WHERE t.user_id = ? AND t.earned_at > 946684800 "
+              "WHERE t.user_id = ? AND t.earned_at BETWEEN 946684800 AND 4102444800 "
               "GROUP BY ym ORDER BY ym");
     q.addBindValue(static_cast<qlonglong>(userId));
     if (!Exec(q))
@@ -1729,7 +1769,7 @@ QList<Database::RecentTrophyRow> Database::ListRecentTrophies(int limit) {
               "LEFT JOIN title_name tn ON tn.communication_id = t.communication_id "
               "LEFT JOIN trophy_meta m ON m.communication_id = t.communication_id "
               "                       AND m.trophy_id = t.trophy_id "
-              "WHERE a.banned = 0 "
+              "WHERE a.banned = 0 AND t.earned_at BETWEEN 946684800 AND 4102444800 "
               "ORDER BY t.earned_at DESC "
               "LIMIT ?");
     q.addBindValue(limit);
@@ -1914,6 +1954,8 @@ bool Database::DeleteUserTrophy(int64_t userId, const QString& comId, int32_t tr
         return false;
     return q.numRowsAffected() > 0;
 }
+
+// Friendship DB methods
 
 static std::tuple<int64_t, int64_t, bool> orderedIds(int64_t a, int64_t b) {
     if (a < b)

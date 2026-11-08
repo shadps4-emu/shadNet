@@ -6,6 +6,7 @@
 #include "client_session.h"
 #include "proto_utils.h"
 #include "shadnet.pb.h"
+#include "trophy_time.h"
 
 QString comIdStr(const QByteArray& id) {
     QByteArray trimmed = id;
@@ -41,8 +42,7 @@ ErrorType ClientSession::CmdUnlockTrophy(StreamExtractor& data) {
                    << m_info.npid;
         return ErrorType::InvalidInput;
     }
-    const int64_t earnedAt =
-        req.timestamp() > 0 ? static_cast<int64_t>(req.timestamp()) : ShadNetTimestamp();
+    const int64_t earnedAt = TrophyUnixSeconds(req.timestamp(), QDateTime::currentSecsSinceEpoch());
 
     if (!m_db->RecordUserTrophy(m_info.userId, comId, req.trophyid(), earnedAt)) {
         qCritical() << "UnlockTrophy: DB error for" << m_info.npid;
@@ -82,8 +82,8 @@ ErrorType ClientSession::CmdSyncTrophies(StreamExtractor& data, QByteArray& repl
                        << m_info.npid;
             return ErrorType::InvalidInput;
         }
-        uploaded.append({t.trophyid(), t.timestamp() > 0 ? static_cast<int64_t>(t.timestamp())
-                                                         : ShadNetTimestamp()});
+        uploaded.append(
+            {t.trophyid(), TrophyUnixSeconds(t.timestamp(), QDateTime::currentSecsSinceEpoch())});
     }
     if (!m_db->RecordUserTrophies(m_info.userId, comId, uploaded)) {
         qCritical() << "SyncTrophies: DB error storing" << uploaded.size() << "for" << m_info.npid;

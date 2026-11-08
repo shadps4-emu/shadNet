@@ -1,5 +1,6 @@
 // SPDX-FileCopyrightText: Copyright 2026 shadNet Project
 // SPDX-License-Identifier: GPL-2.0-or-later
+#include "client_key.h"
 #include "client_session.h"
 #include "member_api.h"
 #include "proto_utils.h"
@@ -182,10 +183,18 @@ int PointsForGrade(const QString& grade) {
     return 0;
 }
 
+QString MemberApiServer::ClientKey(const QHttpServerRequest& req) const {
+    const QString configured = m_config ? m_config->GetMemberApiKey() : QString();
+    const bool trusted =
+        !configured.isEmpty() && SecretsEqual(req.value("X-Member-Api-Key"), configured.toUtf8());
+    return ResolveClientKey(req.remoteAddress().toString(),
+                            QString::fromUtf8(req.value("X-Client-IP")), trusted);
+}
+
 bool MemberApiServer::CheckApiKey(const QHttpServerRequest& req) const {
     const QString configured = m_config ? m_config->GetMemberApiKey() : QString();
     if (configured.isEmpty())
-        return true;
+        return true; // no key configured, nothing to check
     return SecretsEqual(req.value("X-Member-Api-Key"), configured.toUtf8());
 }
 
@@ -359,7 +368,6 @@ void MemberApiServer::RegisterRoutes() {
                       body.insert(QStringLiteral("service"), QStringLiteral("shadnet-member"));
                       body.insert(QStringLiteral("registrationOpen"),
                                   m_config && m_config->IsRegistrationAllowed(QString()));
-                      // Whether a key is needed, never the key itself.
                       body.insert(QStringLiteral("registrationKeyRequired"),
                                   m_config && m_config->IsRegistrationKeyRequired());
                       return JsonOk(body);
@@ -372,7 +380,7 @@ void MemberApiServer::RegisterRoutes() {
             if (!CheckApiKey(req))
                 return ApiKeyError(req);
 
-            const QString peer = PeerOf(req);
+            const QString peer = ClientKey(req);
             int retryAfter = 0;
             if (IsThrottled(peer, retryAfter)) {
                 return JsonError(
@@ -466,7 +474,7 @@ void MemberApiServer::RegisterRoutes() {
             if (!CheckApiKey(req))
                 return ApiKeyError(req);
 
-            const QString peer = PeerOf(req);
+            const QString peer = ClientKey(req);
             int retryAfter = 0;
             if (IsThrottled(peer, retryAfter)) {
                 return JsonError(
@@ -820,7 +828,7 @@ void MemberApiServer::RegisterRoutes() {
             }
 
             if (!m_db->CheckUser(session->npid, current, QString(), false)) {
-                RegisterFailure(PeerOf(req));
+                RegisterFailure(ClientKey(req));
                 return JsonError(QHttpServerResponse::StatusCode::Unauthorized, ERR_UNAUTHORIZED,
                                  QStringLiteral("That is not your current password."));
             }
@@ -849,7 +857,7 @@ void MemberApiServer::RegisterRoutes() {
                 return ApiKeyError(req);
 
             int retryAfter = 0;
-            if (IsThrottled(PeerOf(req), retryAfter)) {
+            if (IsThrottled(ClientKey(req), retryAfter)) {
                 return JsonError(
                     QHttpServerResponse::StatusCode::TooManyRequests, ERR_TOO_MANY,
                     QStringLiteral("Too many attempts. Try again in %1 seconds.").arg(retryAfter));
@@ -945,7 +953,7 @@ void MemberApiServer::RegisterRoutes() {
                 return JsonError(QHttpServerResponse::StatusCode::Unauthorized, ERR_UNAUTHORIZED,
                                  QStringLiteral("Sign in first."));
 
-            const QString peer = PeerOf(req);
+            const QString peer = ClientKey(req);
             int retryAfter = 0;
             if (IsThrottled(peer, retryAfter)) {
                 return JsonError(
@@ -1033,7 +1041,7 @@ void MemberApiServer::RegisterRoutes() {
                 return JsonError(QHttpServerResponse::StatusCode::Unauthorized, ERR_UNAUTHORIZED,
                                  QStringLiteral("Sign in first."));
 
-            const QString peer = PeerOf(req);
+            const QString peer = ClientKey(req);
             int retryAfter = 0;
             if (IsThrottled(peer, retryAfter)) {
                 return JsonError(

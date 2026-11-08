@@ -122,8 +122,9 @@ void StatsServer::RegisterRoutes() {
     // GET /<path>/trophies/recent -> the newest unlocks across the server. Registered
     // before /trophies/<comId>, like "ranking".
     m_http->route(base + "/trophies/recent", [this](const QHttpServerRequest&) {
-        return jsonResponse(CachedOrBuild(QStringLiteral("trophyrecent"),
-                                          [this] { return BuildTrophyRecentJson(); }));
+        return jsonResponse(CachedOrBuild(
+            QStringLiteral("trophyrecent"), [this] { return BuildTrophyRecentJson(); },
+            LiveCacheLife()));
     });
 
     // GET /<path>/trophies/player/<npid> -> one player's trophy profile.
@@ -151,8 +152,8 @@ void StatsServer::RegisterRoutes() {
 
     // GET /<path>/usage
     m_http->route(base + "/usage", [this](const QHttpServerRequest&) {
-        return jsonResponse(
-            CachedOrBuild(QStringLiteral("usage"), [this] { return BuildUsageJson(); }));
+        return jsonResponse(CachedOrBuild(
+            QStringLiteral("usage"), [this] { return BuildUsageJson(); }, LiveCacheLife()));
     });
 
     // GET /<path>/registered  -> total registered accounts in the DB
@@ -200,8 +201,13 @@ void StatsServer::RegisterRoutes() {
         });
 }
 
-QByteArray StatsServer::CachedOrBuild(const QString& key,
-                                      const std::function<QByteArray()>& build) {
+int StatsServer::LiveCacheLife() const {
+    constexpr int LiveCacheSeconds = 10;
+    return m_cacheLife < LiveCacheSeconds ? m_cacheLife : LiveCacheSeconds;
+}
+
+QByteArray StatsServer::CachedOrBuild(const QString& key, const std::function<QByteArray()>& build,
+                                      int lifeSeconds) {
     const QDateTime now = QDateTime::currentDateTimeUtc();
     {
         QMutexLocker lk(&m_cacheMutex);
@@ -213,7 +219,7 @@ QByteArray StatsServer::CachedOrBuild(const QString& key,
     QByteArray json = build();
     {
         QMutexLocker lk(&m_cacheMutex);
-        m_cache[key] = CacheEntry{json, now.addSecs(m_cacheLife)};
+        m_cache[key] = CacheEntry{json, now.addSecs(lifeSeconds < 0 ? m_cacheLife : lifeSeconds)};
     }
     return json;
 }
