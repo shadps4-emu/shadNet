@@ -1394,11 +1394,12 @@ QHttpServerResponse HandleSessionInvite(Database& db, SharedState& shared, const
     const QString message = obj.value(QStringLiteral("message")).toString();
 
     // 'to' lists target recipients: each entry is either a numeric account ID (== userId in
-    // shadNet) or an online ID (npid). Resolve each to a (userId, npid) pair before taking the
-    // lock; entries that resolve to no known user are skipped.
+    // shadNet), sent as a JSON number or a numeric string, or an online ID (npid). Resolve each
+    // to a (userId, npid) pair before taking the lock,entries that resolve to no known user are
+    // skipped.
     QList<QPair<int64_t, QString>> recipients;
     for (const auto& v : obj.value(QStringLiteral("to")).toArray()) {
-        const QString entry = v.toString();
+        const QString entry = v.isDouble() ? QString::number(v.toInteger()) : v.toString();
         bool numeric = false;
         const int64_t asId = entry.toLongLong(&numeric);
         int64_t uid = 0;

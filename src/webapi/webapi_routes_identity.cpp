@@ -10,7 +10,10 @@
 #include <QHttpServer>
 #include <QHttpServerRequest>
 #include <QHttpServerResponse>
+#include <QJsonArray>
+#include <QJsonDocument>
 #include <QJsonObject>
+#include <QJsonValue>
 #include <QRegularExpression>
 #include <QSet>
 #include <QString>
@@ -25,6 +28,9 @@
 namespace WebApiRoutes {
 
 constexpr quint32 WEBAPI_RESOURCE_NOT_FOUND = 2113549; // target resource does not exist
+constexpr quint32 WEBAPI_INVALID_BODY = 2113920;       // request body value invalid
+constexpr quint32 WEBAPI_INVALID_NUM_ELEMS = 2113923;  // array element count invalid
+constexpr qsizetype kMaxBatchIds = 100;                // ids accepted per batch mapping call
 
 bool IsValidOnlineId(const QString& onlineId) {
     static const QRegularExpression re(
@@ -56,7 +62,63 @@ std::optional<QDateTime> ParseAsOf(const QString& raw) {
     return dt.toUTC();
 }
 
+QHttpServerResponse HandleBatchIdMap(Database& db, const QHttpServerRequest& req,
+                                     bool fromOnlineId) {
+    auto auth = WebApiAuth::Authenticate(req, db);
+    if (!auth.userId.has_value()) {
+        return std::move(auth.errorResponse);
+    }
+    QJsonParseError perr{};
+    const QJsonDocument doc = QJsonDocument::fromJson(req.body(), &perr);
+    if (perr.error != QJsonParseError::NoError || !doc.isArray()) {
+        return JsonError(QHttpServerResponse::StatusCode::BadRequest, WEBAPI_INVALID_BODY,
+                         QStringLiteral("Request body must be a JSON array of ids"));
+    }
+    const QJsonArray ids = doc.array();
+    if (ids.isEmpty() || ids.size() > kMaxBatchIds) {
+        return JsonError(QHttpServerResponse::StatusCode::BadRequest, WEBAPI_INVALID_NUM_ELEMS,
+                         QStringLiteral("Request body must list 1-%1 ids").arg(kMaxBatchIds));
+    }
+
+    QJsonArray out;
+    for (const QJsonValue& v : ids) {
+        const QString entry = v.isDouble() ? QString::number(v.toInteger()) : v.toString();
+        std::optional<int64_t> userId;
+        if (fromOnlineId) {
+            if (IsValidOnlineId(entry))
+                userId = db.GetUserId(entry);
+        } else {
+            bool numeric = false;
+            const qlonglong asId = entry.toLongLong(&numeric);
+            if (numeric && asId != 0 && db.GetUsername(asId).has_value())
+                userId = asId;
+        }
+        if (!userId.has_value())
+            continue;
+        const auto onlineId = db.GetUsername(*userId);
+        if (!onlineId.has_value())
+            continue;
+        QJsonObject o;
+        o.insert(QStringLiteral("accountId"), QString::number(*userId));
+        o.insert(QStringLiteral("onlineId"), *onlineId);
+        out.append(o);
+    }
+    qInfo() << "WebAPI:" << (fromOnlineId ? "onlineId2accountId" : "accountId2onlineId") << "batch"
+            << ids.size() << "->" << out.size() << "mapped";
+    return QHttpServerResponse{"application/json",
+                               QJsonDocument(out).toJson(QJsonDocument::Compact),
+                               QHttpServerResponse::StatusCode::Ok};
+}
+
 void RegisterIdentityRoutes(QHttpServer& http, Database& db) {
+    // POST /v2/accounts/map/onlineId2accountId -- batch online ID -> account ID.
+    http.route("/v2/accounts/map/onlineId2accountId", QHttpServerRequest::Method::Post,
+               [&db](const QHttpServerRequest& req) { return HandleBatchIdMap(db, req, true); });
+
+    // POST /v2/accounts/map/accountId2onlineId -- batch account ID -> online ID.
+    http.route("/v2/accounts/map/accountId2onlineId", QHttpServerRequest::Method::Post,
+               [&db](const QHttpServerRequest& req) { return HandleBatchIdMap(db, req, false); });
+
     // GET /v2/accounts/map/onlineId2accountId/<online_id>[?asOf=<RFC 3339 timestamp>]
     http.route(
         "/v2/accounts/map/onlineId2accountId/<arg>",
