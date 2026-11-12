@@ -256,7 +256,7 @@ void RegisterEntitlementRoutes(QHttpServer& http, Database& db, SharedState& sha
                 return InvalidParameter(QStringLiteral("service_label"));
 
             QJsonParseError err{};
-            const QJsonDocument doc = QJsonDocument::fromJson(req.body(), &err);
+            const QJsonDocument doc = ParseJsonBody(req.body(), &err);
             if (err.error != QJsonParseError::NoError || !doc.isObject())
                 return Error(QHttpServerResponse::StatusCode::BadRequest, ENT_INVALID_JSON,
                              QStringLiteral("Invalid JSON"));

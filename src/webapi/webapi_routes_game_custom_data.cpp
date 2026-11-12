@@ -305,7 +305,7 @@ QHttpServerResponse HandleSend(Database& db, SharedState& shared, const QHttpSer
         return BodyParamRequired(QStringLiteral("message"));
 
     QJsonParseError perr{};
-    const QJsonDocument doc = QJsonDocument::fromJson(messagePart, &perr);
+    const QJsonDocument doc = ParseJsonBody(messagePart, &perr);
     if (perr.error != QJsonParseError::NoError || !doc.isObject())
         return Error(Status::BadRequest, GCD_INVALID_BODY, QStringLiteral("Invalid body"));
     const QJsonObject root = doc.object();
@@ -686,7 +686,7 @@ void RegisterGameCustomDataRoutes(QHttpServer& http, Database& db, SharedState& 
                              QStringLiteral("Invalid parameter in URL (parameter: 'itemId')"));
 
             QJsonParseError perr{};
-            const QJsonDocument doc = QJsonDocument::fromJson(req.body(), &perr);
+            const QJsonDocument doc = ParseJsonBody(req.body(), &perr);
             if (perr.error != QJsonParseError::NoError || !doc.isObject())
                 return Error(Status::BadRequest, GCD_INVALID_BODY, QStringLiteral("Invalid body"));
             const QJsonValue flag = doc.object().value(QStringLiteral("dataUsedFlag"));

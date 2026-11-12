@@ -53,7 +53,7 @@ QHttpServerResponse HandlePresenceWrite(Database& db, SharedState& shared, const
     // for an accept-and-acknowledge write.
     const QByteArray body = req.body();
     QJsonParseError perr{};
-    const QJsonDocument doc = QJsonDocument::fromJson(body, &perr);
+    const QJsonDocument doc = ParseJsonBody(body, &perr);
     const QJsonObject obj =
         (perr.error == QJsonParseError::NoError && doc.isObject()) ? doc.object() : QJsonObject{};
     if (!obj.isEmpty()) {
@@ -61,7 +61,7 @@ QHttpServerResponse HandlePresenceWrite(Database& db, SharedState& shared, const
                 << QString::fromUtf8(QJsonDocument(obj).toJson(QJsonDocument::Compact));
     } else {
         qInfo() << "WebAPI:" << leaf << "for" << auth.npid << "(" << body.size()
-                << "bytes, unparsed)";
+                << "bytes, unparsed:" << perr.errorString() << ")" << body.left(256);
     }
 
     // gameStatus is required for the gameStatus endpoint (optional for inGamePresence,
