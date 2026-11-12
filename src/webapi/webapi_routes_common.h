@@ -79,10 +79,8 @@ inline void LogUnsupportedQueryParams(const QHttpServerRequest& req, const QSet<
     }
 }
 
-// npId = base64("<onlineId>"). sceNpWebApiUtilityParseNpId takes the part before
-// '@' as the handle; with no '@' the whole decoded string is the online-id handle.
 inline QString EncodeNpId(const QString& onlineId) {
-    return QString::fromLatin1(onlineId.toUtf8().toBase64());
+    return QString::fromLatin1((onlineId + QLatin1Char('@')).toUtf8().toBase64());
 }
 
 // Parse limit (clamped to [0, maxLimit], default fallbackDefault) and offset (>=0).
