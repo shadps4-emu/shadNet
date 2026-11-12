@@ -39,6 +39,23 @@ inline QHttpServerResponse JsonError(QHttpServerResponse::StatusCode status, qui
                                QJsonDocument(body).toJson(QJsonDocument::Compact), status};
 }
 
+// Parses a request body (or multipart part) as JSON.
+inline QJsonDocument ParseJsonBody(const QByteArray& raw, QJsonParseError* error) {
+    qsizetype begin = 0;
+    qsizetype end = raw.size();
+    if (raw.startsWith("\xEF\xBB\xBF")) {
+        begin = 3;
+    }
+    while (end > begin) {
+        const char c = raw.at(end - 1);
+        if (c != '\0' && c != ' ' && c != '\t' && c != '\r' && c != '\n') {
+            break;
+        }
+        --end;
+    }
+    return QJsonDocument::fromJson(raw.mid(begin, end - begin), error);
+}
+
 inline QHttpServerResponse JsonOk(const QJsonObject& body) {
     return QHttpServerResponse{"application/json",
                                QJsonDocument(body).toJson(QJsonDocument::Compact),
@@ -62,10 +79,8 @@ inline void LogUnsupportedQueryParams(const QHttpServerRequest& req, const QSet<
     }
 }
 
-// npId = base64("<onlineId>"). sceNpWebApiUtilityParseNpId takes the part before
-// '@' as the handle; with no '@' the whole decoded string is the online-id handle.
 inline QString EncodeNpId(const QString& onlineId) {
-    return QString::fromLatin1(onlineId.toUtf8().toBase64());
+    return QString::fromLatin1((onlineId + QLatin1Char('@')).toUtf8().toBase64());
 }
 
 // Parse limit (clamped to [0, maxLimit], default fallbackDefault) and offset (>=0).

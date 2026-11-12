@@ -69,7 +69,7 @@ QHttpServerResponse HandleBatchIdMap(Database& db, const QHttpServerRequest& req
         return std::move(auth.errorResponse);
     }
     QJsonParseError perr{};
-    const QJsonDocument doc = QJsonDocument::fromJson(req.body(), &perr);
+    const QJsonDocument doc = ParseJsonBody(req.body(), &perr);
     if (perr.error != QJsonParseError::NoError || !doc.isArray()) {
         return JsonError(QHttpServerResponse::StatusCode::BadRequest, WEBAPI_INVALID_BODY,
                          QStringLiteral("Request body must be a JSON array of ids"));

@@ -546,7 +546,7 @@ QHttpServerResponse HandleSessionCreate(Database& db, SharedState& shared,
     }
 
     QJsonParseError perr{};
-    const QJsonDocument doc = QJsonDocument::fromJson(jsonPart, &perr);
+    const QJsonDocument doc = ParseJsonBody(jsonPart, &perr);
     if (perr.error != QJsonParseError::NoError || !doc.isObject()) {
         return JsonError(QHttpServerResponse::StatusCode::BadRequest, WEBAPI_INVALID_BODY,
                          QStringLiteral("Malformed session-request JSON"));
@@ -651,7 +651,7 @@ QHttpServerResponse HandleSessionUpdate(Database& db, SharedState& shared, const
         return std::move(auth.errorResponse);
     }
     QJsonParseError perr{};
-    const QJsonDocument doc = QJsonDocument::fromJson(req.body(), &perr);
+    const QJsonDocument doc = ParseJsonBody(req.body(), &perr);
     if (perr.error != QJsonParseError::NoError || !doc.isObject()) {
         return JsonError(QHttpServerResponse::StatusCode::BadRequest, WEBAPI_INVALID_BODY,
                          QStringLiteral("Malformed session-request JSON"));
@@ -1385,7 +1385,7 @@ QHttpServerResponse HandleSessionInvite(Database& db, SharedState& shared, const
     }
 
     QJsonParseError perr{};
-    const QJsonDocument doc = QJsonDocument::fromJson(jsonPart, &perr);
+    const QJsonDocument doc = ParseJsonBody(jsonPart, &perr);
     if (perr.error != QJsonParseError::NoError || !doc.isObject()) {
         return JsonError(QHttpServerResponse::StatusCode::BadRequest, WEBAPI_INVALID_BODY,
                          QStringLiteral("Malformed invitation-request JSON"));
@@ -1702,7 +1702,7 @@ QHttpServerResponse HandleInvitationUse(Database& db, SharedState& shared, const
     Q_UNUSED(userKey);
 
     QJsonParseError perr{};
-    const QJsonDocument doc = QJsonDocument::fromJson(req.body(), &perr);
+    const QJsonDocument doc = ParseJsonBody(req.body(), &perr);
     if (perr.error != QJsonParseError::NoError || !doc.isObject()) {
         return JsonError(QHttpServerResponse::StatusCode::BadRequest, WEBAPI_INVALID_BODY,
                          QStringLiteral("Malformed JSON body"));
