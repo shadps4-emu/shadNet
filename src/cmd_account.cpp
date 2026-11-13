@@ -5,6 +5,7 @@
 #include <QDateTime>
 #include <QDebug>
 #include <QTimer>
+#include "avatar.h"
 #include "client_session.h"
 #include "proto_utils.h"
 #include "shadnet.pb.h"
@@ -22,7 +23,6 @@ ErrorType ClientSession::CmdCreate(StreamExtractor& data, QByteArray& reply) {
 
     QString npid = QString::fromStdString(req.npid());
     QString password = QString::fromStdString(req.password());
-    QString avatarUrl = QString::fromStdString(req.avatar_url());
     QString email = QString::fromStdString(req.email());
     QString secretKey = QString::fromStdString(req.secret_key());
 
@@ -44,11 +44,7 @@ ErrorType ClientSession::CmdCreate(StreamExtractor& data, QByteArray& reply) {
             return ErrorType::CreationBannedEmailProvider;
     }
 
-    if (avatarUrl.isEmpty())
-        avatarUrl = "https://shadps4.net/shad_net/assets/avatar/default_01.png";
-
-    // npid is used as display name by the server.
-    auto err = m_db->CreateAccount(npid, password, avatarUrl, email);
+    auto err = m_db->CreateAccount(npid, password, Avatar::DefaultName(), email);
     if (err) {
         switch (*err) {
         case DbError::ExistingUsername:

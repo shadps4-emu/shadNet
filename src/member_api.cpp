@@ -1,5 +1,6 @@
 // SPDX-FileCopyrightText: Copyright 2026 shadNet Project
 // SPDX-License-Identifier: GPL-2.0-or-later
+#include "avatar.h"
 #include "client_key.h"
 #include "client_session.h"
 #include "member_api.h"
@@ -430,9 +431,7 @@ void MemberApiServer::RegisterRoutes() {
                                                       "accounts."));
             }
 
-            const QString defaultAvatar =
-                QStringLiteral("https://shadps4.net/shadnet/avatars/default_01.png");
-            const auto err = m_db->CreateAccount(npid, password, defaultAvatar, email);
+            const auto err = m_db->CreateAccount(npid, password, Avatar::DefaultName(), email);
             if (err) {
                 switch (*err) {
                 case DbError::ExistingUsername:
@@ -554,13 +553,16 @@ void MemberApiServer::RegisterRoutes() {
             body.insert(QStringLiteral("npid"), row->username);
             body.insert(QStringLiteral("email"), row->email);
             body.insert(QStringLiteral("emailVerified"), m_db->IsEmailVerified(session->userId));
+            body.insert(QStringLiteral("admin"), row->admin);
             body.insert(QStringLiteral("creation"), static_cast<qint64>(row->creation));
             body.insert(QStringLiteral("lastLogin"), static_cast<qint64>(row->lastLogin));
             body.insert(QStringLiteral("clientVersion"), row->clientVersion);
             body.insert(QStringLiteral("clientVersionAt"),
                         static_cast<qint64>(row->clientVersionAt));
-            body.insert(QStringLiteral("avatarUrl"),
-                        m_db->GetAvatarUrl(session->userId).value_or(QString()));
+            const QString avatar = m_db->GetAvatar(session->userId).value_or(QString());
+            body.insert(QStringLiteral("avatarUrl"), Avatar::Url(avatar));
+            if (!avatar.isEmpty() && !Avatar::IsCustomUrl(avatar))
+                body.insert(QStringLiteral("avatar"), avatar); // name of the hosted avatar
             return JsonOk(body);
         });
 
@@ -763,7 +765,8 @@ void MemberApiServer::RegisterRoutes() {
                       return JsonOk(body);
                   });
 
-    // POST /member/v1/me/avatar — { url }
+    // POST /member/v1/me/avatar — { name } (a hosted avatar such as "default_03") or { url }
+    // (a hosted avatar's URL, stored as its name, or a custom http/https picture)
     m_http->route(
         "/member/v1/me/avatar", QHttpServerRequest::Method::Post,
         [this](const QHttpServerRequest& req) -> QHttpServerResponse {
@@ -781,22 +784,36 @@ void MemberApiServer::RegisterRoutes() {
                 return JsonError(QHttpServerResponse::StatusCode::BadRequest, ERR_BAD_REQUEST,
                                  parseError);
 
+            const QString name = bodyOpt->value(QStringLiteral("name")).toString().trimmed();
             const QString url = bodyOpt->value(QStringLiteral("url")).toString().trimmed();
-            if (!ValidAvatarUrl(url)) {
-                return JsonError(QHttpServerResponse::StatusCode::BadRequest, ERR_BAD_REQUEST,
-                                 QStringLiteral("An avatar URL must be an http or https address "
-                                                "of at most %1 characters.")
-                                     .arg(MaxAvatarUrlLength));
+            QString stored;
+            if (!name.isEmpty()) {
+                if (!Avatar::IsValidName(name)) {
+                    return JsonError(QHttpServerResponse::StatusCode::BadRequest, ERR_BAD_REQUEST,
+                                     QStringLiteral("An avatar name uses only letters, numbers, "
+                                                    "'_' or '-', up to 64 characters."));
+                }
+                stored = name;
+            } else {
+                if (!ValidAvatarUrl(url)) {
+                    return JsonError(QHttpServerResponse::StatusCode::BadRequest, ERR_BAD_REQUEST,
+                                     QStringLiteral("An avatar URL must be an http or https "
+                                                    "address of at most %1 characters.")
+                                         .arg(MaxAvatarUrlLength));
+                }
+                stored = Avatar::ToStored(url);
             }
 
-            if (!m_db->SetAvatarUrl(session->userId, url)) {
+            if (!m_db->SetAvatar(session->userId, stored)) {
                 qCritical() << "MemberApi: avatar update failed for" << session->npid;
                 return JsonError(QHttpServerResponse::StatusCode::InternalServerError, ERR_INTERNAL,
                                  QStringLiteral("The picture could not be saved."));
             }
 
             QJsonObject body;
-            body.insert(QStringLiteral("avatarUrl"), url);
+            body.insert(QStringLiteral("avatarUrl"), Avatar::Url(stored));
+            if (!Avatar::IsCustomUrl(stored))
+                body.insert(QStringLiteral("avatar"), stored);
             return JsonOk(body);
         });
 
