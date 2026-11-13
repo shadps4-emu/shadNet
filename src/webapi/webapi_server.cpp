@@ -10,11 +10,13 @@
 #include <QJsonDocument>
 #include <QJsonObject>
 #include "webapi_auth.h"
+#include "webapi_routes_commerce.h"
 #include "webapi_routes_authcode.h"
 #include "webapi_routes_commerce.h"
 #include "webapi_routes_entitlements.h"
 #include "webapi_routes_game_custom_data.h"
 #include "webapi_routes_identity.h"
+#include "webapi_routes_playersession.h"
 #include "webapi_routes_presence.h"
 #include "webapi_routes_profile.h"
 #include "webapi_routes_session.h"
@@ -70,6 +72,8 @@ void WebApiServer::RegisterRoutes() {
     WebApiRoutes::RegisterProfileRoutes(*m_http, *m_db, *m_shared);
     WebApiRoutes::RegisterPresenceRoutes(*m_http, *m_db, *m_shared);
     WebApiRoutes::RegisterSessionRoutes(*m_http, *m_db, *m_shared);
+    WebApiRoutes::RegisterPlayerSessionRoutes(*m_http, *m_db, *m_shared);
+    WebApiRoutes::RegisterCommerceRoutes(*m_http, *m_db);
     WebApiRoutes::RegisterIdentityRoutes(*m_http, *m_db);
     WebApiRoutes::RegisterAuthCodeRoutes(*m_http, *m_db, *m_shared);
     WebApiRoutes::RegisterEntitlementRoutes(*m_http, *m_db, *m_shared);

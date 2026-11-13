@@ -12,6 +12,7 @@
 #include "protocol.h"
 #include "shadnet.pb.h"
 #include "stream_extractor.h"
+#include "webapi/webapi_routes_playersession.h"
 #include "webapi/webapi_routes_session.h"
 
 bool DeleteAccountAndArtifacts(Database& db, SharedState* shared, int64_t userId,
@@ -511,6 +512,7 @@ void ClientSession::CleanupOnDisconnect() {
     // A user's joined-session state is linked to presence: going offline
     // auto-leaves all their sessions (owner-migration / owner-bind teardown)
     WebApiRoutes::PurgeUserFromSessions(*m_shared, m_info.userId);
+    WebApiRoutes::PurgeUserFromPlayerSessions(*m_shared, m_info.userId);
 
     // Collect send functions for every online friend before releasing the lock,
     // then remove ourselves from the map.
