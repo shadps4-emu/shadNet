@@ -6,6 +6,7 @@
 #include <QDir>
 #include <QLoggingCategory>
 #include "admin_api.h"
+#include "avatar.h"
 #include "config.h"
 #include "file_logger.h"
 #include "member_api.h"
@@ -38,6 +39,7 @@ int main(int argc, char* argv[]) {
     FileLogger::Configure(config.GetLogFile(),
                           static_cast<qint64>(config.GetLogMaxSizeMB()) * 1024 * 1024);
     config.LoadBannedDomains();
+    Avatar::g_baseUrl = config.GetAvatarBaseUrl();
 
     ShadNetServer server;
     if (!server.Start(&config)) {

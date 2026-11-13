@@ -68,20 +68,19 @@ void SortByOnlineId(QList<QPair<int64_t, QString>>& users, bool desc) {
 
 QJsonObject BuildVerifiedUser(Database& db, qint64 accountId, const QString& onlineId,
                               const QStringList& avatarSizes, const QStringList& pictureSizes) {
-    const auto avatar = db.GetAvatarUrl(accountId);
-    const QString avatarUrl = (avatar && !avatar->isEmpty()) ? *avatar : QString();
+    const QString avatar = db.GetAvatar(accountId).value_or(QString());
 
     QJsonObject entry;
     entry.insert(QStringLiteral("accountId"), QString::number(accountId));
     entry.insert(QStringLiteral("onlineId"), onlineId);
     entry.insert(QStringLiteral("isOfficiallyVerified"), true);
 
-    if (!avatarUrl.isEmpty()) {
+    if (!avatar.isEmpty()) {
         QJsonArray avatars;
         for (const QString& size : avatarSizes) {
             QJsonObject a;
             a.insert(QStringLiteral("size"), size);
-            a.insert(QStringLiteral("avatarUrl"), avatarUrl);
+            a.insert(QStringLiteral("avatarUrl"), Avatar::Url(avatar, size));
             avatars.append(a);
         }
         entry.insert(QStringLiteral("avatarUrls"), avatars);
@@ -89,12 +88,13 @@ QJsonObject BuildVerifiedUser(Database& db, qint64 accountId, const QString& onl
 
     QJsonObject pd;
     pd.insert(QStringLiteral("displayName"), onlineId);
-    if (!avatarUrl.isEmpty()) {
+    if (!avatar.isEmpty()) {
         QJsonArray pictures;
         for (const QString& size : pictureSizes) {
             QJsonObject pic;
             pic.insert(QStringLiteral("size"), size);
-            pic.insert(QStringLiteral("profilePictureUrl"), avatarUrl);
+            // Profile pictures have an xl size that avatars lack; xl uses the largest avatar.
+            pic.insert(QStringLiteral("profilePictureUrl"), Avatar::Url(avatar, size));
             pictures.append(pic);
         }
         pd.insert(QStringLiteral("profilePictureUrls"), pictures);
@@ -189,7 +189,8 @@ QJsonObject BuildFriendList(Database& db, SharedState& shared,
                             const QStringList& fields, bool isDefault, int offset, int limit,
                             bool wantPresence, const QString& presenceType, bool presenceDetail,
                             const QString& filter, const QString& sortKey, const QString& direction,
-                            int64_t callerUserId, const QString& npLanguages) {
+                            int64_t callerUserId, const QString& npLanguages,
+                            const AvatarRequest& avatarReq) {
     // @default == user,region,npId. personalDetail / avatarUrl / isOfficiallyVerified are NOT
     // in @default and must be requested explicitly.
     const bool wantUser = isDefault || fields.contains(QStringLiteral("user")) ||
@@ -199,8 +200,6 @@ QJsonObject BuildFriendList(Database& db, SharedState& shared,
     const bool wantNpId = isDefault || fields.contains(QStringLiteral("npId"));
     const bool wantDetail = fields.contains(QStringLiteral("personalDetail")) ||
                             fields.contains(QStringLiteral("personalDetail.displayName"));
-    const bool wantAvatar = fields.contains(QStringLiteral("avatarUrl")) ||
-                            fields.contains(QStringLiteral("avatarUrls"));
     const bool wantVerified = fields.contains(QStringLiteral("isOfficiallyVerified"));
 
     // Snapshot each friend's presence (online == membership in the shared clients map, minus
@@ -315,11 +314,8 @@ QJsonObject BuildFriendList(Database& db, SharedState& shared,
             pd.insert(QStringLiteral("displayName"), npid);
             entry.insert(QStringLiteral("personalDetail"), pd);
         }
-        if (wantAvatar) {
-            const auto avatar = db.GetAvatarUrl(accountId);
-            if (avatar && !avatar->isEmpty()) {
-                entry.insert(QStringLiteral("avatarUrl"), *avatar);
-            }
+        if (avatarReq.wanted) {
+            InsertAvatar(entry, db.GetAvatar(accountId).value_or(QString()), avatarReq);
         }
         if (wantVerified) {
             entry.insert(QStringLiteral("isOfficiallyVerified"), false);
@@ -396,9 +392,12 @@ void RegisterUserRoutes(QHttpServer& http, Database& db, SharedState& shared) {
                 const qlonglong accId = idStr.toLongLong(&ok);
                 if (!ok)
                     continue; // skip malformed ids
+                const auto name = db.GetUsername(accId);
+                if (!name)
+                    continue; // only existing users are listed
                 QJsonObject userObj;
                 QJsonObject u;
-                u.insert(QStringLiteral("onlineId"), db.GetUsername(accId).value_or(QString()));
+                u.insert(QStringLiteral("onlineId"), *name);
                 u.insert(QStringLiteral("accountId"), QString::number(accId));
                 userObj.insert(QStringLiteral("user"), u);
                 QJsonArray fl;
@@ -408,6 +407,7 @@ void RegisterUserRoutes(QHttpServer& http, Database& db, SharedState& shared) {
                     f.insert(QStringLiteral("accountId"), QString::number(fr.first));
                     fl.append(f);
                 }
+                userObj.insert(QStringLiteral("friendOnlineIdList"), fl);
                 userObj.insert(QStringLiteral("friendOnlineIdLists"), fl);
                 lists.append(userObj);
             }
@@ -426,7 +426,9 @@ void RegisterUserRoutes(QHttpServer& http, Database& db, SharedState& shared) {
                 QStringLiteral("limit"),        QStringLiteral("offset"),
                 QStringLiteral("presenceType"), QStringLiteral("presenceDetail"),
                 QStringLiteral("filter"),       QStringLiteral("sort"),
-                QStringLiteral("direction"),
+                QStringLiteral("direction"),    QStringLiteral("avatarSize"),
+                QStringLiteral("avatarSizes"),  QStringLiteral("avatarUrlScheme"),
+                QStringLiteral("npLanguages"),
             };
             LogUnsupportedQueryParams(req, kKnown);
 
@@ -441,8 +443,6 @@ void RegisterUserRoutes(QHttpServer& http, Database& db, SharedState& shared) {
             }
 
             const QUrlQuery query(req.url());
-
-            // friendStatus is required and its only legal value is "friend".
             if (!query.hasQueryItem(QStringLiteral("friendStatus"))) {
                 return JsonError(
                     QHttpServerResponse::StatusCode::BadRequest, UP_QUERY_PARAM_REQUIRED,
@@ -455,20 +455,25 @@ void RegisterUserRoutes(QHttpServer& http, Database& db, SharedState& shared) {
                         "Invalid parameter in query string (parameter: 'friendStatus')"));
             }
 
-            // fields: @default == user,region,npId.
             QString fieldsStr = query.queryItemValue(QStringLiteral("fields"));
             if (fieldsStr.isEmpty()) {
                 fieldsStr = QStringLiteral("@default");
             }
             const QStringList fields = fieldsStr.split(QLatin1Char(','), Qt::SkipEmptyParts);
             const bool isDefault = fields.contains(QStringLiteral("@default"));
+            // Avatars are not part of @default for friendList entries.
+            const AvatarRequest avatarReq =
+                ParseAvatarRequest(query, fields,
+                                   fields.contains(QStringLiteral("avatarUrl")) ||
+                                       fields.contains(QStringLiteral("avatarUrls")));
+            if (!avatarReq.error.isEmpty()) {
+                return JsonError(QHttpServerResponse::StatusCode::BadRequest, avatarReq.errorCode,
+                                 avatarReq.error);
+            }
 
             int limit = 0;
             int offset = 0;
             ParsePaging(query, 100, 500, limit, offset);
-
-            // presenceType selects the presence member; presence is included only when
-            // presenceType is given
             const QString presenceType = query.queryItemValue(QStringLiteral("presenceType"));
             const bool wantPresence = !presenceType.isEmpty();
             if (!presenceType.isEmpty() && presenceType != QStringLiteral("primary") &&
@@ -479,15 +484,12 @@ void RegisterUserRoutes(QHttpServer& http, Database& db, SharedState& shared) {
                     QStringLiteral(
                         "Invalid parameter in query string (parameter: 'presenceType')"));
             }
-            // presenceDetail ignored when presenceType is absent.
             const bool presenceDetail =
                 wantPresence &&
                 query.queryItemValue(QStringLiteral("presenceDetail")) == QStringLiteral("true");
             const QString filter = query.queryItemValue(QStringLiteral("filter"));
             const QString sortKey = query.queryItemValue(QStringLiteral("sort"));
             const QString direction = query.queryItemValue(QStringLiteral("direction"));
-            // PonlineStatus / onlineStatus+onlineId sorts may be used only when
-            // presenceType is specified; otherwise the request is rejected.
             if ((sortKey == QStringLiteral("onlineStatus") ||
                  sortKey == QStringLiteral("onlineStatus+onlineId")) &&
                 !wantPresence) {
@@ -499,7 +501,7 @@ void RegisterUserRoutes(QHttpServer& http, Database& db, SharedState& shared) {
             const QString npLanguages = query.queryItemValue(QStringLiteral("npLanguages"));
             const QJsonObject body = BuildFriendList(
                 db, shared, friends, fields, isDefault, offset, limit, wantPresence, presenceType,
-                presenceDetail, filter, sortKey, direction, *auth.userId, npLanguages);
+                presenceDetail, filter, sortKey, direction, *auth.userId, npLanguages, avatarReq);
             qInfo() << "WebAPI: friendList for" << auth.npid << "-> total" << friends.size();
             return JsonOk(body);
         });
@@ -524,8 +526,6 @@ void RegisterUserRoutes(QHttpServer& http, Database& db, SharedState& shared) {
                    }
 
                    const QUrlQuery query(req.url());
-
-                   // fields: @default == user (no region member for blockingUser).
                    QString fieldsStr = query.queryItemValue(QStringLiteral("fields"));
                    if (fieldsStr.isEmpty()) {
                        fieldsStr = QStringLiteral("@default");
@@ -614,8 +614,6 @@ void RegisterUserRoutes(QHttpServer& http, Database& db, SharedState& shared) {
                    }
 
                    const QUrlQuery query(req.url());
-                   // friendStatus is optional here (unlike /friendList), but "friend" is still
-                   // the only relationship this endpoint reports.
                    const QString friendStatus =
                        query.queryItemValue(QStringLiteral("friendStatus"));
                    if (!friendStatus.isEmpty() && friendStatus != QStringLiteral("friend")) {
@@ -719,9 +717,6 @@ void RegisterUserRoutes(QHttpServer& http, Database& db, SharedState& shared) {
                     npTitleId = shared.lastLoginTitleId.value(*auth.userId);
                 }
             }
-
-            // add only the login user as verified user, should be all verified users TODO check how
-            // it should work
             QJsonArray verifiedUsers;
             if (limit > 0) {
                 verifiedUsers.append(

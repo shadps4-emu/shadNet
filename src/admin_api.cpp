@@ -1,6 +1,7 @@
 // SPDX-FileCopyrightText: Copyright 2026 shadNet Project
 // SPDX-License-Identifier: GPL-2.0-or-later
 #include "admin_api.h"
+#include "avatar.h"
 
 #include <cmath>
 
@@ -1027,6 +1028,68 @@ void AdminApiServer::RegisterRoutes() {
             return JsonOk(body);
         });
 
+    // GET /admin/v1/griefReports?limit=&offset= -- newest first. items lists what was reported.
+    m_http->route("/admin/v1/griefReports", QHttpServerRequest::Method::Get,
+                  [this](const QHttpServerRequest& req) -> QHttpServerResponse {
+                      const auto session = Authenticate(req);
+                      if (!session)
+                          return AuthError(req);
+
+                      const QUrlQuery query(req.url());
+                      bool ok = false;
+                      int limit = query.queryItemValue(QStringLiteral("limit")).toInt(&ok);
+                      if (!ok)
+                          limit = 100;
+                      limit = qBound(1, limit, 500);
+                      int offset = query.queryItemValue(QStringLiteral("offset")).toInt(&ok);
+                      if (!ok || offset < 0)
+                          offset = 0;
+
+                      static const QList<QPair<quint32, QString>> kItemNames = {
+                          {0x1, QStringLiteral("onlineId")},
+                          {0x2, QStringLiteral("name")},
+                          {0x4, QStringLiteral("picture")},
+                          {0x8, QStringLiteral("aboutMe")},
+                      };
+                      QJsonArray reports;
+                      for (const GriefReportRow& r : m_db->ListGriefReports(limit, offset)) {
+                          QJsonArray items;
+                          for (const auto& [bit, name] : kItemNames) {
+                              if (r.items & bit)
+                                  items.append(name);
+                          }
+                          QJsonObject o;
+                          o.insert(QStringLiteral("reportId"), static_cast<qint64>(r.reportId));
+                          o.insert(QStringLiteral("reporterId"), static_cast<qint64>(r.reporterId));
+                          o.insert(QStringLiteral("reporter"), r.reporterName);
+                          o.insert(QStringLiteral("targetId"), static_cast<qint64>(r.targetId));
+                          o.insert(QStringLiteral("target"), r.targetName);
+                          o.insert(QStringLiteral("items"), items);
+                          o.insert(QStringLiteral("createdAt"), r.createdAt);
+                          reports.append(o);
+                      }
+                      QJsonObject body;
+                      body.insert(QStringLiteral("reports"), reports);
+                      body.insert(QStringLiteral("total"), m_db->CountGriefReports());
+                      return JsonOk(body);
+                  });
+
+    // DELETE /admin/v1/griefReports/<id> -- clear a report once it has been dealt with.
+    m_http->route("/admin/v1/griefReports/<arg>", QHttpServerRequest::Method::Delete,
+                  [this](qint64 reportId, const QHttpServerRequest& req) -> QHttpServerResponse {
+                      const auto session = Authenticate(req);
+                      if (!session)
+                          return AuthError(req);
+                      if (!m_db->DeleteGriefReport(reportId)) {
+                          return JsonError(
+                              QHttpServerResponse::StatusCode::NotFound, ERR_NOT_FOUND,
+                              QStringLiteral("No grief report has id %1.").arg(reportId));
+                      }
+                      QJsonObject body;
+                      body.insert(QStringLiteral("deleted"), true);
+                      return JsonOk(body);
+                  });
+
     // GET /admin/v1/users?search=&filter=&limit=&offset=
     m_http->route(
         "/admin/v1/users", QHttpServerRequest::Method::Get,
@@ -1075,7 +1138,7 @@ void AdminApiServer::RegisterRoutes() {
             return JsonOk(body);
         });
 
-    // POST /admin/v1/users — { npid, password?, email?, avatarUrl? }
+    // POST /admin/v1/users — { npid, password?, email? } (new accounts get the default avatar)
     // Creates an account the same way in-game registration does.With no
     // password supplied the server generates one and returns it once
     m_http->route(
@@ -1098,7 +1161,6 @@ void AdminApiServer::RegisterRoutes() {
             const QString npid = bodyOpt->value(QStringLiteral("npid")).toString().trimmed();
             const QString supplied = bodyOpt->value(QStringLiteral("password")).toString();
             const QString email = bodyOpt->value(QStringLiteral("email")).toString().trimmed();
-            QString avatarUrl = bodyOpt->value(QStringLiteral("avatarUrl")).toString().trimmed();
 
             if (!ClientSession::IsValidNpid(npid))
                 return JsonError(QHttpServerResponse::StatusCode::BadRequest, ERR_BAD_REQUEST,
@@ -1108,14 +1170,12 @@ void AdminApiServer::RegisterRoutes() {
                 return JsonError(QHttpServerResponse::StatusCode::BadRequest, ERR_BAD_REQUEST,
                                  QStringLiteral("Password must be at least %1 characters.")
                                      .arg(kMinPasswordLength));
-            if (avatarUrl.isEmpty())
-                avatarUrl =
-                    QStringLiteral("https://shadps4.net/shad_net/assets/avatar/default_01.png");
 
             const bool generated = supplied.isEmpty();
             const QString password = generated ? GeneratePassword() : supplied;
 
-            if (const auto err = m_db->CreateAccount(npid, password, avatarUrl, email)) {
+            if (const auto err =
+                    m_db->CreateAccount(npid, password, Avatar::DefaultName(), email)) {
                 switch (*err) {
                 case DbError::ExistingUsername:
                     return JsonError(QHttpServerResponse::StatusCode::Conflict, ERR_CONFLICT,

@@ -55,6 +55,18 @@ enum class Matching2Access : int {
     Never = 2,  // never allowed
 };
 
+// A grief report filed from the profile dialog. items is a bitmask of what was reported:
+// 1 online ID, 2 name, 4 picture, 8 about me (the PS4 SceNpProfileGriefReportItem values).
+struct GriefReportRow {
+    int64_t reportId = 0;
+    int64_t reporterId = 0;
+    QString reporterName;
+    int64_t targetId = 0;
+    QString targetName;
+    quint32 items = 0;
+    qint64 createdAt = 0; // Unix seconds
+};
+
 struct AdminUserRow {
     int64_t userId = 0;
     QString username;
@@ -136,6 +148,7 @@ public:
                                         const QString& token, bool checkToken);
     std::optional<int64_t> GetUserId(const QString& npid);
     std::optional<QString> GetUsername(int64_t userId);
+    std::optional<QString> GetAvatar(int64_t userId);
     std::optional<QString> GetAvatarUrl(int64_t userId);
     QHash<QString, QString> GetAvatarUrlsByNpid(const QStringList& npids);
     std::optional<int64_t> GetAccountCreationTime(int64_t userId);
@@ -146,7 +159,11 @@ public:
     bool SetAdmin(int64_t userId, bool admin);
     bool SetClientVersion(int64_t userId, const QString& version);
     bool SetPassword(int64_t userId, const QString& newPassword);
-    bool SetAvatarUrl(int64_t userId, const QString& avatarUrl);
+    bool SetAvatar(int64_t userId, const QString& avatar);
+    bool AddGriefReport(int64_t reporterId, int64_t targetId, quint32 items);
+    QList<GriefReportRow> ListGriefReports(int limit, int offset);
+    int CountGriefReports();
+    bool DeleteGriefReport(int64_t reportId);
     int TotalUsers();
     bool PurgeUserData(int64_t userId, PurgeSummary& summary);
 

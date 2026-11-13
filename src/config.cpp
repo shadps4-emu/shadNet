@@ -111,6 +111,10 @@ void ConfigManager::Parse(const QString& path) {
         m_matching2MaxUsers = 0;
     }
     m_trophiesEnabled = boolean("TrophiesEnabled", true);
+    // Where the named avatars live: <AvatarBaseUrl><name>_s.png, _m.png and _l.png.
+    m_avatarBaseUrl = str("AvatarBaseUrl", "https://shadps4.net/shad_net/assets/avatar/");
+    if (!m_avatarBaseUrl.endsWith('/'))
+        m_avatarBaseUrl += '/';
     m_memberApiEnabled = boolean("MemberApiEnabled", false);
     m_memberApiHost = str("MemberApiHost", "127.0.0.1");
     m_memberApiPort = str("MemberApiPort", "31360");

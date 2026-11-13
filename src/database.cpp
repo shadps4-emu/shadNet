@@ -10,6 +10,7 @@
 #include <QSqlRecord>
 #include <QUuid>
 #include <qcryptographichash.h>
+#include "avatar.h"
 #include "database.h"
 
 QByteArray Database::GenerateSalt(int bytes) {
@@ -467,6 +468,36 @@ bool Database::Migrate() {
         Exec(ins18);
     }
 
+    // Migration 19: avatars are stored by name. Every existing account is reset to the
+    // default avatar; users pick a new one afterwards.
+    if (!HasMigration(19)) {
+        QSqlQuery reset(m_db);
+        reset.prepare("UPDATE account SET avatar_url=?");
+        reset.addBindValue(Avatar::DefaultName());
+        if (Exec(reset))
+            qInfo() << "Migration 19:" << reset.numRowsAffected() << "avatar(s) reset to"
+                    << Avatar::DefaultName();
+
+        QSqlQuery ins19(m_db);
+        ins19.prepare("INSERT OR IGNORE INTO migration VALUES(19,'avatars stored by name')");
+        Exec(ins19);
+    }
+
+    // Migration 20: grief reports filed from the profile dialog. Removed with either account.
+    if (!HasMigration(20)) {
+        Exec("CREATE TABLE IF NOT EXISTS grief_report ("
+             "  report_id   INTEGER PRIMARY KEY AUTOINCREMENT,"
+             "  reporter_id INTEGER NOT NULL REFERENCES account(user_id) ON DELETE CASCADE,"
+             "  target_id   INTEGER NOT NULL REFERENCES account(user_id) ON DELETE CASCADE,"
+             "  items       INTEGER NOT NULL,"
+             "  created_at  INTEGER NOT NULL)");
+        Exec("CREATE INDEX IF NOT EXISTS grief_report_pair "
+             "ON grief_report(reporter_id, target_id, created_at)");
+        QSqlQuery ins20(m_db);
+        ins20.prepare("INSERT OR IGNORE INTO migration VALUES(20,'grief reports')");
+        Exec(ins20);
+    }
+
     qInfo() << "Database migrations complete";
 
     RunMaintenance();
@@ -599,7 +630,7 @@ std::optional<DbError> Database::CreateAccount(const QString& npid, const QStrin
         q.addBindValue(npid);
         q.addBindValue(hash);
         q.addBindValue(salt);
-        q.addBindValue(avatarUrl);
+        q.addBindValue(Avatar::ToStored(avatarUrl));
         q.addBindValue(email);
         q.addBindValue(email.isEmpty() ? "" : email.toLower().trimmed());
         q.addBindValue(token);
@@ -684,7 +715,7 @@ std::optional<UserRecord> Database::CheckUser(const QString& npid, const QString
     r.username = canonicalUsername; // exact match
     r.hash = q.value(2).toByteArray();
     r.salt = q.value(3).toByteArray();
-    r.avatarUrl = q.value(4).toString();
+    r.avatarUrl = Avatar::Url(q.value(4).toString());
     r.email = q.value(5).toString();
     r.emailCheck = q.value(6).toString();
     r.token = q.value(7).toString();
@@ -720,13 +751,91 @@ std::optional<QString> Database::GetUsername(int64_t userId) {
     return q.value(0).toString();
 }
 
-std::optional<QString> Database::GetAvatarUrl(int64_t userId) {
+std::optional<QString> Database::GetAvatar(int64_t userId) {
     QSqlQuery q(m_db);
     q.prepare("SELECT avatar_url FROM account WHERE user_id=?");
     q.addBindValue(static_cast<qlonglong>(userId));
     if (!Exec(q) || !q.next())
         return std::nullopt;
     return q.value(0).toString();
+}
+
+bool Database::AddGriefReport(int64_t reporterId, int64_t targetId, quint32 items) {
+    const qint64 now = QDateTime::currentSecsSinceEpoch();
+    constexpr qint64 FoldWindowSecs = 10 * 60;
+
+    QSqlQuery recent(m_db);
+    recent.prepare("SELECT report_id FROM grief_report WHERE reporter_id=? AND target_id=? "
+                   "AND created_at>=? ORDER BY created_at DESC LIMIT 1");
+    recent.addBindValue(static_cast<qlonglong>(reporterId));
+    recent.addBindValue(static_cast<qlonglong>(targetId));
+    recent.addBindValue(now - FoldWindowSecs);
+    if (!Exec(recent))
+        return false;
+    if (recent.next()) {
+        QSqlQuery fold(m_db);
+        fold.prepare("UPDATE grief_report SET items = items | ? WHERE report_id=?");
+        fold.addBindValue(items);
+        fold.addBindValue(recent.value(0).toLongLong());
+        return Exec(fold);
+    }
+
+    QSqlQuery q(m_db);
+    q.prepare("INSERT INTO grief_report(reporter_id, target_id, items, created_at) "
+              "VALUES(?,?,?,?)");
+    q.addBindValue(static_cast<qlonglong>(reporterId));
+    q.addBindValue(static_cast<qlonglong>(targetId));
+    q.addBindValue(items);
+    q.addBindValue(now);
+    return Exec(q);
+}
+
+QList<GriefReportRow> Database::ListGriefReports(int limit, int offset) {
+    QList<GriefReportRow> out;
+    QSqlQuery q(m_db);
+    q.prepare("SELECT g.report_id, g.reporter_id, r.username, g.target_id, t.username, g.items, "
+              "g.created_at FROM grief_report g "
+              "JOIN account r ON r.user_id = g.reporter_id "
+              "JOIN account t ON t.user_id = g.target_id "
+              "ORDER BY g.created_at DESC, g.report_id DESC LIMIT ? OFFSET ?");
+    q.addBindValue(limit);
+    q.addBindValue(offset);
+    if (!Exec(q))
+        return out;
+    while (q.next()) {
+        GriefReportRow r;
+        r.reportId = q.value(0).toLongLong();
+        r.reporterId = q.value(1).toLongLong();
+        r.reporterName = q.value(2).toString();
+        r.targetId = q.value(3).toLongLong();
+        r.targetName = q.value(4).toString();
+        r.items = q.value(5).toUInt();
+        r.createdAt = q.value(6).toLongLong();
+        out.append(r);
+    }
+    return out;
+}
+
+int Database::CountGriefReports() {
+    QSqlQuery q(m_db);
+    q.prepare("SELECT COUNT(*) FROM grief_report");
+    if (!Exec(q) || !q.next())
+        return 0;
+    return q.value(0).toInt();
+}
+
+bool Database::DeleteGriefReport(int64_t reportId) {
+    QSqlQuery q(m_db);
+    q.prepare("DELETE FROM grief_report WHERE report_id=?");
+    q.addBindValue(static_cast<qlonglong>(reportId));
+    return Exec(q) && q.numRowsAffected() > 0;
+}
+
+std::optional<QString> Database::GetAvatarUrl(int64_t userId) {
+    const auto stored = GetAvatar(userId);
+    if (!stored)
+        return std::nullopt;
+    return Avatar::Url(*stored);
 }
 
 QHash<QString, QString> Database::GetAvatarUrlsByNpid(const QStringList& npids) {
@@ -745,7 +854,7 @@ QHash<QString, QString> Database::GetAvatarUrlsByNpid(const QStringList& npids) 
         if (!Exec(q))
             continue;
         while (q.next())
-            out.insert(q.value(0).toString(), q.value(1).toString());
+            out.insert(q.value(0).toString(), Avatar::Url(q.value(1).toString()));
     }
     return out;
 }
@@ -1024,17 +1133,17 @@ QList<Database::UserScoreRow> Database::ListUserScores(int64_t userId) {
     return out;
 }
 
-bool Database::SetAvatarUrl(int64_t userId, const QString& avatarUrl) {
+bool Database::SetAvatar(int64_t userId, const QString& avatar) {
     // avatar_url is NOT NULL, and an account with no picture is not a state the
     // rest of the server expects; callers wanting the default should pass it.
-    if (avatarUrl.isEmpty()) {
-        m_lastError = QStringLiteral("Avatar URL must not be empty");
+    if (avatar.trimmed().isEmpty()) {
+        m_lastError = QStringLiteral("Avatar must not be empty");
         return false;
     }
 
     QSqlQuery q(m_db);
     q.prepare("UPDATE account SET avatar_url=? WHERE user_id=?");
-    q.addBindValue(avatarUrl);
+    q.addBindValue(Avatar::ToStored(avatar));
     q.addBindValue(static_cast<qlonglong>(userId));
     if (!Exec(q))
         return false;
@@ -1637,7 +1746,7 @@ QList<Database::TrophyPlayerRow> Database::ListTopTrophyPlayers(const QString& c
         r.npid = q.value(1).toString();
         r.trophies = q.value(2).toInt();
         r.lastEarnedAt = q.value(3).toLongLong();
-        r.avatarUrl = q.value(4).toString();
+        r.avatarUrl = Avatar::Url(q.value(4).toString());
         out.append(r);
     }
     return out;
@@ -1728,7 +1837,7 @@ QList<Database::TrophyRankRow> Database::ListTrophyRanking(int limit) {
         r.unknownGrade = q.value(7).toInt();
         r.points = q.value(8).toInt();
         r.completed = q.value(9).toInt();
-        r.avatarUrl = q.value(10).toString();
+        r.avatarUrl = Avatar::Url(q.value(10).toString());
         out.append(r);
     }
     return out;
@@ -1785,7 +1894,7 @@ QList<Database::RecentTrophyRow> Database::ListRecentTrophies(int limit) {
         r.name = q.value(5).toString();
         r.grade = q.value(6).toString();
         r.hidden = q.value(7).toBool();
-        r.avatarUrl = q.value(8).toString();
+        r.avatarUrl = Avatar::Url(q.value(8).toString());
         out.append(r);
     }
     return out;

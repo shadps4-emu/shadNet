@@ -66,17 +66,29 @@ QHttpServerResponse HandlePresenceWrite(Database& db, SharedState& shared, const
 
     // gameStatus is required for the gameStatus endpoint (optional for inGamePresence,
     // which may set gameStatus and/or gameData).
-    if (std::strcmp(leaf, "gameStatus") == 0 && !obj.contains(QStringLiteral("gameStatus"))) {
-        return JsonError(QHttpServerResponse::StatusCode::BadRequest, UP_QUERY_PARAM_REQUIRED,
-                         QStringLiteral("'gameStatus' is required in the request body"));
+    // Each leaf accepts only its own members: gameStatus -> gameStatus + localizedGameStatus,
+    // gameData -> gameData, inGamePresence -> all three.
+    const bool isGameStatusLeaf = std::strcmp(leaf, "gameStatus") == 0;
+    const bool isGameDataLeaf = std::strcmp(leaf, "gameData") == 0;
+    const bool acceptStatus = !isGameDataLeaf;
+    const bool acceptData = !isGameStatusLeaf;
+    const bool hasStatus = acceptStatus && obj.contains(QStringLiteral("gameStatus"));
+    const bool hasLocalized = acceptStatus && obj.contains(QStringLiteral("localizedGameStatus"));
+    const bool hasData = acceptData && obj.contains(QStringLiteral("gameData"));
+
+    if (isGameStatusLeaf && !hasStatus) {
+        return JsonError(QHttpServerResponse::StatusCode::BadRequest, UP_BODY_PARAM_REQUIRED,
+                         QStringLiteral("'gameStatus' parameter required in body"));
+    }
+    if (isGameDataLeaf && !hasData) {
+        return JsonError(QHttpServerResponse::StatusCode::BadRequest, UP_BODY_PARAM_REQUIRED,
+                         QStringLiteral("'gameData' parameter required in body"));
     }
 
     // localizedGameStatus may only be set alongside a default gameStatus.
-    if (obj.contains(QStringLiteral("localizedGameStatus")) &&
-        !obj.contains(QStringLiteral("gameStatus"))) {
-        return JsonError(QHttpServerResponse::StatusCode::BadRequest, UP_QUERY_PARAM_REQUIRED,
-                         QStringLiteral("'gameStatus' (default) is required when "
-                                        "'localizedGameStatus' is specified"));
+    if (hasLocalized && !hasStatus) {
+        return JsonError(QHttpServerResponse::StatusCode::BadRequest, UP_BODY_PARAM_REQUIRED,
+                         QStringLiteral("'gameStatus' parameter required in body"));
     }
 
     // Write the published detail into the caller's live presence entry. The
@@ -98,22 +110,25 @@ QHttpServerResponse HandlePresenceWrite(Database& db, SharedState& shared, const
             notify = it->notifyWithData;
             // Body schema (both PUTs): gameStatus (string), gameData (base64 string,
             // inGamePresence only), localizedGameStatus ([{npLanguage, gameStatus}]).
-            if (obj.contains(QStringLiteral("gameStatus"))) {
+            if (hasStatus) {
                 it->gameStatus = obj.value(QStringLiteral("gameStatus")).toString();
                 const int gsBytes = it->gameStatus.toUtf8().size();
                 if (gsBytes > 191)
                     qWarning() << "WebAPI: gameStatus exceeds 191 bytes (" << gsBytes << ") for"
                                << auth.npid;
             }
-            if (obj.contains(QStringLiteral("gameData"))) {
+            if (hasData) {
                 it->gameData = obj.value(QStringLiteral("gameData")).toString();
                 const int gdBytes = QByteArray::fromBase64(it->gameData.toUtf8()).size();
                 if (gdBytes > 128)
                     qWarning() << "WebAPI: gameData exceeds 128 bytes (" << gdBytes << ") for"
                                << auth.npid;
             }
-            if (obj.contains(QStringLiteral("localizedGameStatus"))) {
+            if (hasStatus) {
+                // A new default status replaces any earlier localized variants.
                 it->localizedGameStatus.clear();
+            }
+            if (hasLocalized) {
                 const QJsonArray loc = obj.value(QStringLiteral("localizedGameStatus")).toArray();
                 for (const QJsonValue& v : loc) {
                     const QJsonObject le = v.toObject();
@@ -173,7 +188,7 @@ QHttpServerResponse HandlePresenceWrite(Database& db, SharedState& shared, const
     // when notify (sticky notificationWithData) is set; otherwise the event fires with no
     // body (re-fetch). 'notify' was latched in the write block above.
     QList<QPair<QString, QByteArray>> events; // (dataType, body)
-    if (obj.contains(QStringLiteral("gameStatus"))) {
+    if (hasStatus) {
         QByteArray body;
         if (notify) {
             QJsonObject o;
@@ -182,7 +197,7 @@ QHttpServerResponse HandlePresenceWrite(Database& db, SharedState& shared, const
         }
         events.append({QStringLiteral("np:service:presence:gameStatus"), body});
     }
-    if (obj.contains(QStringLiteral("gameData"))) {
+    if (hasData) {
         QByteArray body;
         if (notify) {
             QJsonObject o;
@@ -405,9 +420,14 @@ void RegisterPresenceRoutes(QHttpServer& http, Database& db, SharedState& shared
                 bool numeric = false;
                 const qlonglong asId = userKey.toLongLong(&numeric);
                 if (numeric) {
-                    targetId = asId;
+                    if (db.GetUsername(asId).has_value())
+                        targetId = asId;
                 } else if (const auto byName = db.GetUserId(userKey)) {
                     targetId = *byName;
+                }
+                if (targetId == 0) {
+                    return JsonError(QHttpServerResponse::StatusCode::NotFound, UP_USER_NOT_FOUND,
+                                     QStringLiteral("User not found (user: '%1')").arg(userKey));
                 }
             }
 
@@ -457,9 +477,9 @@ void RegisterPresenceRoutes(QHttpServer& http, Database& db, SharedState& shared
                 inSameGame =
                     !callerComId.isEmpty() && callerComId == shared.usageClientGame.value(targetId);
             }
-            // Appear-Offline hides the target, except same-game observers still see
-            // them playing.
-            const bool online = actualOnline && (inSameGame || !tgtAppearOffline);
+            // Appear-Offline hides the target, except from themselves and from same-game
+            // observers, who still see them playing.
+            const bool online = actualOnline && (self || inSameGame || !tgtAppearOffline);
 
             // gameStatus is the only multilingual field: pick the first npLanguages
             // match, else fall back to the default gameStatus.
@@ -473,11 +493,13 @@ void RegisterPresenceRoutes(QHttpServer& http, Database& db, SharedState& shared
                     }
                 }
             }
-            // gameStatus + gameData are obtainable only by same-comId callers.
-            const QString gs = inSameGame ? gameStatus : QString();
-            const QString gd = inSameGame ? gameData : QString();
+            // gameStatus + gameData are obtainable only by the user themselves or same-comId
+            // callers.
+            const bool seesDetail = self || inSameGame;
+            const QString gs = seesDetail ? gameStatus : QString();
+            const QString gd = seesDetail ? gameData : QString();
             const QJsonObject presence = MakePresence(type, online, platform, gs, gd, npTitleId,
-                                                      titleName, detail, inSameGame, platReq);
+                                                      titleName, detail, seesDetail, platReq);
 
             QJsonObject body;
             body.insert(QStringLiteral("npId"), EncodeNpId(onlineId));
