@@ -5,10 +5,12 @@
 #include <optional>
 
 #include <QDebug>
+#include <QHash>
 #include <QHttpServer>
 #include <QHttpServerRequest>
 #include <QHttpServerResponse>
 #include <QJsonArray>
+#include <QJsonDocument>
 #include <QJsonObject>
 #include <QSet>
 #include <QString>
@@ -26,9 +28,14 @@ namespace {
 // GET /v1/profiles?onlineId=<a[,b,...]>
 // Defined below; declared here so the batch builder can delegate to it.
 QJsonObject BuildProfile(Database& db, SharedState& shared, qint64 userId, const QString& onlineId,
-                         const QStringList& fields, bool isDefault, qint64 callerUserId);
+                         const QStringList& fields, bool isDefault, qint64 callerUserId,
+                         const AvatarRequest& avatarReq);
 
-constexpr quint32 WEBAPI_RESOURCE_NOT_FOUND = 2113549;
+// avatarUrl is part of @default for profiles.
+bool FieldsWantAvatar(const QStringList& fields, bool isDefault) {
+    return isDefault || fields.contains(QStringLiteral("avatarUrl")) ||
+           fields.contains(QStringLiteral("avatarUrls"));
+}
 
 std::optional<qint64> ResolveProfileTarget(Database& db, const QString& userKey,
                                            const WebApiAuth::AuthResult& auth) {
@@ -68,20 +75,22 @@ QString ComputeRelation(Database& db, qint64 callerId, qint64 targetId) {
     return QStringLiteral("no relationship");
 }
 
-// Batch profiles: accountIds are numeric account IDs. Each entry reuses the single-user
-// builder so every field behaves identically.
 QJsonObject BuildProfiles(Database& db, SharedState& shared, const QStringList& accountIds,
-                          const QStringList& fields, bool isDefault, qint64 callerUserId) {
+                          const QStringList& fields, bool isDefault, qint64 callerUserId,
+                          const AvatarRequest& avatarReq) {
     QJsonArray arr;
+    QSet<qlonglong> seen; // the same user listed twice yields one entry
     for (const QString& idStr : accountIds) {
         bool ok = false;
         const qlonglong accId = idStr.toLongLong(&ok);
-        if (!ok)
-            continue; // skip malformed ids
+        if (!ok || seen.contains(accId))
+            continue; // skip malformed and duplicate ids
+        seen.insert(accId);
         const auto name = db.GetUsername(accId);
         if (!name)
-            continue; // unknown account -- skip rather than fail the whole request
-        arr.append(BuildProfile(db, shared, accId, *name, fields, isDefault, callerUserId));
+            continue;
+        arr.append(
+            BuildProfile(db, shared, accId, *name, fields, isDefault, callerUserId, avatarReq));
     }
     QJsonObject body;
     body.insert(QStringLiteral("profiles"), arr);
@@ -91,12 +100,11 @@ QJsonObject BuildProfiles(Database& db, SharedState& shared, const QStringList& 
 
 // GET /v1/users/{userId}/profile -- a single user's Profile object
 QJsonObject BuildProfile(Database& db, SharedState& shared, qint64 userId, const QString& onlineId,
-                         const QStringList& fields, bool isDefault, qint64 callerUserId) {
+                         const QStringList& fields, bool isDefault, qint64 callerUserId,
+                         const AvatarRequest& avatarReq) {
     const bool wantUser = isDefault || fields.contains(QStringLiteral("user"));
     const bool wantRegion = isDefault || fields.contains(QStringLiteral("region"));
     const bool wantNpId = isDefault || fields.contains(QStringLiteral("npId"));
-    const bool wantAvatar = isDefault || fields.contains(QStringLiteral("avatarUrl")) ||
-                            fields.contains(QStringLiteral("avatarUrls"));
     const bool wantAboutMe = isDefault || fields.contains(QStringLiteral("aboutMe"));
     const bool wantLanguages = isDefault || fields.contains(QStringLiteral("languagesUsed"));
     const bool wantDetail = fields.contains(QStringLiteral("personalDetail")) ||
@@ -120,17 +128,15 @@ QJsonObject BuildProfile(Database& db, SharedState& shared, qint64 userId, const
     if (wantNpId) {
         p.insert(QStringLiteral("npId"), EncodeNpId(onlineId));
     }
-    if (wantAvatar) {
-        const auto avatar = db.GetAvatarUrl(userId);
-        if (avatar && !avatar->isEmpty()) {
-            p.insert(QStringLiteral("avatarUrl"), *avatar);
-        }
+    if (avatarReq.wanted) {
+        InsertAvatar(p, db.GetAvatar(userId).value_or(QString()), avatarReq);
     }
     if (wantAboutMe) {
         p.insert(QStringLiteral("aboutMe"), QString()); // unsupported
     }
     if (wantLanguages) {
-        p.insert(QStringLiteral("languagesUsed"), QJsonArray()); // unsupported
+        // Not stored per account. The spec guarantees 1-3 entries, so report English.
+        p.insert(QStringLiteral("languagesUsed"), QJsonArray{QStringLiteral("en")});
     }
     // personalDetail is for registered real names, which shadNet doesn't have.
     if (wantDetail && callerUserId == userId) {
@@ -212,8 +218,6 @@ void RegisterProfileRoutes(QHttpServer& http, Database& db, SharedState& shared)
             }
 
             const QUrlQuery query(req.url());
-            // Accept either accountIds (numeric) or onlineId (handles, resolved to account IDs).
-            // shadPS4's NpWebApi layer looks profiles up by onlineId.
             QStringList accountIds;
             if (query.hasQueryItem(QStringLiteral("accountIds"))) {
                 accountIds = query.queryItemValue(QStringLiteral("accountIds"))
@@ -233,8 +237,6 @@ void RegisterProfileRoutes(QHttpServer& http, Database& db, SharedState& shared)
                                      QStringLiteral("Invalid parameter in query string (parameter: "
                                                     "'onlineId')"));
                 }
-                // Resolve each handle to an account ID; unknown handles are omitted from the
-                // result (matching batch-lookup semantics).
                 for (const QString& oid : onlineIds) {
                     const auto uid = db.GetUserId(oid);
                     if (uid)
@@ -253,63 +255,129 @@ void RegisterProfileRoutes(QHttpServer& http, Database& db, SharedState& shared)
             }
             const QStringList fields = fieldsStr.split(QLatin1Char(','), Qt::SkipEmptyParts);
             const bool isDefault = fields.contains(QStringLiteral("@default"));
+            const AvatarRequest avatarReq =
+                ParseAvatarRequest(query, fields, FieldsWantAvatar(fields, isDefault));
+            if (!avatarReq.error.isEmpty()) {
+                return JsonError(QHttpServerResponse::StatusCode::BadRequest, avatarReq.errorCode,
+                                 avatarReq.error);
+            }
 
             const QJsonObject body =
-                BuildProfiles(db, shared, accountIds, fields, isDefault, *auth.userId);
+                BuildProfiles(db, shared, accountIds, fields, isDefault, *auth.userId, avatarReq);
             qInfo() << "WebAPI: profiles lookup" << accountIds.size() << "account(s) -> returned"
                     << body.value(QStringLiteral("size")).toInt();
             return JsonOk(body);
         });
 
     // GET /v1/users/<arg>/profile -- single user's profile.
-    http.route("/v1/users/<arg>/profile",
-               [&db, &shared](const QString& userKey,
-                              const QHttpServerRequest& req) -> QHttpServerResponse {
-                   static const QSet<QString> kKnown = {
-                       QStringLiteral("fields"),
-                       QStringLiteral("avatarSize"),
-                       QStringLiteral("avatarSizes"),
-                       QStringLiteral("avatarUrlScheme"),
-                       QStringLiteral("profilePictureSizes"),
-                       QStringLiteral("aboutMeType"),
-                       QStringLiteral("languagesUsedLanguageSet"),
-                       QStringLiteral("npLanguages"),
-                   };
-                   LogUnsupportedQueryParams(req, kKnown);
+    // POST /v1/users/<accountId|onlineId>/griefReport -- {"items": ["onlineId", "picture", ...]}
+    http.route(
+        "/v1/users/<arg>/griefReport", QHttpServerRequest::Method::Post,
+        [&db](const QString& userKey, const QHttpServerRequest& req) -> QHttpServerResponse {
+            auto auth = WebApiAuth::Authenticate(req, db);
+            if (!auth.userId.has_value())
+                return std::move(auth.errorResponse);
 
-                   auto auth = WebApiAuth::Authenticate(req, db);
-                   if (!auth.userId.has_value()) {
-                       return std::move(auth.errorResponse);
-                   }
-                   const auto target = ResolveProfileTarget(db, userKey, auth);
-                   if (!target) {
-                       return JsonError(QHttpServerResponse::StatusCode::NotFound,
-                                        WEBAPI_RESOURCE_NOT_FOUND,
-                                        QStringLiteral("The specified user does not exist"));
-                   }
+            const auto target = ResolveProfileTarget(db, userKey, auth);
+            if (!target) {
+                return JsonError(QHttpServerResponse::StatusCode::NotFound, UP_USER_NOT_FOUND,
+                                 QStringLiteral("User not found (user: '%1')").arg(userKey));
+            }
+            if (*target == *auth.userId) {
+                return JsonError(QHttpServerResponse::StatusCode::BadRequest, UP_INVALID_URL_PARAM,
+                                 QStringLiteral("A grief report must be about another user"));
+            }
 
-                   const qint64 userId = *target;
-                   const QString onlineId = db.GetUsername(userId).value_or(auth.npid);
+            QJsonParseError perr{};
+            const QJsonDocument doc = ParseJsonBody(req.body(), &perr);
+            if (perr.error != QJsonParseError::NoError || !doc.isObject()) {
+                return JsonError(QHttpServerResponse::StatusCode::BadRequest, UP_INVALID_BODY,
+                                 QStringLiteral("Invalid body"));
+            }
+            const QJsonValue itemsVal = doc.object().value(QStringLiteral("items"));
+            if (!itemsVal.isArray() || itemsVal.toArray().isEmpty()) {
+                return JsonError(QHttpServerResponse::StatusCode::BadRequest,
+                                 UP_BODY_PARAM_REQUIRED,
+                                 QStringLiteral("'items' parameter required in body"));
+            }
+            // Same bits as the PS4's SceNpProfileGriefReportItem.
+            static const QHash<QString, quint32> kItems = {
+                {QStringLiteral("onlineId"), 0x1},
+                {QStringLiteral("name"), 0x2},
+                {QStringLiteral("picture"), 0x4},
+                {QStringLiteral("aboutMe"), 0x8},
+            };
+            quint32 items = 0;
+            for (const QJsonValue& v : itemsVal.toArray()) {
+                const auto it = kItems.constFind(v.toString());
+                if (it == kItems.constEnd()) {
+                    return JsonError(QHttpServerResponse::StatusCode::BadRequest,
+                                     UP_INVALID_BODY_PARAM,
+                                     QStringLiteral("Invalid parameter in body (parameter: "
+                                                    "'items')"));
+                }
+                items |= *it;
+            }
 
-                   const QUrlQuery query(req.url());
-                   QString fieldsStr = query.queryItemValue(QStringLiteral("fields"));
-                   if (fieldsStr.isEmpty()) {
-                       fieldsStr = QStringLiteral("@default");
-                   }
-                   const QStringList fields = fieldsStr.split(QLatin1Char(','), Qt::SkipEmptyParts);
-                   const bool isDefault = fields.contains(QStringLiteral("@default"));
+            if (!db.AddGriefReport(*auth.userId, *target, items)) {
+                return JsonError(QHttpServerResponse::StatusCode::InternalServerError,
+                                 UP_INTERNAL_ERROR, QStringLiteral("Internal server error"));
+            }
+            qInfo() << "WebAPI: grief report by" << auth.npid << "about user" << *target << "items"
+                    << items;
+            return QHttpServerResponse(QHttpServerResponse::StatusCode::NoContent);
+        });
 
-                   const QJsonObject body =
-                       BuildProfile(db, shared, userId, onlineId, fields, isDefault, *auth.userId);
-                   qInfo() << "WebAPI: profile for" << onlineId << "by" << auth.npid << "fields"
-                           << fields;
-                   return JsonOk(body);
-               });
+    http.route(
+        "/v1/users/<arg>/profile",
+        [&db, &shared](const QString& userKey,
+                       const QHttpServerRequest& req) -> QHttpServerResponse {
+            static const QSet<QString> kKnown = {
+                QStringLiteral("fields"),
+                QStringLiteral("avatarSize"),
+                QStringLiteral("avatarSizes"),
+                QStringLiteral("avatarUrlScheme"),
+                QStringLiteral("profilePictureSizes"),
+                QStringLiteral("aboutMeType"),
+                QStringLiteral("languagesUsedLanguageSet"),
+                QStringLiteral("npLanguages"),
+            };
+            LogUnsupportedQueryParams(req, kKnown);
 
-    // GET /v1/users/<accountId|me>/profile/personalDetail/isAvailable -- whether the user
-    // permits in-game real-name display. Self-only. isAvailable is present only when a real
-    // name is registered; shadNet has no real-name registration, so we always return {} (the
-    // "real name not registered" case).
+            auto auth = WebApiAuth::Authenticate(req, db);
+            if (!auth.userId.has_value()) {
+                return std::move(auth.errorResponse);
+            }
+            const auto target = ResolveProfileTarget(db, userKey, auth);
+            if (!target) {
+                return JsonError(QHttpServerResponse::StatusCode::NotFound, UP_USER_NOT_FOUND,
+                                 QStringLiteral("User not found (user: '%1')").arg(userKey));
+            }
+
+            const qint64 userId = *target;
+            const QString onlineId = db.GetUsername(userId).value_or(auth.npid);
+
+            const QUrlQuery query(req.url());
+            QString fieldsStr = query.queryItemValue(QStringLiteral("fields"));
+            if (fieldsStr.isEmpty()) {
+                fieldsStr = QStringLiteral("@default");
+            }
+            const QStringList fields = fieldsStr.split(QLatin1Char(','), Qt::SkipEmptyParts);
+            const bool isDefault = fields.contains(QStringLiteral("@default"));
+            const AvatarRequest avatarReq =
+                ParseAvatarRequest(query, fields, FieldsWantAvatar(fields, isDefault));
+            if (!avatarReq.error.isEmpty()) {
+                return JsonError(QHttpServerResponse::StatusCode::BadRequest, avatarReq.errorCode,
+                                 avatarReq.error);
+            }
+
+            const QJsonObject body = BuildProfile(db, shared, userId, onlineId, fields, isDefault,
+                                                  *auth.userId, avatarReq);
+            qInfo() << "WebAPI: profile for" << onlineId << "by" << auth.npid << "fields" << fields;
+            return JsonOk(body);
+        });
+
+    // GET /v1/users/<accountId|me>/profile/personalDetail/isAvailable
     http.route("/v1/users/<arg>/profile/personalDetail/isAvailable",
                [&db](const QString& userKey, const QHttpServerRequest& req) -> QHttpServerResponse {
                    auto auth = WebApiAuth::Authenticate(req, db);

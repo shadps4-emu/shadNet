@@ -58,6 +58,10 @@ public:
         QReadLocker lk(&m_lock);
         return m_trophiesEnabled;
     }
+    QString GetAvatarBaseUrl() const {
+        QReadLocker lk(&m_lock);
+        return m_avatarBaseUrl;
+    }
     bool IsAdminApiEnabled() const {
         QReadLocker lk(&m_lock);
         return m_adminApiEnabled;
@@ -192,6 +196,7 @@ private:
     bool m_statsEnabled = true;
     bool m_matching2Enabled = false;
     bool m_trophiesEnabled = true;
+    QString m_avatarBaseUrl = "https://shadps4.net/shad_net/assets/avatar/";
     QString m_statsPort = "31320";
     QString m_statsPath = "stats";
     int m_statsCacheLife = 30; // seconds the stats JSON is cached before recompute

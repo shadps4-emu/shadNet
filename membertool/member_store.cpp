@@ -1,5 +1,6 @@
 // SPDX-FileCopyrightText: Copyright 2026 shadNet Project
 // SPDX-License-Identifier: GPL-2.0-or-later
+#include "avatar.h"
 #include "member_store.h"
 
 #include <QDir>
@@ -135,9 +136,8 @@ std::optional<MemberCredentials> MemberStore::Add(const QString& username, QStri
         return std::nullopt;
     }
     MemberCredentials credentials{name, name + "@shadps4.local", GeneratePassword(), {}};
-    const auto result = m_db->CreateAccount(
-        name, credentials.password,
-        QStringLiteral("https://shadps4.net/shadnet/avatars/default_01.png"), credentials.email);
+    const auto result =
+        m_db->CreateAccount(name, credentials.password, Avatar::DefaultName(), credentials.email);
     if (result) {
         if (*result == DbError::ExistingUsername)
             error = QStringLiteral("That username already exists.");
